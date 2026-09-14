@@ -38,90 +38,95 @@ git clone https://github.com/bradygaster/squadcaster.git \
 Reload extensions from disk, then open the `squadcaster` canvas for my active project session.
 ```
 
-## Use it on a real repository
+## Cast and enlist a repository
 
-Open a repository in a Copilot project session, then paste:
+Open the repository in a Copilot project session, then paste:
 
 ```text
 Open the `squadcaster` canvas for this active project session. Connect it to the current repository, analyze the repository, and propose the smallest useful Squad. Do not create any GitHub issue or pull request until I review and explicitly confirm the proposal.
 ```
 
-The walkthrough below is an end-to-end run against the public fork [`bradygaster/spring-petclinic`](https://github.com/bradygaster/spring-petclinic). Squadcaster made no repository changes during analysis. GitHub writes began only after explicit confirmation, and nothing was auto-merged.
+1. **Analyze and shape the team.** Squadcaster reads code, tests, documentation, build structure, and ownership signals without changing the repository. Review the evidence and charters, then split, combine, add, remove, or edit specialist roles. Local drafts remain local.
+2. **Confirm automation PR 1 of 2.** The confirmation authorizes the exact Actions permission change and the bootstrap PR described below. It does not authorize a merge or any other repository setting change.
+3. **Review and merge the automation PR.** Squadcaster requests `@copilot` review and watches checks. The workflows on that branch are inactive: `/squad` becomes available only after the complete PR reaches the default branch.
+4. **Confirm the cast issue.** Squadcaster creates one issue containing the approved roster and charters and posts `/squad cast`.
+5. **Review and merge cast PR 2 of 2.** Squad generates the repository-owned team, routing, charters, casting history, Copilot agent, and `meet-the-squad.md`. Human review and merge remain mandatory.
 
-### 1. Analyze the repository
+## Automation PR contract
 
-Choose **Analyze repository**. Copilot inspects code, tests, documentation, build structure, and ownership signals, then returns evidence and a repository-specific proposal. Analysis does not edit the repository or create GitHub artifacts.
+Squadcaster resolves the target `owner/repo` and default branch at runtime, verifies `gh` and `gh aw`, and keeps `default_workflow_permissions=read`. Only after the user confirms automation creation does it enable **Allow GitHub Actions to create and approve pull requests** for that repository.
 
-### 2. Review and reshape the proposal
+### Clean enlistment versus upgrade
 
-PetClinic produced this compact cast:
-
-| Member | Role | Responsibility |
-| --- | --- | --- |
-| **Spring Lead** | Lead maintainer | Own overall architecture and Spring Boot conventions across the application. |
-| **Clinic Experience** | Web and domain specialist | Own the web experience and the owner, pet, visit, and veterinarian domain seams. |
-| **Data & Runtime** | Persistence and operations specialist | Own data access, database behavior, configuration, and runtime concerns. |
-| **Quality Gate** | Test and release reviewer | Independently review tests, delivery behavior, and release readiness. |
-
-Review the evidence, role boundaries, and each operating charter. Edit a role or charter and choose **Save draft** to persist it locally. Ask Copilot to split, combine, add, or remove roles to reshape the proposal conversationally. **Analyze again** refreshes the evidence and proposal without writing to GitHub.
-
-### 3. Create and review automation PR 1 of 2
-
-Choose **Create automation PR · 1 of 2**, review the confirmation, then choose **Create automation PR**. Squadcaster keeps the default workflow token read-only, allows Actions-created pull requests, and installs all six supported Squad workflows from `@dev`. If any Squad workflow is already present, it instead upgrades the complete set from one immutable revision of Squad's `dev` branch. It strictly compiles the generated locks, verifies the complete source/lock set, requests Copilot review, and opens a pull request from the project-session branch.
-
-The PetClinic run opened [automation PR #46](https://github.com/bradygaster/spring-petclinic/pull/46). **Open on GitHub** only navigates to the pull request; you review and merge it yourself. The `/squad` command surface remains inactive until the complete bootstrap PR is merged into the default branch.
-
-<p align="center">
-  <img src="docs/images/squadcaster-03-automation-pr.png" alt="Squadcaster showing that PetClinic automation pull request 1 of 2 was created" width="820">
-</p>
-
-### 4. Create the cast issue
-
-After the automation PR is merged, Squadcaster enables **Create cast issue**. The confirmation shows exactly what happens: one issue records the approved roster and every charter, then Squadcaster posts `/squad cast` to start pull request 2 of 2.
-
-PetClinic recorded that source of truth in [cast issue #47](https://github.com/bradygaster/spring-petclinic/issues/47).
-
-<p align="center">
-  <img src="docs/images/squadcaster-04-create-cast.png" alt="Squadcaster Create cast issue call to action after the automation pull request merged" width="820">
-</p>
-
-### 5. Follow the casting run and review PR 2 of 2
-
-Once the issue is created, the canvas reports **Cast issue created · Squad started** and links to the issue. Squad generates repository-owned team, charter, routing, and history files in a separate pull request.
-
-The successful PetClinic run opened [cast PR #49](https://github.com/bradygaster/spring-petclinic/pull/49) with the exact four-member roster above. Review the files and checks on GitHub, then decide whether to merge it.
-
-<details>
-<summary>See the casting status and generated pull request</summary>
-
-| Squadcaster status | GitHub pull request |
+| Repository state | Supported operation |
 | --- | --- |
-| <img src="docs/images/squadcaster-05-casting-started.png" alt="Squadcaster reporting that the PetClinic cast issue was created and Squad started" width="600"> | <img src="docs/images/squadcaster-06-cast-pr.png" alt="PetClinic cast pull request 49 with the approved four-member Squad" width="700"> |
+| None of the six Squad `.md` or `.lock.yml` files exists | Add all six workflows in dispatcher-first order from the moving `@dev` channel, without `--force`. |
+| Any Squad source or lock exists, including a partial install | Resolve the `dev` head once as a 40-character `SQUAD_SHA`, preserve repository-owned source customizations, and replace all six sources together with `gh aw add ...@${SQUAD_SHA} --force`. Do not use `gh aw update`. |
 
-</details>
+An upgrade also refreshes these four shared resources from the same immutable `SQUAD_SHA`:
 
-### 6. Start with a ready Squad
+- `.github/workflows/shared/squad.md`
+- `.github/workflows/shared/squad-cast-validator.mjs`
+- `.github/workflows/shared/squad-planning-ontology.md`
+- `.github/workflows/shared/squad-planning-policy.md`
 
-After the cast PR is merged, Squadcaster reads the repository-owned roster and charters and switches to the ready state. You can refine charters through another reviewed PR or give the Squad a real mission; Squadcaster proposes likely owners before any work begins.
+This single-revision rule prevents dispatcher, workers, validation, and planning policy from drifting. Repository-owned changes may be reapplied to workflow source files only when they can be preserved safely. Generated `.lock.yml` files are deterministic build output and must never be customized by hand.
 
-<p align="center">
-  <img src="docs/images/squadcaster-07-ready.png" alt="Squadcaster ready state for the four-member PetClinic Squad" width="820">
-</p>
+### Compile and review gates
 
-<details>
-<summary>See the connection and mobile views</summary>
+- A safe-update warning is approved only when its complete contents are exactly `SQUAD_GITHUB_APP_PRIVATE_KEY`, `SQUAD_GITHUB_TOKEN`, and `bradygaster/squad/.github/actions/squad-init`. The secrets are optional references, not enlistment prerequisites. Any additional entry stops the operation for human review.
+- The conditional approval command is `gh aw compile --strict --approve`. It is used only to accept that exact report. The final compile is always a separate `gh aw compile --strict` without `--approve`.
+- All six workflows must compile. The only accepted warning is the documented `squad.md` combination of slash-command and `github-actions[bot]` triggers; any other warning or error stops the operation.
+- All six source/lock pairs must exist and every lock must name the expected ref: `@dev` for a clean install or the same `@${SQUAD_SHA}` for an upgrade.
+- Lockfiles are scanned for JSON-escaped operators such as `\u0026`, `\u003c`, and `\u003e` inside `${{ ... }}` expressions. GitHub rejects those expressions before jobs start even when strict compilation succeeds.
+- Staging is limited to `.gitattributes`, `.github/aw/`, `.github/workflows/`, and `.github/skills/`, with no deletions. Downloaded `.github/aw/logs/**` diagnostics and optional `.vscode/settings.json` are excluded; only the logs directory's ignore-all/keep-`.gitignore` rule may be committed.
+- Squadcaster opens the PR against the resolved default branch, requests `@copilot`, watches required checks, and stops. It never marks the PR approved, bypasses protection, enables auto-merge, or merges it.
 
-| Repository analysis | Responsive proposal |
+See the authoritative [Squad GitHub Agentic Workflows guide](https://bradygaster.github.io/squad/docs/guide/gh-aw/) for the executable enlistment commands and recovery procedures.
+
+## The six workflows
+
+| Workflow | Responsibility |
 | --- | --- |
-| <img src="docs/images/squadcaster-01-connect.png" alt="Squadcaster repository analysis step for the active project session" width="700"> | <img src="docs/images/squadcaster-08-mobile-proposal.png" alt="Squadcaster PetClinic proposal rendered at mobile width" width="260"> |
+| `squad` | Dispatcher and user command surface. Casts and manages teams, runs research and planning, authorizes mutating lifecycle commands, and relays typed work to isolated workers. |
+| `squad-implement-worker` | Implements one ready issue or the next ready epic wave in an isolated branch and opens a draft PR. It reuses existing linked PRs instead of duplicating rejected or completed work. |
+| `squad-deps-worker` | Resolves bounded dependency-maintenance work separately from general implementation, under the same provenance and draft-only constraints. |
+| `squad-review` | Independently reviews the current PR head and posts an advisory `COMMENT` or `REQUEST_CHANGES`. It does not edit, approve, merge, or replace human review. |
+| `squad-retro` | Collects bounded workflow and review evidence, publishes reports, and creates action or governance-proposal issues. It does not edit the repository or merge changes. |
+| `squad-improvement-worker` | Dormant until an exact governance proposal revision and path set is approved by a human with write, maintain, or admin permission. It applies only that approved patch and opens one draft PR. |
 
-</details>
+The cast contains repository-specific specialists only. **Scribe**, **Ralph**, **Rai**, and **Fact Checker** are built-in support identities supplied by Squad. Squadcaster also excludes `@copilot` from its proposed cast specialists and mission owners.
 
-## Development channel compatibility
+## Working with the Squad
 
-Squad's first-install guide uses the moving `@dev` channel. Its supported upgrade procedure requires all existing workflow sources and shared resources to be refreshed from one immutable 40-character commit with `gh aw add --force`. Squadcaster detects the two states explicitly: a repository with none of the six source/lock pairs follows the clean `@dev` install, while any partial or existing installation follows the immutable forced-upgrade path so the six workflows cannot drift across revisions.
+### Recommended lifecycle
 
-Generated `.lock.yml` files are never edited manually. Squadcaster approves a first-install safe-update warning only when it contains exactly the documented optional secrets (`SQUAD_GITHUB_APP_PRIVATE_KEY` and `SQUAD_GITHUB_TOKEN`) and the `bradygaster/squad/.github/actions/squad-init` action. It always finishes with `gh aw compile --strict` without approval.
+```text
+/squad research
+/squad plan
+/squad activate
+```
+
+`research` posts evidence without creating issues or PRs. `plan` combines program structure and PR-sized implementation planning. `activate` reviews and accepts the latest fast plan, then creates its GitHub issues; because it mutates GitHub, the actor must have write, maintain, or admin permission. Use `/squad activate phase N` to activate incrementally. `/squad plan accept` and `/squad plan accept phase N` are supported legacy aliases for the corresponding `activate` commands.
+
+### Granular lifecycle
+
+For larger or cross-team work, keep the review gates separate:
+
+```text
+/squad research
+/squad triage
+/squad plan program
+/squad plan accept scope
+/squad plan implementation
+/squad plan validate
+/squad plan accept implementation [phase N]
+/squad plan activate [phase N]
+```
+
+Triage classifies findings as work, decisions, or exclusions. Scope acceptance locks initiatives, epics, and milestones before implementation decomposition. Implementation acceptance approves PR-sized tasks; activation is the terminal mutation that creates issues. `/squad plan` is the fast alias for program plus implementation planning, while `/squad activate` combines the acceptance and activation gates. Squad posts a lifecycle-state comment with the current state, last command, next action, and valid alternatives after each step.
+
+Use `/squad implement` on a ready issue or epic and `/squad review` on its PR. Use `/squad retro` for an authorized retrospective. Governance improvements require a new, unedited `/squad approve-improvement` comment containing the exact `Approved-Revision:` hash and each `Approved-Path:`; `/squad revoke-improvement` withdraws that authority.
 
 Run the lightweight workflow contract suite with:
 
@@ -129,12 +134,14 @@ Run the lightweight workflow contract suite with:
 node --test test/squad-contract.test.mjs
 ```
 
-## Persistence and security boundaries
+## Persistence and trust boundaries
 
-- **Local state:** proposals and drafts are stored in local Copilot extension or session artifact storage, keyed by a hash of the repository path.
-- **Loopback renderer:** the canvas HTTP server binds only to `127.0.0.1` on an ephemeral port.
-- **Explicit GitHub confirmation:** analysis is read-only. Creating the automation PR, cast issue, charter PR, or mission PR requires an explicit confirmation in the canvas.
-- **Human-controlled merges:** Squadcaster opens reviewable pull requests and monitors their status; it never merges them, changes Actions settings, or bypasses branch protection.
+- **Local before confirmation:** proposals and drafts are stored in local extension or session artifact storage, keyed by a hash of the repository path. The renderer listens only on `127.0.0.1` at an ephemeral port.
+- **Explicit mutation scope:** each canvas confirmation names the GitHub mutation it authorizes. Automation confirmation covers the read-only-token Actions permission change and bootstrap PR; later confirmations separately cover cast, charter, or mission artifacts.
+- **Structured handoffs:** the dispatcher sends typed, structured-data envelopes with nested issue, PR, approval-comment, and provenance fields. Workers validate the expected event, repository, default branch, source ref or PR merge ref, actor, permissions, and live GitHub objects rather than trusting prompt text or marker-shaped prose.
+- **Fail closed:** missing, malformed, duplicated, stale, edited, unauthorized, off-ref, or incompletely scanned inputs produce a visible refusal or no-op. They never fall back to broader authority or a success-shaped result.
+- **Draft-only work:** implementation, dependency, and approved-improvement workers create draft PRs. They do not mark them ready, approve them, review their own output, or merge them.
+- **Human control:** reviews are advisory, safe-output acceptance is not proof that GitHub applied a mutation, and every PR remains subject to normal Copilot review, repository checks, branch protection, and a human merge decision.
 
 ## How it is organized
 
