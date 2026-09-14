@@ -13,8 +13,10 @@ import {
 import { renderHtml } from "./renderer.mjs";
 import {
     automationPullRequestState,
+    automationPullRequestPrompt,
     castSpecialists,
     isActiveSquadAutomation,
+    SQUAD_WORKFLOWS,
     isSupportIdentity,
 } from "./squad-contract.mjs";
 
@@ -478,8 +480,19 @@ async function createCastIssue(entry) {
     }
 }
 
-function isAutomationPullRequest(pullRequest) {
-    return automationPullRequestState(pullRequest).recognized;
+async function inspectInstalledSquadWorkflows(repoRoot) {
+    const installedPaths = [];
+    const entries = await Promise.all(SQUAD_WORKFLOWS.map(async (workflow) => {
+        const sourcePath = path.join(repoRoot, ".github", "workflows", `${workflow}.md`);
+        const lockPath = path.join(repoRoot, ".github", "workflows", `${workflow}.lock.yml`);
+        if (await exists(sourcePath)) {
+            installedPaths.push(`.github/workflows/${workflow}.md`);
+        }
+        if (!(await exists(lockPath))) return [workflow, ""];
+        installedPaths.push(`.github/workflows/${workflow}.lock.yml`);
+        return [workflow, await fs.readFile(lockPath, "utf8")];
+    }));
+    return { installedPaths, lockContents: Object.fromEntries(entries) };
 }
 
 async function inspectAutomationPullRequest(repoRoot) {
@@ -494,8 +507,9 @@ async function inspectAutomationPullRequest(repoRoot) {
             },
         );
         const pullRequest = JSON.parse(stdout);
-        if (!isAutomationPullRequest(pullRequest)) return null;
-        const workflowState = automationPullRequestState(pullRequest);
+        const { installedPaths, lockContents } = await inspectInstalledSquadWorkflows(repoRoot);
+        const workflowState = automationPullRequestState(pullRequest, installedPaths, lockContents);
+        if (!workflowState.recognized) return null;
         return {
             url: cleanText(pullRequest.url, 500),
             status: pullRequest.mergedAt || pullRequest.state === "MERGED"
@@ -544,7 +558,9 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                     kind: "automation-pr",
                     status: automation.complete ? "complete" : "error",
                     message: !automation.complete
-                        ? `Squad automation is incomplete: ${automation.missingWorkflowPaths.length} required workflow file${automation.missingWorkflowPaths.length === 1 ? "" : "s"} missing.`
+                        ? automation.missingWorkflowPaths.length > 0
+                            ? `Squad automation is incomplete: ${automation.missingWorkflowPaths.length} required workflow file${automation.missingWorkflowPaths.length === 1 ? "" : "s"} missing.`
+                            : "Squad automation is incomplete: the workflow paths or source revisions do not satisfy the bootstrap contract."
                         : automation.status === "merged"
                             ? "Automation pull request merged. The Squad workflows are active; ready to cast your Squad."
                             : "Automation pull request created. The workflows remain inactive until it is merged.",
@@ -598,29 +614,6 @@ When complete, call ${TOOL_MISSION} exactly once with:
 - tasks: id, title, description, ownerId, rationale
 
 Use only ownerId values from the authorized cast-specialist roster. Scribe, Ralph, Rai, Fact Checker, and @copilot are support identities, not mission owners.`;
-}
-
-function automationPullRequestPrompt(entry) {
-    return `Create the first of two Squad onboarding pull requests in ${entry.state.repoRoot}.
-
-This pull request bootstraps repository automation only. The approved Squad proposal remains in the canvas and will be delivered later through a separate Cast pull request.
-
-Work in the current Copilot project-session worktree.
-
-Requirements:
-1. Verify the GitHub Agentic Workflows extension is available. Install github/gh-aw only if it is missing.
-2. Add the Squad dispatcher, implementation worker, and reviewer in this order:
-   gh aw add bradygaster/squad/workflows/squad.md@dev bradygaster/squad/workflows/squad-implement-worker.md@dev bradygaster/squad/workflows/squad-review.md@dev
-3. If gh-aw reports a restricted-secret safe-update approval requirement, stop and surface the exact warning instead of approving it automatically.
-4. Do not generate or modify .squad/**, .github/agents/squad.agent.md, or meet-the-squad.md in this pull request.
-5. Confirm the diff is limited to the gh-aw bootstrap surface: .gitattributes, .github/workflows/**, and .github/skills/**.
-6. Commit, push the project-session branch, and open a reviewable pull request titled to make clear that it installs Squad automation.
-7. Never merge the pull request, change repository Actions settings, or bypass branch protection.
-
-If npm access becomes necessary, first run:
-npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
-
-Finish with the pull request URL on its own line.`;
 }
 
 function charterPullRequestPrompt(entry) {
@@ -801,7 +794,11 @@ async function handleRequest(entry, req, res) {
                 sendJson(res, 409, { error: "Analyze and confirm the team first." });
                 return;
             }
-            void runAgentOperation(entry, "automation-pr", automationPullRequestPrompt(entry));
+            void runAgentOperation(
+                entry,
+                "automation-pr",
+                automationPullRequestPrompt(entry.state.repoRoot),
+            );
             sendJson(res, 202, { accepted: true });
             return;
         }
