@@ -67,7 +67,7 @@ Review the evidence, role boundaries, and each operating charter. Edit a role or
 
 ### 3. Create and review automation PR 1 of 2
 
-Choose **Create automation PR · 1 of 2**, review the confirmation, then choose **Create automation PR**. Squadcaster installs GitHub Agentic Workflows and the Squad dispatcher, implementation worker, and reviewer on a project-session branch, then opens a pull request.
+Choose **Create automation PR · 1 of 2**, review the confirmation, then choose **Create automation PR**. Squadcaster keeps the default workflow token read-only, allows Actions-created pull requests, and installs all six supported Squad workflows from `@dev`. If any Squad workflow is already present, it instead upgrades the complete set from one immutable revision of Squad's `dev` branch. It strictly compiles the generated locks, verifies the complete source/lock set, requests Copilot review, and opens a pull request from the project-session branch.
 
 The PetClinic run opened [automation PR #46](https://github.com/bradygaster/spring-petclinic/pull/46). **Open on GitHub** only navigates to the pull request; you review and merge it yourself.
 
@@ -117,11 +117,11 @@ After the cast PR is merged, Squadcaster reads the repository-owned roster and c
 
 </details>
 
-## Development channel note
+## Development channel compatibility
 
-Squadcaster currently installs the Squad workflow distribution from the moving `@dev` channel. During this walkthrough, an unpublished `squad health --json` interface did not match the generated workflow in the [initial run](https://github.com/bradygaster/spring-petclinic/actions/runs/32906966383). On this disposable fork only, [compatibility PR #48](https://github.com/bradygaster/spring-petclinic/pull/48) temporarily switched the generated workflow to the published `squad doctor` command and recompiled it; the [next cast run succeeded](https://github.com/bradygaster/spring-petclinic/actions/runs/32907502413).
+Squad's first-install guide uses the moving `@dev` channel. Its supported upgrade procedure requires all existing workflow sources and shared resources to be refreshed from one immutable 40-character commit with `gh aw add --force`. Squadcaster detects the two states explicitly: a repository with none of the six source/lock pairs follows the clean `@dev` install, while any partial or existing installation follows the immutable forced-upgrade path so the six workflows cannot drift across revisions.
 
-That fork-specific compatibility change is not part of normal Squadcaster installation. Treat `@dev` as a development channel whose workflow contract can move.
+Generated `.lock.yml` files are never edited manually. Squadcaster approves a first-install safe-update warning only when it contains exactly the documented optional secrets (`SQUAD_GITHUB_APP_PRIVATE_KEY` and `SQUAD_GITHUB_TOKEN`) and the `bradygaster/squad/.github/actions/squad-init` action. It always finishes with `gh aw compile --strict` without approval.
 
 ## Persistence and security boundaries
 

@@ -738,7 +738,7 @@ export function renderHtml() {
         },
         {
           title: "Install automation",
-          description: "Pull request 1 of 2 · add gh-aw and Squad workflows."
+          description: "Pull request 1 of 2 · install and strictly compile all six Squad workflows."
         },
         {
           title: "Cast your Squad",
@@ -868,7 +868,7 @@ export function renderHtml() {
                   </div>\` : ""}
                 \${confirmSetup ? \`
                   <div class="confirmation">
-                    <p><strong>Create onboarding pull request 1 of 2?</strong><br>This first PR installs gh-aw and the Squad workflows. After you merge it, ask Copilot to create the cast issue; Squad will open a separate PR containing the approved team. Neither PR is merged automatically.</p>
+                    <p><strong>Create onboarding pull request 1 of 2?</strong><br>This first PR keeps the default workflow token read-only, allows Actions-created pull requests, and installs all six Squad workflows. Clean installs use <code>@dev</code>; partial or existing installs upgrade every workflow from one immutable Squad revision. It strictly compiles and opens a bootstrap PR for your review. After you merge it, ask Copilot to create the cast issue; Squad will open a separate PR containing the approved team. Neither PR is merged automatically.</p>
                     <div class="actions">
                       <button class="button" data-action="cancel-confirm" type="button">Cancel</button>
                       <button class="button primary" data-action="create-automation-pr" type="button">Create automation PR</button>
