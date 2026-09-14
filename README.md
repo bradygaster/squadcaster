@@ -67,9 +67,9 @@ Review the evidence, role boundaries, and each operating charter. Edit a role or
 
 ### 3. Create and review automation PR 1 of 2
 
-Choose **Create automation PR · 1 of 2**, review the confirmation, then choose **Create automation PR**. Squadcaster installs GitHub Agentic Workflows and the Squad dispatcher, implementation worker, and reviewer on a project-session branch, then opens a pull request.
+Choose **Create automation PR · 1 of 2**, review the confirmation, then choose **Create automation PR**. Squadcaster installs GitHub Agentic Workflows and all six supported Squad workflows: the dispatcher, implementation worker, reviewer, dependency worker, retrospective, and improvement worker. Each workflow source and generated lock file is treated as one contract; partial legacy installations remain incomplete.
 
-The PetClinic run opened [automation PR #46](https://github.com/bradygaster/spring-petclinic/pull/46). **Open on GitHub** only navigates to the pull request; you review and merge it yourself.
+The PetClinic run opened [automation PR #46](https://github.com/bradygaster/spring-petclinic/pull/46). **Open on GitHub** only navigates to the pull request; you review and merge it yourself. The `/squad` command surface remains inactive until the complete bootstrap PR is merged into the default branch.
 
 <p align="center">
   <img src="docs/images/squadcaster-03-automation-pr.png" alt="Squadcaster showing that PetClinic automation pull request 1 of 2 was created" width="820">
@@ -119,9 +119,9 @@ After the cast PR is merged, Squadcaster reads the repository-owned roster and c
 
 ## Development channel note
 
-Squadcaster currently installs the Squad workflow distribution from the moving `@dev` channel. During this walkthrough, an unpublished `squad health --json` interface did not match the generated workflow in the [initial run](https://github.com/bradygaster/spring-petclinic/actions/runs/32906966383). On this disposable fork only, [compatibility PR #48](https://github.com/bradygaster/spring-petclinic/pull/48) temporarily switched the generated workflow to the published `squad doctor` command and recompiled it; the [next cast run succeeded](https://github.com/bradygaster/spring-petclinic/actions/runs/32907502413).
+Squadcaster follows the [published Squad gh-aw onboarding contract](https://bradygaster.github.io/squad/docs/guide/gh-aw/) and installs the six explicit workflow sources from the moving `@dev` channel. Re-running onboarding uses the forced-add flow so existing generated sources are upgraded rather than silently retained, followed by strict compilation and verification of all six source/lock pairs.
 
-That fork-specific compatibility change is not part of normal Squadcaster installation. Treat `@dev` as a development channel whose workflow contract can move.
+Treat `@dev` as a development channel whose workflow contract can move. Generated `.lock.yml` files must never be edited by hand.
 
 ## Persistence and security boundaries
 

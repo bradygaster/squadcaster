@@ -11,6 +11,12 @@ import {
     joinSession,
 } from "@github/copilot-sdk/extension";
 import { renderHtml } from "./renderer.mjs";
+import {
+    automationPullRequestState,
+    castSpecialists,
+    isActiveSquadAutomation,
+    isSupportIdentity,
+} from "./squad-contract.mjs";
 
 const execFileAsync = promisify(execFile);
 const servers = new Map();
@@ -33,7 +39,7 @@ function cleanText(value, maxLength = 12000) {
 
 function normalizeMembers(members) {
     const seen = new Set();
-    return (Array.isArray(members) ? members : [])
+    const normalized = (Array.isArray(members) ? members : [])
         .slice(0, 24)
         .map((member, index) => {
             let id = slug(member?.id || member?.name || `member-${index + 1}`);
@@ -51,6 +57,7 @@ function normalizeMembers(members) {
                 status: cleanText(member?.status || "Active", 40),
             };
         });
+    return castSpecialists(normalized);
 }
 
 function normalizeTasks(tasks, memberIds) {
@@ -126,7 +133,7 @@ async function parseTeam(repoRoot) {
         const role = columns[1].replaceAll("**", "").trim();
         const charterMatch = columns[2].match(/`([^`]+)`/);
         const charterPath = charterMatch?.[1] || "";
-        if (!name || name.startsWith("@")) continue;
+        if (!name || isSupportIdentity({ name })) continue;
 
         members.push({
             id: slug(name),
@@ -472,11 +479,7 @@ async function createCastIssue(entry) {
 }
 
 function isAutomationPullRequest(pullRequest) {
-    const files = Array.isArray(pullRequest?.files) ? pullRequest.files : [];
-    const workflowFiles = files.filter((file) =>
-        /^\.github\/workflows\/squad(?:-implement-worker|-review)?(?:\.md|\.lock\.yml)$/i.test(file?.path || ""));
-    return /(?:squad.*automation|automation.*squad)/i.test(pullRequest?.title || "") ||
-        workflowFiles.length >= 2;
+    return automationPullRequestState(pullRequest).recognized;
 }
 
 async function inspectAutomationPullRequest(repoRoot) {
@@ -492,6 +495,7 @@ async function inspectAutomationPullRequest(repoRoot) {
         );
         const pullRequest = JSON.parse(stdout);
         if (!isAutomationPullRequest(pullRequest)) return null;
+        const workflowState = automationPullRequestState(pullRequest);
         return {
             url: cleanText(pullRequest.url, 500),
             status: pullRequest.mergedAt || pullRequest.state === "MERGED"
@@ -499,6 +503,9 @@ async function inspectAutomationPullRequest(repoRoot) {
                 : cleanText(pullRequest.state || "open", 40).toLowerCase(),
             mergedAt: pullRequest.mergedAt || null,
             title: cleanText(pullRequest.title, 240),
+            complete: workflowState.complete,
+            workflowPaths: workflowState.workflowPaths,
+            missingWorkflowPaths: workflowState.missingWorkflowPaths,
         };
     } catch (error) {
         const detail = cleanText(`${error?.stderr || ""}\n${error?.message || error}`, 1600);
@@ -535,10 +542,12 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 };
                 state.operation = {
                     kind: "automation-pr",
-                    status: "complete",
-                    message: automation.status === "merged"
-                        ? "Automation pull request merged. Ready to cast your Squad."
-                        : "Automation pull request created. Review and merge it on GitHub.",
+                    status: automation.complete ? "complete" : "error",
+                    message: !automation.complete
+                        ? `Squad automation is incomplete: ${automation.missingWorkflowPaths.length} required workflow file${automation.missingWorkflowPaths.length === 1 ? "" : "s"} missing.`
+                        : automation.status === "merged"
+                            ? "Automation pull request merged. The Squad workflows are active; ready to cast your Squad."
+                            : "Automation pull request created. The workflows remain inactive until it is merged.",
                 };
             });
         } catch (error) {
@@ -565,13 +574,13 @@ When complete, call the ${TOOL_PROPOSAL} tool exactly once with:
 - repositoryName
 - summary: a concise repository-specific explanation
 - signals: 3-8 concrete repository signals
-- members: 3-8 proposed members, each with id, name, role, rationale, charter, lead, and reviewer
+- members: 4-7 proposed cast specialists, each with id, name, role, rationale, charter, lead, and reviewer
 
-Every charter must be repository-specific and actionable. Include one lead and one independent reviewer. Do not edit files, create branches, or open pull requests during this analysis.`;
+Every charter must be repository-specific and actionable. Include one lead and at least one independent quality role. Scribe, Ralph, Rai, and Fact Checker are mandatory built-in support identities supplied by Squad; never propose them as cast specialists, leads, reviewers, or routing destinations. Do not include @copilot as a cast specialist. Do not edit files, create branches, or open pull requests during this analysis.`;
 }
 
 function missionPrompt(entry, goal) {
-    const team = entry.state.members.map(({ id, name, role }) => ({ id, name, role }));
+    const team = castSpecialists(entry.state.members).map(({ id, name, role }) => ({ id, name, role }));
     return `Plan a Squad mission for the repository at ${entry.state.repoRoot}.
 
 Goal:
@@ -588,7 +597,7 @@ When complete, call ${TOOL_MISSION} exactly once with:
 - summary
 - tasks: id, title, description, ownerId, rationale
 
-Use only ownerId values from the authorized roster.`;
+Use only ownerId values from the authorized cast-specialist roster. Scribe, Ralph, Rai, Fact Checker, and @copilot are support identities, not mission owners.`;
 }
 
 function automationPullRequestPrompt(entry) {
@@ -600,13 +609,15 @@ Work in the current Copilot project-session worktree.
 
 Requirements:
 1. Verify the GitHub Agentic Workflows extension is available. Install github/gh-aw only if it is missing.
-2. Add the Squad dispatcher, implementation worker, and reviewer in this order:
-   gh aw add bradygaster/squad/workflows/squad.md@dev bradygaster/squad/workflows/squad-implement-worker.md@dev bradygaster/squad/workflows/squad-review.md@dev
-3. If gh-aw reports a restricted-secret safe-update approval requirement, stop and surface the exact warning instead of approving it automatically.
-4. Do not generate or modify .squad/**, .github/agents/squad.agent.md, or meet-the-squad.md in this pull request.
-5. Confirm the diff is limited to the gh-aw bootstrap surface: .gitattributes, .github/workflows/**, and .github/skills/**.
-6. Commit, push the project-session branch, and open a reviewable pull request titled to make clear that it installs Squad automation.
-7. Never merge the pull request, change repository Actions settings, or bypass branch protection.
+2. Add or upgrade the complete supported workflow set from the moving dev channel. Keep the dispatcher first and use the supported forced-add flow so partial or stale installations are replaced:
+   gh aw add bradygaster/squad/workflows/squad.md@dev bradygaster/squad/workflows/squad-implement-worker.md@dev bradygaster/squad/workflows/squad-review.md@dev bradygaster/squad/workflows/squad-deps-worker.md@dev bradygaster/squad/workflows/squad-retro.md@dev bradygaster/squad/workflows/squad-improvement-worker.md@dev --force
+3. Treat each source Markdown file and its generated .lock.yml as one contract. Never hand-edit a lock file. Require all six source/lock pairs before continuing.
+4. If gh-aw reports a safe-update approval requirement, do not approve it. Stop and surface the exact report. The only expected first-install entries are restricted secrets SQUAD_GITHUB_APP_PRIVATE_KEY and SQUAD_GITHUB_TOKEN, plus action bradygaster/squad/.github/actions/squad-init; any other entry is an additional stop condition.
+5. Run gh aw compile --strict without --approve. Require all six workflows to succeed; the documented squad.md bot-trigger warning is the only accepted warning. Reject JSON-escaped operators inside emitted GitHub expressions as documented by the Squad gh-aw guide.
+6. Do not generate or modify .squad/**, .github/agents/squad.agent.md, meet-the-squad.md, or .vscode/settings.json in this pull request.
+7. Confirm the diff is limited to the generated gh-aw bootstrap surface: .gitattributes, .github/aw/** excluding .github/aw/logs/**, .github/workflows/**, and .github/skills/**. Fail closed on deletions or files outside that surface.
+8. Commit, push the project-session branch, and open a reviewable pull request titled to make clear that it installs Squad automation. Request @copilot review when supported.
+9. Never merge the pull request, change repository Actions settings, supply optional Squad credentials, or bypass branch protection. The slash-command workflows remain inactive until a human merges the bootstrap pull request into the default branch.
 
 If npm access becomes necessary, first run:
 npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
@@ -800,9 +811,9 @@ async function handleRequest(entry, req, res) {
             if (
                 entry.state.mode !== "setup" ||
                 entry.state.members.length === 0 ||
-                entry.state.onboarding?.automation?.status !== "merged"
+                !isActiveSquadAutomation(entry.state.onboarding?.automation)
             ) {
-                sendJson(res, 409, { error: "Merge the automation pull request before casting the Squad." });
+                sendJson(res, 409, { error: "Merge a complete six-workflow automation pull request before casting the Squad." });
                 return;
             }
             void createCastIssue(entry);
@@ -997,6 +1008,12 @@ session = await joinSession({
                 const entry = servers.get(args.instanceId);
                 if (!entry) return { textResultForLlm: "Squadcaster instance not found.", resultType: "failure" };
                 const members = normalizeMembers(args.members);
+                if (members.length < 4 || members.length > 7) {
+                    return {
+                        textResultForLlm: "Proposal must include 4-7 cast specialists. Built-in support identities and @copilot do not count.",
+                        resultType: "failure",
+                    };
+                }
                 if (!members.some((member) => member.lead) || !members.some((member) => member.reviewer)) {
                     return {
                         textResultForLlm: "Proposal must include one lead and one independent reviewer.",
@@ -1043,7 +1060,8 @@ session = await joinSession({
             handler: async (args) => {
                 const entry = servers.get(args.instanceId);
                 if (!entry) return { textResultForLlm: "Squadcaster instance not found.", resultType: "failure" };
-                const tasks = normalizeTasks(args.tasks, entry.state.members.map((member) => member.id));
+                const eligibleMembers = castSpecialists(entry.state.members);
+                const tasks = normalizeTasks(args.tasks, eligibleMembers.map((member) => member.id));
                 if (tasks.some((task) => !task.ownerId)) {
                     return {
                         textResultForLlm: "Every mission task must use an ownerId from the authorized roster.",
