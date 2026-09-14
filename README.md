@@ -95,7 +95,7 @@ See the authoritative [Squad GitHub Agentic Workflows guide](https://bradygaster
 | `squad-retro` | Collects bounded workflow and review evidence, publishes reports, and creates action or governance-proposal issues. It does not edit the repository or merge changes. |
 | `squad-improvement-worker` | Dormant until an exact governance proposal revision and path set is approved by a human with write, maintain, or admin permission. It applies only that approved patch and opens one draft PR. |
 
-The cast contains repository-specific specialists only. **Scribe**, **Ralph**, **Rai**, and **Fact Checker** are built-in support identities supplied by Squad, while `@copilot` is the independent PR reviewer; none is counted as a cast specialist, mission owner, or routing destination.
+The cast contains repository-specific specialists only. **Scribe**, **Ralph**, **Rai**, and **Fact Checker** are built-in support identities supplied by Squad. Squadcaster also excludes `@copilot` from its proposed cast specialists and mission owners.
 
 ## Working with the Squad
 
