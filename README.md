@@ -119,9 +119,9 @@ After the cast PR is merged, Squadcaster reads the repository-owned roster and c
 
 ## Development channel note
 
-Squadcaster follows the [published Squad gh-aw onboarding contract](https://bradygaster.github.io/squad/docs/guide/gh-aw/) and installs the six explicit workflow sources from the moving `@dev` channel. Re-running onboarding uses the forced-add flow so existing generated sources are upgraded rather than silently retained, followed by strict compilation and verification of all six source/lock pairs.
+Squadcaster currently installs the Squad workflow distribution from the moving `@dev` channel. During this walkthrough, an unpublished `squad health --json` interface did not match the generated workflow in the [initial run](https://github.com/bradygaster/spring-petclinic/actions/runs/32906966383). On this disposable fork only, [compatibility PR #48](https://github.com/bradygaster/spring-petclinic/pull/48) temporarily switched the generated workflow to the published `squad doctor` command and recompiled it; the [next cast run succeeded](https://github.com/bradygaster/spring-petclinic/actions/runs/32907502413).
 
-Treat `@dev` as a development channel whose workflow contract can move. Generated `.lock.yml` files must never be edited by hand.
+That fork-specific compatibility change is not part of normal Squadcaster installation. Treat `@dev` as a development channel whose workflow contract can move.
 
 ## Persistence and security boundaries
 

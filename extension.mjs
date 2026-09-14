@@ -609,15 +609,13 @@ Work in the current Copilot project-session worktree.
 
 Requirements:
 1. Verify the GitHub Agentic Workflows extension is available. Install github/gh-aw only if it is missing.
-2. Add or upgrade the complete supported workflow set from the moving dev channel. Keep the dispatcher first and use the supported forced-add flow so partial or stale installations are replaced:
-   gh aw add bradygaster/squad/workflows/squad.md@dev bradygaster/squad/workflows/squad-implement-worker.md@dev bradygaster/squad/workflows/squad-review.md@dev bradygaster/squad/workflows/squad-deps-worker.md@dev bradygaster/squad/workflows/squad-retro.md@dev bradygaster/squad/workflows/squad-improvement-worker.md@dev --force
-3. Treat each source Markdown file and its generated .lock.yml as one contract. Never hand-edit a lock file. Require all six source/lock pairs before continuing.
-4. If gh-aw reports a safe-update approval requirement, do not approve it. Stop and surface the exact report. The only expected first-install entries are restricted secrets SQUAD_GITHUB_APP_PRIVATE_KEY and SQUAD_GITHUB_TOKEN, plus action bradygaster/squad/.github/actions/squad-init; any other entry is an additional stop condition.
-5. Run gh aw compile --strict without --approve. Require all six workflows to succeed; the documented squad.md bot-trigger warning is the only accepted warning. Reject JSON-escaped operators inside emitted GitHub expressions as documented by the Squad gh-aw guide.
-6. Do not generate or modify .squad/**, .github/agents/squad.agent.md, meet-the-squad.md, or .vscode/settings.json in this pull request.
-7. Confirm the diff is limited to the generated gh-aw bootstrap surface: .gitattributes, .github/aw/** excluding .github/aw/logs/**, .github/workflows/**, and .github/skills/**. Fail closed on deletions or files outside that surface.
-8. Commit, push the project-session branch, and open a reviewable pull request titled to make clear that it installs Squad automation. Request @copilot review when supported.
-9. Never merge the pull request, change repository Actions settings, supply optional Squad credentials, or bypass branch protection. The slash-command workflows remain inactive until a human merges the bootstrap pull request into the default branch.
+2. Add the Squad dispatcher, implementation worker, and reviewer in this order:
+   gh aw add bradygaster/squad/workflows/squad.md@dev bradygaster/squad/workflows/squad-implement-worker.md@dev bradygaster/squad/workflows/squad-review.md@dev
+3. If gh-aw reports a restricted-secret safe-update approval requirement, stop and surface the exact warning instead of approving it automatically.
+4. Do not generate or modify .squad/**, .github/agents/squad.agent.md, or meet-the-squad.md in this pull request.
+5. Confirm the diff is limited to the gh-aw bootstrap surface: .gitattributes, .github/workflows/**, and .github/skills/**.
+6. Commit, push the project-session branch, and open a reviewable pull request titled to make clear that it installs Squad automation.
+7. Never merge the pull request, change repository Actions settings, or bypass branch protection.
 
 If npm access becomes necessary, first run:
 npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
