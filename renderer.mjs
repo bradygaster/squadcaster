@@ -602,19 +602,26 @@ export function renderHtml() {
     function prHtml() {
       if (!state?.pullRequest?.url) return "";
       const automation = state.pullRequest.kind === "automation-pr";
+      const automationComplete = state.onboarding?.automation?.complete === true;
       const automationMerged = automation &&
+        automationComplete &&
         (state.pullRequest.status === "merged" || state.onboarding?.automation?.status === "merged");
+      const automationIncomplete = automation && state.onboarding?.automation && !automationComplete;
       return \`
         <div class="pr-result">
-          <span aria-hidden="true">✓</span>
+          <span aria-hidden="true">\${automationIncomplete ? "!" : "✓"}</span>
           <div>
             <strong>\${automation
-              ? automationMerged ? "Automation PR merged · 1 of 2 complete" : "Automation PR created · 1 of 2"
+              ? automationIncomplete
+                ? "Automation PR is incomplete"
+                : automationMerged ? "Automation PR merged · 1 of 2 complete" : "Automation PR created · 1 of 2"
               : "Pull request created"}</strong><br>
             \${automation
-              ? automationMerged
+              ? automationIncomplete
+                ? "The bootstrap must contain all six Squad workflow source/lock pairs before it can activate onboarding.<br>"
+                : automationMerged
                 ? "Next: create the cast issue below to start pull request 2.<br>"
-                : "Review and merge the repository bootstrap. This canvas checks GitHub automatically.<br>"
+                : "Review the repository bootstrap. The slash commands remain inactive until a human merges it.<br>"
               : ""}
             <a href="\${esc(state.pullRequest.url)}" target="_blank" rel="noreferrer">Open on GitHub ↗</a>
           </div>
@@ -622,7 +629,8 @@ export function renderHtml() {
     }
 
     function castActionHtml() {
-      const automationMerged = state?.onboarding?.automation?.status === "merged";
+      const automationMerged = state?.onboarding?.automation?.status === "merged" &&
+        state?.onboarding?.automation?.complete === true;
       if (!automationMerged) return "";
       const cast = state?.onboarding?.cast;
       if (cast?.issueUrl) {
@@ -715,7 +723,8 @@ export function renderHtml() {
 
     function onboardingSnapshot() {
       const hasProposal = Boolean(state?.members?.length);
-      const automationMerged = state?.onboarding?.automation?.status === "merged";
+      const automationMerged = state?.onboarding?.automation?.status === "merged" &&
+        state?.onboarding?.automation?.complete === true;
       const setupStarted =
         (state?.operation?.kind === "automation-pr" && state?.operation?.status === "running") ||
         state?.pullRequest?.kind === "automation-pr" ||

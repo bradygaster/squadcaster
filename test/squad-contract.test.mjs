@@ -2,19 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
     automationPullRequestPrompt,
+    automationPullRequestState,
+    castSpecialists,
+    isActiveSquadAutomation,
     isCompleteAutomationPullRequest,
+    isSupportIdentity,
     squadSourceRefFromLocks,
     squadWorkflowPaths,
     SQUAD_WORKFLOWS,
 } from "../squad-contract.mjs";
 
 const REVISION = "f1229ed7e67009e41e25e264b0df7a36ad929b9a";
+const INSTALLED_PATHS = squadWorkflowPaths();
 
 function completePullRequest() {
-    return { files: squadWorkflowPaths().map((path) => ({ path })) };
+    return { files: INSTALLED_PATHS.map((path) => ({ path })) };
 }
-
-const INSTALLED_PATHS = squadWorkflowPaths();
 
 function locks(revision = REVISION) {
     return Object.fromEntries(SQUAD_WORKFLOWS.map((workflow) => [
@@ -113,4 +116,62 @@ test("bootstrap prompt preserves the supported safety and review contract", () =
     assert.match(prompt, /Never manually edit a generated \.lock\.yml file/);
     assert.doesNotMatch(prompt, /(?:Closes|Fixes|Resolves)\s+#\d+/i);
     assert.doesNotMatch(prompt, /Link issue #\d+/i);
+});
+
+test("tracks a complete automation candidate separately from merge activation", () => {
+    const state = automationPullRequestState(
+        { title: "ci: add Squad agentic workflow", ...completePullRequest() },
+        INSTALLED_PATHS,
+        locks("dev"),
+    );
+
+    assert.equal(state.recognized, true);
+    assert.equal(state.complete, true);
+    assert.deepEqual(state.missingWorkflowPaths, []);
+    assert.equal(isActiveSquadAutomation({ status: "open", complete: true }), false);
+    assert.equal(isActiveSquadAutomation({ status: "merged", complete: true }), true);
+});
+
+test("recognizes partial legacy automation without treating it as complete", () => {
+    const partialPaths = INSTALLED_PATHS.slice(0, 6);
+    const partial = automationPullRequestState(
+        {
+            title: "Install Squad automation",
+            files: partialPaths.map((path) => ({ path })),
+        },
+        partialPaths,
+        locks("dev"),
+    );
+
+    assert.equal(partial.recognized, true);
+    assert.equal(partial.complete, false);
+    assert.equal(partial.missingWorkflowPaths.length, 6);
+    assert.equal(isActiveSquadAutomation({ status: "merged", complete: false }), false);
+});
+
+test("does not treat a matching title as a complete bootstrap", () => {
+    const titleOnly = automationPullRequestState(
+        { title: "Squad automation bootstrap", files: [] },
+        [],
+        {},
+    );
+
+    assert.equal(titleOnly.recognized, true);
+    assert.equal(titleOnly.complete, false);
+    assert.deepEqual(titleOnly.missingWorkflowPaths, INSTALLED_PATHS);
+});
+
+test("excludes built-in support identities and Copilot from cast specialists", () => {
+    const members = [
+        { id: "lead", name: "Lead" },
+        { id: "scribe", name: "Memory" },
+        { id: "monitor", name: "Ralph" },
+        { id: "rai", name: "Responsible AI" },
+        { id: "fact-checker", name: "Verifier" },
+        { id: "copilot", name: "@copilot" },
+        { id: "backend", name: "Backend" },
+    ];
+
+    assert.equal(isSupportIdentity({ id: "custom", name: "Fact Checker" }), true);
+    assert.deepEqual(castSpecialists(members).map((member) => member.id), ["lead", "backend"]);
 });

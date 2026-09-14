@@ -133,3 +133,47 @@ npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
 
 Finish with the pull request URL on its own line.`;
 }
+
+const SUPPORT_IDENTITY_IDS = new Set(["scribe", "ralph", "rai", "fact-checker"]);
+
+function normalizedPath(value) {
+    return String(value || "").trim().replaceAll("\\", "/").toLowerCase();
+}
+
+export function automationPullRequestState(pullRequest, installedPaths, lockContents) {
+    const expectedPaths = squadWorkflowPaths();
+    const expectedPathSet = new Set(expectedPaths.map(normalizedPath));
+    const workflowPaths = [...new Set(
+        (Array.isArray(installedPaths) ? installedPaths : [])
+            .map(normalizedPath)
+            .filter((filePath) => expectedPathSet.has(filePath)),
+    )];
+    const installed = new Set(workflowPaths);
+    const missingWorkflowPaths = expectedPaths.filter((filePath) => !installed.has(normalizedPath(filePath)));
+    const changedWorkflowPaths = (Array.isArray(pullRequest?.files) ? pullRequest.files : [])
+        .map((file) => normalizedPath(file?.path))
+        .filter((filePath) => expectedPathSet.has(filePath));
+    return {
+        recognized: /(?:squad.*automation|automation.*squad)/i.test(pullRequest?.title || "") ||
+            changedWorkflowPaths.length > 0,
+        complete: isCompleteAutomationPullRequest(pullRequest, installedPaths, lockContents),
+        workflowPaths,
+        missingWorkflowPaths,
+    };
+}
+
+export function isActiveSquadAutomation(automation) {
+    return automation?.status === "merged" && automation?.complete === true;
+}
+
+export function isSupportIdentity(member) {
+    const id = String(member?.id || "").trim().toLowerCase();
+    const name = String(member?.name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+    return SUPPORT_IDENTITY_IDS.has(id) || SUPPORT_IDENTITY_IDS.has(name);
+}
+
+export function castSpecialists(members) {
+    return (Array.isArray(members) ? members : []).filter((member) =>
+        !isSupportIdentity(member) && !String(member?.name || "").trim().startsWith("@"));
+}

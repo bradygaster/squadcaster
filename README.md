@@ -69,7 +69,7 @@ Review the evidence, role boundaries, and each operating charter. Edit a role or
 
 Choose **Create automation PR · 1 of 2**, review the confirmation, then choose **Create automation PR**. Squadcaster keeps the default workflow token read-only, allows Actions-created pull requests, and installs all six supported Squad workflows from `@dev`. If any Squad workflow is already present, it instead upgrades the complete set from one immutable revision of Squad's `dev` branch. It strictly compiles the generated locks, verifies the complete source/lock set, requests Copilot review, and opens a pull request from the project-session branch.
 
-The PetClinic run opened [automation PR #46](https://github.com/bradygaster/spring-petclinic/pull/46). **Open on GitHub** only navigates to the pull request; you review and merge it yourself.
+The PetClinic run opened [automation PR #46](https://github.com/bradygaster/spring-petclinic/pull/46). **Open on GitHub** only navigates to the pull request; you review and merge it yourself. The `/squad` command surface remains inactive until the complete bootstrap PR is merged into the default branch.
 
 <p align="center">
   <img src="docs/images/squadcaster-03-automation-pr.png" alt="Squadcaster showing that PetClinic automation pull request 1 of 2 was created" width="820">
