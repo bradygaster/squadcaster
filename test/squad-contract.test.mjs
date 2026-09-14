@@ -111,4 +111,6 @@ test("bootstrap prompt preserves the supported safety and review contract", () =
     assert.match(prompt, /gh pr checks --watch/);
     assert.match(prompt, /Never merge/);
     assert.match(prompt, /Never manually edit a generated \.lock\.yml file/);
+    assert.doesNotMatch(prompt, /(?:Closes|Fixes|Resolves)\s+#\d+/i);
+    assert.doesNotMatch(prompt, /Link issue #\d+/i);
 });

@@ -120,10 +120,10 @@ Requirements:
     git diff --cached --stat
     test -z "$(git diff --cached --diff-filter=D --name-only)"
     Stop on anything outside that bootstrap surface. Never use git add ., git add -A, or git commit -a.
-13. Commit, push the current project-session branch, and open a reviewable pull request against \${default_branch}. Link issue #3, request @copilot review, and watch the pull-request checks:
+13. Commit, push the current project-session branch, and open a reviewable pull request against \${default_branch}. Request @copilot review and watch the pull-request checks:
     git commit -m "ci: add Squad agentic workflow"
     git push -u origin HEAD
-    gh pr create --base "\${default_branch}" --title "ci: add Squad agentic workflow" --body "Installs or upgrades and strictly compiles the complete supported Squad GH-AW workflow set. Closes #3."
+    gh pr create --base "\${default_branch}" --title "ci: add Squad agentic workflow" --body "Installs or upgrades and strictly compiles the complete supported Squad GH-AW workflow set."
     gh pr edit --add-reviewer @copilot
     gh pr checks --watch
 14. Never merge the pull request, enable auto-merge, change any other repository setting, or bypass branch protection.
