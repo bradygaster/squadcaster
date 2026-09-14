@@ -123,6 +123,12 @@ Squad's first-install guide uses the moving `@dev` channel. Its supported upgrad
 
 Generated `.lock.yml` files are never edited manually. Squadcaster approves a first-install safe-update warning only when it contains exactly the documented optional secrets (`SQUAD_GITHUB_APP_PRIVATE_KEY` and `SQUAD_GITHUB_TOKEN`) and the `bradygaster/squad/.github/actions/squad-init` action. It always finishes with `gh aw compile --strict` without approval.
 
+Run the lightweight workflow contract suite with:
+
+```bash
+node --test test/squad-contract.test.mjs
+```
+
 ## Persistence and security boundaries
 
 - **Local state:** proposals and drafts are stored in local Copilot extension or session artifact storage, keyed by a hash of the repository path.

@@ -26,6 +26,15 @@ function locks(revision = REVISION) {
     ]));
 }
 
+function requirement(prompt, number) {
+    const match = prompt.match(new RegExp(
+        `^${number}\\. ([\\s\\S]*?)(?=^${number + 1}\\. |\\nIf npm access)`,
+        "m",
+    ));
+    assert.ok(match, `requirement ${number} should exist`);
+    return match[1];
+}
+
 test("requires all six workflow source and lock paths", () => {
     const pullRequest = completePullRequest();
     const incompletePaths = INSTALLED_PATHS.slice(0, -1);
@@ -44,6 +53,13 @@ test("rejects deletions and changes outside the bootstrap surface", () => {
     const logs = completePullRequest();
     logs.files.push({ path: ".github/aw/logs/run.json" });
     assert.equal(isCompleteAutomationPullRequest(logs, INSTALLED_PATHS, locks()), false);
+
+    const unrelatedWorkflow = completePullRequest();
+    unrelatedWorkflow.files.push({ path: ".github/workflows/release.yml" });
+    assert.equal(
+        isCompleteAutomationPullRequest(unrelatedWorkflow, INSTALLED_PATHS, locks()),
+        false,
+    );
 });
 
 test("rejects mixed or moving workflow revisions", () => {
@@ -118,6 +134,110 @@ test("bootstrap prompt preserves the supported safety and review contract", () =
     assert.doesNotMatch(prompt, /Link issue #\d+/i);
 });
 
+test("clean install and upgrade commands use distinct documented revisions", () => {
+    const prompt = automationPullRequestPrompt("/repo");
+    const cleanInstall = requirement(prompt, 5);
+    const upgrade = requirement(prompt, 6);
+    const cleanRefs = [...cleanInstall.matchAll(
+        /bradygaster\/squad\/workflows\/([a-z-]+)\.md@dev/g,
+    )].map((match) => match[1]);
+    const upgradeRefs = [...upgrade.matchAll(
+        /bradygaster\/squad\/workflows\/([a-z-]+)\.md@\$\{SQUAD_SHA\}/g,
+    )].map((match) => match[1]);
+
+    assert.deepEqual(cleanRefs, SQUAD_WORKFLOWS);
+    assert.deepEqual(upgradeRefs, SQUAD_WORKFLOWS);
+    assert.doesNotMatch(cleanInstall, /\n\s+--force/);
+    assert.doesNotMatch(cleanInstall, /SQUAD_SHA/);
+    assert.match(upgrade, /SQUAD_SHA=.*commits\/dev/);
+    assert.equal((upgrade.match(/commits\/dev/g) || []).length, 1);
+    assert.match(upgrade, /test "\$\{#SQUAD_SHA\}" -eq 40/);
+    assert.match(upgrade, /--force/);
+    assert.match(upgrade, /do not use gh aw update/i);
+    assert.match(upgrade, /Never manually edit a generated \.lock\.yml file/);
+});
+
+test("upgrade refreshes exactly the documented shared resources at the same revision", () => {
+    const shared = requirement(automationPullRequestPrompt("/repo"), 7);
+    const sources = [...shared.matchAll(
+        /bradygaster\/squad\/\$\{SQUAD_SHA\}\/workflows\/shared\/([^"]+)/g,
+    )].map((match) => match[1]);
+    const outputs = [...shared.matchAll(
+        /--output \.github\/workflows\/shared\/([^\s]+)/g,
+    )].map((match) => match[1]);
+    const expected = [
+        "squad.md",
+        "squad-cast-validator.mjs",
+        "squad-planning-ontology.md",
+        "squad-planning-policy.md",
+    ];
+
+    assert.deepEqual(sources, expected);
+    assert.deepEqual(outputs, expected);
+    assert.doesNotMatch(shared, /@dev|\/dev\//);
+});
+
+test("safe-update approval is conditional on the exact documented allowlist", () => {
+    const safeUpdate = requirement(automationPullRequestPrompt("/repo"), 8);
+    const entries = [...safeUpdate.matchAll(/^\s+- (.+)$/gm)].map((match) => match[1]);
+
+    assert.deepEqual(entries, [
+        "SQUAD_GITHUB_APP_PRIVATE_KEY",
+        "SQUAD_GITHUB_TOKEN",
+        "bradygaster/squad/.github/actions/squad-init",
+    ]);
+    assert.match(safeUpdate, /only when the complete report contains exactly/i);
+    assert.match(safeUpdate, /Only in that exact case run: gh aw compile --strict --approve/);
+    assert.match(safeUpdate, /Stop and surface every unexpected secret or action/i);
+});
+
+test("permission changes are covered by explicit confirmation and runtime repository resolution", () => {
+    const prompt = automationPullRequestPrompt("/repo");
+    const preflight = requirement(prompt, 1);
+    const permissions = requirement(prompt, 3);
+
+    assert.match(prompt, /user's confirmation.*authorizes.*Actions workflow-permission update/is);
+    assert.match(preflight, /gh auth status/);
+    assert.match(preflight, /gh repo view --json nameWithOwner/);
+    assert.match(preflight, /gh repo view --json defaultBranchRef/);
+    assert.match(prompt, /Install github\/gh-aw only if it is missing/);
+    assert.match(permissions, /repos\/\$\{owner_repo\}\/actions\/permissions\/workflow/);
+    assert.match(permissions, /default_workflow_permissions=read/);
+    assert.match(permissions, /can_approve_pull_request_reviews=true/);
+});
+
+test("validation fails closed before review and excludes non-bootstrap output", () => {
+    const prompt = automationPullRequestPrompt("/repo");
+    const validation = requirement(prompt, 10);
+    const exclusions = requirement(prompt, 11);
+    const staging = requirement(prompt, 12);
+
+    assert.match(validation, /for workflow in squad squad-implement-worker squad-review squad-deps-worker squad-retro squad-improvement-worker/);
+    assert.ok(validation.includes(
+        String.raw`grep -nE '\$\{\{[^}]*\\u00(26|3[cCeE])' .github/workflows/*.lock.yml`,
+    ));
+    assert.match(validation, /Treat any matching line as a failure/);
+    assert.match(exclusions, /\.squad\/\*\*/);
+    assert.match(exclusions, /\.github\/agents\/squad\.agent\.md/);
+    assert.match(exclusions, /meet-the-squad\.md/);
+    assert.match(exclusions, /\.github\/aw\/logs\/\*\*/);
+    assert.match(exclusions, /\.vscode\/settings\.json/);
+    assert.match(staging, /git add -- \.gitattributes \.github\/aw\/ \.github\/workflows\/ \.github\/skills\//);
+    assert.match(staging, /git diff --cached --diff-filter=D/);
+    assert.match(staging, /Never use git add \., git add -A, or git commit -a/);
+});
+
+test("bootstrap never hardcodes a consumer issue or activates before merge", () => {
+    const prompt = automationPullRequestPrompt("/repo");
+
+    assert.doesNotMatch(prompt, /(?:issues?|pulls?)\/\d+/i);
+    assert.doesNotMatch(prompt, /(?:Closes|Fixes|Resolves|Link issue)\s+#\d+/i);
+    assert.match(prompt, /Never merge the pull request/);
+    assert.equal(isActiveSquadAutomation({ status: "open", complete: true }), false);
+    assert.equal(isActiveSquadAutomation({ status: "merged", complete: false }), false);
+    assert.equal(isActiveSquadAutomation({ status: "merged", complete: true }), true);
+});
+
 test("tracks a complete automation candidate separately from merge activation", () => {
     const state = automationPullRequestState(
         { title: "ci: add Squad agentic workflow", ...completePullRequest() },
@@ -173,5 +293,8 @@ test("excludes built-in support identities and Copilot from cast specialists", (
     ];
 
     assert.equal(isSupportIdentity({ id: "custom", name: "Fact Checker" }), true);
+    for (const identity of ["scribe", "ralph", "rai", "fact-checker"]) {
+        assert.equal(isSupportIdentity({ id: identity, name: "Custom" }), true);
+    }
     assert.deepEqual(castSpecialists(members).map((member) => member.id), ["lead", "backend"]);
 });

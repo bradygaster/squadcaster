@@ -8,12 +8,14 @@ export const SQUAD_WORKFLOWS = Object.freeze([
 ]);
 
 const IMMUTABLE_REVISION_PATTERN = /^[0-9a-f]{40}$/i;
+const SQUAD_WORKFLOW_PATHS = Object.freeze(SQUAD_WORKFLOWS.flatMap((workflow) => [
+    `.github/workflows/${workflow}.md`,
+    `.github/workflows/${workflow}.lock.yml`,
+]));
+const SQUAD_WORKFLOW_PATH_SET = new Set(SQUAD_WORKFLOW_PATHS);
 
 export function squadWorkflowPaths() {
-    return SQUAD_WORKFLOWS.flatMap((workflow) => [
-        `.github/workflows/${workflow}.md`,
-        `.github/workflows/${workflow}.lock.yml`,
-    ]);
+    return [...SQUAD_WORKFLOW_PATHS];
 }
 
 function isAllowedBootstrapPath(filePath) {
@@ -21,8 +23,11 @@ function isAllowedBootstrapPath(filePath) {
     if (normalized === ".gitattributes") return true;
     if (normalized === ".github/aw/logs/.gitignore") return true;
     if (normalized.startsWith(".github/aw/logs/")) return false;
+    if (normalized.startsWith(".github/workflows/shared/")) return true;
+    if (normalized.startsWith(".github/workflows/")) {
+        return SQUAD_WORKFLOW_PATH_SET.has(normalized);
+    }
     return normalized.startsWith(".github/aw/") ||
-        normalized.startsWith(".github/workflows/") ||
         normalized.startsWith(".github/skills/");
 }
 
