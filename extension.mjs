@@ -10,7 +10,6 @@ import {
     createCanvas,
     joinSession,
 } from "@github/copilot-sdk/extension";
-import { activityModel } from "./activity-model.mjs";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 import { GitHubGlobalActivity, normalizeRegistry } from "./global-activity.mjs";
 import { renderHtml } from "./renderer.mjs";
@@ -197,7 +196,7 @@ async function readRegistry(filePath) {
 }
 
 function withRegistryLock(operation) {
-    const queued = registryQueue.then(operation, operation);
+    const queued = registryQueue.then(operation, () => operation());
     registryQueue = queued.catch(() => {});
     return queued;
 }
@@ -280,10 +279,11 @@ async function loadState(workingDirectory) {
                 rosterAvailable: initialized,
                 memberCount: members.length,
             },
-            activity: persisted?.activity || {
-                schemaVersion: activityModel.schemaVersion,
+            activity: persisted?.activity?.schemaVersion === 2 ? persisted.activity : {
+                schemaVersion: 2,
                 fetchedAt: null,
                 repository: {},
+                repositories: [],
                 summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
                 goals: [],
                 errors: [],
@@ -611,7 +611,8 @@ async function refreshRemoteState(entry, { force = false } = {}) {
             const message = cleanText(error?.message || error, 1200);
             await updateState(entry, (state) => {
                 state.activity ||= {
-                    schemaVersion: activityModel.schemaVersion,
+                    schemaVersion: 2,
+                    repositories: [],
                     summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
                     goals: [],
                     errors: [],

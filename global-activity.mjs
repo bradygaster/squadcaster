@@ -91,7 +91,9 @@ function registryRepository(repository, previous = {}) {
 
 function due(repository, snapshot, currentRepository, now) {
     if (repository.nameWithOwner.toLowerCase() === currentRepository.toLowerCase()) return true;
-    const last = Date.parse(repository.lastAttemptedRefresh || 0);
+    const last = repository.lastAttemptedRefresh
+        ? Date.parse(repository.lastAttemptedRefresh)
+        : Number.NaN;
     const active = Number(snapshot?.summary?.active || 0) > 0;
     return !Number.isFinite(last) || now - last >= (active ? ACTIVE_TTL : INACTIVE_TTL);
 }

@@ -1388,7 +1388,15 @@ export function renderHtml() {
         } else if (action === "refresh-all") {
           target.disabled = true;
           target.textContent = "Refreshing…";
-          await post("/api/refresh");
+          try {
+            await post("/api/refresh");
+          } finally {
+            const button = document.querySelector('[data-action="refresh-all"]');
+            if (button) {
+              button.disabled = false;
+              button.textContent = "Refresh all";
+            }
+          }
         } else if (action === "analyze" || action === "reanalyze") {
           confirmSetup = false;
           await post("/api/analyze");
