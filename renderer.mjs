@@ -1340,7 +1340,7 @@ export function renderHtml() {
           <div class="goal-list">
             \${goals.length ? goals.map(goalCardHtml).join("") : \`
               <section class="empty">
-                <h2>No \${esc(phaseFilter === "all" ? "" : phaseFilter)} goals found.</h2>
+                <h2>\${phaseFilter === "all" ? "No goals found." : "No " + esc(phaseFilter) + " goals found."}</h2>
                 <p>Squadcaster recognizes issues carrying <code>squad</code> or <code>squad:*</code> labels, Squad commands, or structured Squad artifacts.</p>
               </section>\`}
           </div>

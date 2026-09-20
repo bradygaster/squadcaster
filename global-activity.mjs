@@ -90,7 +90,7 @@ function registryRepository(repository, previous = {}) {
 }
 
 function due(repository, snapshot, currentRepository, now) {
-    if (repository.nameWithOwner.toLowerCase() === currentRepository.toLowerCase()) return true;
+    if (repository.nameWithOwner.toLowerCase() === String(currentRepository || "").toLowerCase()) return true;
     const last = repository.lastAttemptedRefresh
         ? Date.parse(repository.lastAttemptedRefresh)
         : Number.NaN;
@@ -293,7 +293,9 @@ export class GitHubGlobalActivity {
                 : lowRateLimit
                     ? [{
                         source: "rate limit",
-                        message: `Background refresh paused until ${this.registry.rateLimit.resetAt}; the current repository still refreshes.`,
+                        message: this.registry.rateLimit?.resetAt
+                            ? `Background refresh paused until ${this.registry.rateLimit.resetAt}; the current repository still refreshes.`
+                            : "Background refresh paused due to the low GitHub API rate limit; the current repository still refreshes.",
                     }]
                     : [],
         });

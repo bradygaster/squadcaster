@@ -300,10 +300,10 @@ async function persist(entry) {
     await fs.rename(temporary, entry.statePath);
 }
 
-async function persistRegistry(registryPath, registry) {
-    const temporary = `${registryPath}.tmp`;
+async function persistRegistry(filePath, registry) {
+    const temporary = `${filePath}.tmp`;
     await fs.writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
-    await fs.rename(temporary, registryPath);
+    await fs.rename(temporary, filePath);
 }
 
 function broadcast(entry) {
