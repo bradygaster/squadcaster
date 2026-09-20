@@ -187,10 +187,6 @@ function phaseFor({ issue, artifacts, pullRequests, workflowRuns, blockers, igno
     if (String(issue?.state).toUpperCase() === "CLOSED" || pullRequests.some((pullRequest) => pullRequest.state === "merged")) {
         return "completed";
     }
-    if ((!ignoreBlockers && blockers.length > 0) ||
-        labelsOf(issue).some((label) => /^(blocked|status:blocked)$/i.test(label))) {
-        return "blocked";
-    }
     const latestRuns = [...workflowRuns]
         .sort((left, right) => String(right.updatedAt || right.createdAt).localeCompare(String(left.updatedAt || left.createdAt)))
         .filter((run, index, runs) =>
@@ -200,6 +196,10 @@ function phaseFor({ issue, artifacts, pullRequests, workflowRuns, blockers, igno
     const failedChecks = pullRequests.flatMap((pullRequest) => pullRequest.checks)
         .filter((check) => FAILURE_CONCLUSIONS.has(check.status));
     if (failedRuns.length > 0 || failedChecks.length > 0) return "failed";
+    if ((!ignoreBlockers && blockers.length > 0) ||
+        labelsOf(issue).some((label) => /^(blocked|status:blocked)$/i.test(label))) {
+        return "blocked";
+    }
     if (pullRequests.some((pullRequest) => pullRequest.state === "open" && !pullRequest.draft)) return "reviewing";
     if (pullRequests.some((pullRequest) => pullRequest.state === "open") || currentRuns.length > 0) return "implementing";
     const latestArtifact = artifacts.at(-1);
@@ -430,7 +430,12 @@ export function aggregateActivitySnapshots({
     errors = [],
     fetchedAt = new Date().toISOString(),
 } = {}) {
-    const goals = snapshots.flatMap((snapshot) => Array.isArray(snapshot?.goals) ? snapshot.goals : []);
+    const goals = snapshots.flatMap((snapshot) =>
+        (Array.isArray(snapshot?.goals) ? snapshot.goals : []).map((goal) => ({
+            ...goal,
+            dependencies: [...(goal.dependencies || [])],
+            blockers: [...(goal.blockers || [])],
+        })));
     const goalsById = new Map(goals.map((goal) => [String(goal.id).toLowerCase(), goal]));
 
     for (const goal of goals) {
@@ -442,12 +447,15 @@ export function aggregateActivitySnapshots({
                     title: target.issue.title,
                     url: target.issue.url,
                     status: target.issue.state,
-                    phase: target.phase,
+                    phase: target.phaseWithoutBlockers || target.phase,
                 }
                 : dependency;
         });
         goal.blockers = goal.dependencies.filter((dependency) => dependency.phase !== "completed");
-        goal.phase = goal.blockers.length ? "blocked" : goal.phaseWithoutBlockers || goal.phase;
+        const basePhase = goal.phaseWithoutBlockers || goal.phase;
+        goal.phase = goal.blockers.length && !["completed", "failed"].includes(basePhase)
+            ? "blocked"
+            : basePhase;
         goal.nextAction = nextActionFor(goal.phase, goal.pullRequests, goal.workflowRuns, goal.artifacts);
     }
 

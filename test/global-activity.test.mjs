@@ -59,6 +59,22 @@ test("preserves an explicit blocked label without dependency references", () => 
             labels: [{ name: "squad" }, { name: "blocked" }],
         }],
     });
+
+    test("terminal goal states take precedence over unresolved dependencies", () => {
+        const completed = buildActivitySnapshot({
+            repository: repository("octodemo/frontend"),
+            issues: [issue(
+                "octodemo/frontend",
+                57,
+                "Depends on: octodemo/missing#1",
+                "CLOSED",
+            )],
+        });
+        const aggregate = aggregateActivitySnapshots({ snapshots: [completed] });
+        assert.equal(aggregate.goals[0].phase, "completed");
+        assert.equal(aggregate.summary.completed, 1);
+        assert.equal(aggregate.summary.blocked, 0);
+    });
     const aggregate = aggregateActivitySnapshots({ snapshots: [snapshot] });
     assert.equal(aggregate.goals[0].phase, "blocked");
 });

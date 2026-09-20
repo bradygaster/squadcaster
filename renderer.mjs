@@ -1464,20 +1464,20 @@ export function renderHtml() {
           taskId: event.target.dataset.taskId,
           ownerId: event.target.value
         });
-
-        document.addEventListener("input", event => {
-          if (event.target.dataset.action !== "goal-search") return;
-          goalSearch = event.target.value;
-          render();
-          const input = document.querySelector('[data-action="goal-search"]');
-          if (input) {
-            input.focus();
-            input.setSelectionRange(goalSearch.length, goalSearch.length);
-          }
-        });
       } catch (error) {
         state.operation = { status: "error", message: error.message };
         render();
+      }
+    });
+
+    document.addEventListener("input", event => {
+      if (event.target.dataset.action !== "goal-search") return;
+      goalSearch = event.target.value;
+      render();
+      const input = document.querySelector('[data-action="goal-search"]');
+      if (input) {
+        input.focus();
+        input.setSelectionRange(goalSearch.length, goalSearch.length);
       }
     });
 

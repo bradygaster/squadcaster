@@ -18,6 +18,8 @@ import { renderHtml } from "./renderer.mjs";
 const execFileAsync = promisify(execFile);
 const servers = new Map();
 let session;
+let sharedRegistry = null;
+let registryQueue = Promise.resolve();
 
 const TOOL_PROPOSAL = "squadcaster_publish_proposal";
 const TOOL_MISSION = "squadcaster_publish_mission_plan";
@@ -192,6 +194,17 @@ async function readRegistry(filePath) {
     } catch {
         return normalizeRegistry();
     }
+}
+
+function withRegistryLock(operation) {
+    const queued = registryQueue.then(operation, operation);
+    registryQueue = queued.catch(() => {});
+    return queued;
+}
+
+function shareRegistry(registry) {
+    sharedRegistry = registry;
+    for (const entry of servers.values()) entry.registry = registry;
 }
 
 async function loadState(workingDirectory) {
@@ -572,25 +585,28 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 previous: currentPrevious,
             });
             const nameWithOwner = currentSnapshot.repository?.nameWithOwner || currentRepository;
-            const global = new GitHubGlobalActivity({
-                runJson: runGhJson,
-                cwd: entry.state.repoRoot,
-                registry: entry.registry,
-            });
-            const activity = await global.refresh({
-                currentRepository: nameWithOwner,
-                currentSnapshot,
-                currentMembers: entry.state.members,
-                currentSquadDetected: entry.state.squad?.installed,
-                forceDiscovery: force,
-                forceAll: entry.forceAllRefresh,
+            const activity = await withRegistryLock(async () => {
+                const global = new GitHubGlobalActivity({
+                    runJson: runGhJson,
+                    cwd: entry.state.repoRoot,
+                    registry: sharedRegistry || entry.registry,
+                });
+                const aggregated = await global.refresh({
+                    currentRepository: nameWithOwner,
+                    currentSnapshot,
+                    currentMembers: entry.state.members,
+                    currentSquadDetected: entry.state.squad?.installed,
+                    forceDiscovery: force,
+                    forceAll: entry.forceAllRefresh,
+                });
+                shareRegistry(global.registry);
+                await persistRegistry(entry);
+                return aggregated;
             });
             entry.forceAllRefresh = false;
-            entry.registry = global.registry;
             await updateState(entry, (state) => {
                 state.activity = activity;
             });
-            await persistRegistry(entry);
         } catch (error) {
             const message = cleanText(error?.message || error, 1200);
             await updateState(entry, (state) => {
@@ -814,23 +830,29 @@ async function handleRequest(entry, req, res) {
 
     if (req.method === "POST" && url.pathname === "/api/repositories") {
         const body = await parseBody(req);
-        const global = new GitHubGlobalActivity({
-            runJson: runGhJson,
-            cwd: entry.state.repoRoot,
-            registry: entry.registry,
+        if (entry.remoteCheckPromise) await entry.remoteCheckPromise;
+        const changed = await withRegistryLock(async () => {
+            const global = new GitHubGlobalActivity({
+                runJson: runGhJson,
+                cwd: entry.state.repoRoot,
+                registry: sharedRegistry || entry.registry,
+            });
+            if (!global.setIncluded(cleanText(body.nameWithOwner, 300), body.included)) return false;
+            shareRegistry(global.registry);
+            await persistRegistry(entry);
+            return true;
         });
-        if (!global.setIncluded(cleanText(body.nameWithOwner, 300), body.included)) {
+        if (!changed) {
             sendJson(res, 404, { error: "Repository not found in the Squad registry." });
             return;
         }
-        entry.registry = global.registry;
-        await persistRegistry(entry);
         entry.lastRemoteCheckAt = 0;
         await refreshRemoteState(entry, { force: false });
         sendJson(res, 200, entry.state);
         return;
     }
     if (req.method === "POST" && url.pathname === "/api/refresh") {
+        if (entry.remoteCheckPromise) await entry.remoteCheckPromise;
         entry.forceAllRefresh = true;
         entry.lastRemoteCheckAt = 0;
         await refreshRemoteState(entry, { force: true });
@@ -849,13 +871,13 @@ async function startServer(ctx) {
         cleanText(ctx.input?.workingDirectory || ctx.session?.workingDirectory || "", 1000);
     const { state, statePath } = await loadState(workingDirectory);
     const userRegistryPath = await registryPath();
-    const registry = await readRegistry(userRegistryPath);
+    if (!sharedRegistry) sharedRegistry = await readRegistry(userRegistryPath);
     const entry = {
         instanceId: ctx.instanceId,
         state,
         statePath,
         registryPath: userRegistryPath,
-        registry,
+        registry: sharedRegistry,
         clients: new Set(),
         server: null,
         url: "",
