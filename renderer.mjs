@@ -529,7 +529,7 @@ export function renderHtml() {
     .refresh-status { color: var(--muted); font-size: var(--text-body-small, 12px); white-space: nowrap; }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 10px;
       margin-top: 24px;
     }
@@ -559,6 +559,42 @@ export function renderHtml() {
       cursor: pointer;
     }
     .filter.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+    .scope-controls {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 2fr) auto;
+      gap: 10px;
+      align-items: end;
+      margin-top: 24px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: var(--soft);
+    }
+    .scope-controls label { color: var(--muted); font-size: 11px; }
+    .scope-controls label span { display: block; margin-bottom: 5px; font-weight: 600; }
+    .scope-actions { display: flex; gap: 8px; align-items: center; }
+    .toggle { display: inline-flex; gap: 7px; align-items: center; margin-top: 10px; color: var(--muted); }
+    .toggle input { width: auto; height: auto; }
+    .manage-list {
+      display: grid;
+      gap: 7px;
+      max-height: 320px;
+      margin-top: 12px;
+      overflow: auto;
+    }
+    .manage-repository {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .manage-repository input { width: auto; height: auto; }
+    .manage-repository small { color: var(--muted); }
+    .current-repository { box-shadow: inset 3px 0 0 var(--accent); }
     .goal-list { display: grid; gap: 12px; }
     .goal-card {
       overflow: hidden;
@@ -671,6 +707,7 @@ export function renderHtml() {
       .ops-heading { display: block; }
       .refresh-status { margin-top: 8px; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .scope-controls { grid-template-columns: 1fr; }
       .goal-details-body { grid-template-columns: 1fr; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -693,7 +730,12 @@ export function renderHtml() {
     let confirmCast = false;
     let confirmMission = false;
     let confirmCharters = false;
-    let phaseFilter = "active";
+    let phaseFilter = "all";
+    let repositoryFilter = "all";
+    let ownerFilter = "all";
+    let goalSearch = "";
+    let activeRepositoriesOnly = false;
+    let showRepositoryManager = false;
 
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
@@ -796,8 +838,9 @@ export function renderHtml() {
         return;
       }
       const active = state.activity?.summary?.active || 0;
+      const repositories = (state.activity?.repositories || []).filter(repository => repository.included).length;
       const mode = active ? \`\${active} active goal\${active === 1 ? "" : "s"}\` : "Operations";
-      repoHeader.innerHTML = \`<strong>\${esc(state.repoName)}</strong><span class="mode">\${mode}</span>\`;
+      repoHeader.innerHTML = \`<strong>All Squads</strong><span class="mode">\${repositories} repos · \${mode}</span>\`;
     }
 
     function memberBadge(member) {
@@ -1113,6 +1156,27 @@ export function renderHtml() {
       return goal.phase === phaseFilter;
     }
 
+    function goalMatchesScope(goal) {
+      const repository = String(goal.repository?.nameWithOwner || "");
+      if (repositoryFilter === "current" && repository.toLowerCase() !== String(state.activity?.currentRepository || "").toLowerCase()) return false;
+      if (!["all", "current"].includes(repositoryFilter) && repository !== repositoryFilter) return false;
+      if (ownerFilter !== "all" && repository.split("/")[0] !== ownerFilter) return false;
+      if (activeRepositoriesOnly) {
+        const hasActiveWork = (state.activity?.goals || []).some(candidate =>
+          candidate.phase !== "completed" &&
+          candidate.repository?.nameWithOwner === repository);
+        if (!hasActiveWork) return false;
+      }
+      const query = goalSearch.trim().toLowerCase();
+      if (!query) return true;
+      return [
+        goal.issue?.title,
+        goal.issue?.number,
+        goal.owner?.name,
+        repository,
+      ].some(value => String(value || "").toLowerCase().includes(query));
+    }
+
     function timelineHtml(goal) {
       if (!goal.evidence?.length) return '<p class="help">No correlated evidence is available yet.</p>';
       return \`
@@ -1144,7 +1208,7 @@ export function renderHtml() {
 
     function goalCardHtml(goal) {
       return \`
-        <article class="goal-card \${esc(goal.phase)}">
+        <article class="goal-card \${esc(goal.phase)} \${String(goal.repository.nameWithOwner).toLowerCase() === String(state.activity?.currentRepository).toLowerCase() ? "current-repository" : ""}">
           <div class="goal-main">
             <div class="goal-topline">
               <div class="goal-title">
@@ -1192,17 +1256,66 @@ export function renderHtml() {
         </details>\`;
     }
 
+    function repositoryControlsHtml() {
+      const repositories = (state.activity?.repositories || []).filter(repository => repository.included);
+      const owners = [...new Set(repositories.map(repository => repository.owner).filter(Boolean))].sort();
+      return \`
+        <section class="scope-controls" aria-label="Repository and goal filters">
+          <label><span>Owner or organization</span>
+            <select data-action="owner-filter">
+              <option value="all">All owners</option>
+              \${owners.map(owner => '<option value="' + esc(owner) + '"' + (ownerFilter === owner ? " selected" : "") + ">" + esc(owner) + "</option>").join("")}
+            </select>
+          </label>
+          <label><span>Repository</span>
+            <select data-action="repository-filter">
+              <option value="all">All repositories</option>
+              <option value="current" \${repositoryFilter === "current" ? "selected" : ""}>Current repository</option>
+              \${repositories.map(repository => '<option value="' + esc(repository.nameWithOwner) + '"' + (repositoryFilter === repository.nameWithOwner ? " selected" : "") + ">" + esc(repository.nameWithOwner) + "</option>").join("")}
+            </select>
+          </label>
+          <label><span>Search goals</span>
+            <input data-action="goal-search" value="\${esc(goalSearch)}" placeholder="Issue, goal, owner, or repository">
+          </label>
+          <div class="scope-actions">
+            <button class="button" data-action="manage-repositories" type="button">Manage</button>
+            <button class="button" data-action="refresh-all" type="button">Refresh all</button>
+          </div>
+        </section>
+        <label class="toggle"><input data-action="active-repositories" type="checkbox" \${activeRepositoriesOnly ? "checked" : ""}> Only repositories with active work</label>
+        \${showRepositoryManager ? repositoryManagerHtml() : ""}\`;
+    }
+
+    function repositoryManagerHtml() {
+      const repositories = state.activity?.repositories || [];
+      return \`
+        <details class="secondary" open>
+          <summary>Manage discovered Squad repositories</summary>
+          <div class="secondary-content">
+            <p>Excluded repositories remain visible here but are not refreshed or included in totals.</p>
+            <div class="manage-list">
+              \${repositories.map(repository => \`
+                <label class="manage-repository">
+                  <input data-action="repository-included" data-repository="\${esc(repository.nameWithOwner)}" type="checkbox" \${repository.included ? "checked" : ""}>
+                  <span><strong>\${esc(repository.nameWithOwner)}</strong><br><small>\${esc(repository.error || "Last refreshed " + formatTime(repository.lastSuccessfulRefresh))}</small></span>
+                  <small>\${repository.nameWithOwner.toLowerCase() === String(state.activity?.currentRepository).toLowerCase() ? "Current" : repository.permission || ""}</small>
+                </label>\`).join("")}
+            </div>
+          </div>
+        </details>\`;
+    }
+
     function activeHtml() {
       const activity = state.activity || {};
       const summary = activity.summary || {};
-      const goals = (activity.goals || []).filter(goalMatchesFilter);
+      const goals = (activity.goals || []).filter(goalMatchesFilter).filter(goalMatchesScope);
       const filters = ["active", "blocked", "failed", "reviewing", "completed", "all"];
       return \`
         <section>
           <div class="ops-heading">
             <div>
-              <h1>Squad operations</h1>
-              <p class="lede">Live, read-only visibility into goals, implementation, review, blockers, and failures from GitHub evidence.</p>
+              <h1>All Squads</h1>
+              <p class="lede">\${esc((activity.repositories || []).filter(repository => repository.included).length)} repositories\${activity.viewer ? " for @" + esc(activity.viewer) : ""} · opened from \${esc(activity.currentRepository || state.repoName)}. Live, read-only visibility from GitHub evidence.</p>
             </div>
             <div class="refresh-status">\${activity.stale ? "Showing last known state" : "Last synced"} · \${esc(formatTime(activity.fetchedAt))}</div>
           </div>
@@ -1211,13 +1324,16 @@ export function renderHtml() {
             \${metricHtml(summary.blocked || 0, "Blocked", summary.blocked ? "danger" : "")}
             \${metricHtml(summary.failed || 0, "Failed", summary.failed ? "danger" : "")}
             \${metricHtml(summary.awaitingReview || 0, "Awaiting review", summary.awaitingReview ? "warning" : "")}
+            \${metricHtml(summary.implementing || 0, "Implementing")}
+            \${metricHtml(summary.researching || 0, "Researching")}
             \${metricHtml(summary.completed || 0, "Completed")}
           </div>
           \${activity.errors?.length ? \`
             <div class="sync-warning"><strong>Some GitHub data could not be refreshed.</strong>
               \${activity.errors.map(error => '<p>' + esc(error.source) + ": " + esc(error.message) + "</p>").join("")}
             </div>\` : ""}
-          <div class="filters" aria-label="Filter goals">
+          \${repositoryControlsHtml()}
+          <div class="filters" aria-label="Filter goals by status">
             \${filters.map(filter => \`<button class="filter \${phaseFilter === filter ? "selected" : ""}" data-action="phase-filter" data-phase="\${filter}" type="button">\${esc(filter)}</button>\`).join("")}
           </div>
           <div class="goal-list">
@@ -1266,6 +1382,13 @@ export function renderHtml() {
         } else if (action === "phase-filter") {
           phaseFilter = target.dataset.phase || "active";
           render();
+        } else if (action === "manage-repositories") {
+          showRepositoryManager = !showRepositoryManager;
+          render();
+        } else if (action === "refresh-all") {
+          target.disabled = true;
+          target.textContent = "Refreshing…";
+          await post("/api/refresh");
         } else if (action === "analyze" || action === "reanalyze") {
           confirmSetup = false;
           await post("/api/analyze");
@@ -1306,11 +1429,51 @@ export function renderHtml() {
     });
 
     document.addEventListener("change", async event => {
-      if (event.target.dataset.action !== "task-owner") return;
+      const action = event.target.dataset.action;
+      if (action === "owner-filter") {
+        ownerFilter = event.target.value;
+        repositoryFilter = "all";
+        render();
+        return;
+      }
+      if (action === "repository-filter") {
+        repositoryFilter = event.target.value;
+        render();
+        return;
+      }
+      if (action === "active-repositories") {
+        activeRepositoriesOnly = event.target.checked;
+        render();
+        return;
+      }
+      if (action === "repository-included") {
+        try {
+          await post("/api/repositories", {
+            nameWithOwner: event.target.dataset.repository,
+            included: event.target.checked
+          });
+        } catch (error) {
+          state.operation = { status: "error", message: error.message };
+          render();
+        }
+        return;
+      }
+      if (action !== "task-owner") return;
       try {
         await post("/api/task-owner", {
           taskId: event.target.dataset.taskId,
           ownerId: event.target.value
+        });
+
+        document.addEventListener("input", event => {
+          if (event.target.dataset.action !== "goal-search") return;
+          goalSearch = event.target.value;
+          render();
+          const input = document.querySelector('[data-action="goal-search"]');
+          if (input) {
+            input.focus();
+            input.setSelectionRange(goalSearch.length, goalSearch.length);
+          }
         });
       } catch (error) {
         state.operation = { status: "error", message: error.message };

@@ -31,29 +31,40 @@ function errorMessage(error) {
 }
 
 export class GitHubSquadActivityAdapter {
-    constructor({ runJson, cwd }) {
+    constructor({ runJson, cwd, repository = "" }) {
         this.runJson = runJson;
         this.cwd = cwd;
+        this.repository = repository;
     }
 
-    async discover({ members = [], previous = null } = {}) {
+    async discover({ members = [], previous = null, includeWorkflowRuns = true } = {}) {
         let repository = previous?.repository || {};
         const errors = [];
         try {
             repository = await this.runJson(
-                ["repo", "view", "--json", "name,nameWithOwner,url,defaultBranchRef"],
+                [
+                    "repo", "view",
+                    ...(this.repository ? [this.repository] : []),
+                    "--json", "name,nameWithOwner,url,defaultBranchRef",
+                ],
                 this.cwd,
             );
         } catch (error) {
             errors.push({ source: "repository", message: errorMessage(error) });
         }
 
+        const sources = includeWorkflowRuns
+            ? SOURCES
+            : SOURCES.filter((source) => source.key !== "workflowRuns");
         const results = await Promise.allSettled(
-            SOURCES.map((source) => this.runJson(source.args, this.cwd)),
+            sources.map((source) => this.runJson(
+                [...source.args, ...(this.repository ? ["--repo", this.repository] : [])],
+                this.cwd,
+            )),
         );
         const data = { issues: [], pullRequests: [], workflowRuns: [] };
         results.forEach((result, index) => {
-            const source = SOURCES[index];
+            const source = sources[index];
             const key = source.key || source.name;
             if (result.status === "fulfilled" && Array.isArray(result.value)) {
                 data[key] = result.value;

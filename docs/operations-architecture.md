@@ -40,18 +40,31 @@ retry. Dependencies come from `Depends on:` or `Blocked by:` issue-body lines;
 an unavailable referenced issue remains an explicit unknown blocker rather than
 being silently ignored.
 
-## Adapter boundary and multi-repository evolution
+## User-wide aggregation
 
 `GitHubSquadActivityAdapter` implements discovery and returns the normalized
-snapshot without exposing GitHub CLI response shapes to the renderer. A future
-CAO adapter should return the same contract, using `repository.nameWithOwner`
-and the immutable issue number as the goal key. GitHub Actions `run_id`, pull
-request number, commit SHA, and structured artifact `origin_issue` are the
-durable correlation identifiers.
+snapshot without exposing GitHub CLI response shapes to the renderer.
+`GitHubGlobalActivity` discovers repositories readable by the authenticated
+user across owner, collaborator, and organization-member affiliations. It
+maintains a user-level registry and combines repository snapshots using
+`repository.nameWithOwner` plus the immutable issue number as the goal key.
 
-Aggregation should combine adapter snapshots without weakening repository
-permissions. Each evidence item retains its repository URL and states whether
-the relationship is observed or inferred.
+The repository used to open the canvas is refreshed every 15 seconds. Other
+repositories with active work refresh every minute, and inactive repositories
+refresh every ten minutes. Repository discovery runs every fifteen minutes.
+Actions are queried for the current repository and repositories already known
+to have active work. A low GraphQL rate-limit budget pauses background refresh
+until reset while preserving current-repository refresh and cached state.
+
+Users may include or exclude discovered repositories locally. Aggregation does
+not weaken GitHub permissions: only repositories readable through the active
+`gh` identity can appear. Each evidence item retains its repository URL and
+states whether the relationship is observed or inferred.
+
+Dependencies support local issue numbers, `owner/repository#number`, and full
+GitHub issue URLs. The aggregate resolves these references against goals in
+other included repositories. Missing or excluded targets remain visible with an
+unknown state instead of being treated as complete.
 
 ## CAO compatibility findings
 

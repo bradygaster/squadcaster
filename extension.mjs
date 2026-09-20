@@ -12,6 +12,7 @@ import {
 } from "@github/copilot-sdk/extension";
 import { activityModel } from "./activity-model.mjs";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
+import { GitHubGlobalActivity, normalizeRegistry } from "./global-activity.mjs";
 import { renderHtml } from "./renderer.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -163,7 +164,14 @@ async function statePathFor(repoRoot, workingDirectory) {
     if (!(await exists(statePath)) && await exists(legacyPath)) {
         await fs.copyFile(legacyPath, statePath);
     }
+
     return statePath;
+}
+
+async function registryPath() {
+    const root = storageRoot("squadcaster");
+    await fs.mkdir(root, { recursive: true });
+    return path.join(root, "repository-registry.json");
 }
 
 async function readPersistedState(statePath) {
@@ -173,6 +181,16 @@ async function readPersistedState(statePath) {
         return parsed && [1, 2].includes(parsed.version) ? parsed : null;
     } catch {
         return null;
+    }
+
+}
+
+async function readRegistry(filePath) {
+    if (!(await exists(filePath))) return normalizeRegistry();
+    try {
+        return normalizeRegistry(JSON.parse(await fs.readFile(filePath, "utf8")));
+    } catch {
+        return normalizeRegistry();
     }
 }
 
@@ -266,6 +284,12 @@ async function persist(entry) {
     const temporary = `${entry.statePath}.tmp`;
     await fs.writeFile(temporary, `${JSON.stringify(entry.state, null, 2)}\n`, "utf8");
     await fs.rename(temporary, entry.statePath);
+}
+
+async function persistRegistry(entry) {
+    const temporary = `${entry.registryPath}.tmp`;
+    await fs.writeFile(temporary, `${JSON.stringify(entry.registry, null, 2)}\n`, "utf8");
+    await fs.rename(temporary, entry.registryPath);
 }
 
 function broadcast(entry) {
@@ -533,19 +557,40 @@ async function refreshRemoteState(entry, { force = false } = {}) {
 
     entry.lastRemoteCheckAt = Date.now();
     entry.remoteCheckPromise = (async () => {
-        const adapter = new GitHubSquadActivityAdapter({
-            runJson: runGhJson,
-            cwd: entry.state.repoRoot,
-        });
-        let activity;
         try {
-            activity = await adapter.discover({
-                members: entry.state.members,
-                previous: entry.state.activity,
+            const currentAdapter = new GitHubSquadActivityAdapter({
+                runJson: runGhJson,
+                cwd: entry.state.repoRoot,
             });
+            const currentRepository = entry.state.activity?.currentRepository ||
+                entry.state.activity?.repository?.nameWithOwner ||
+                "";
+            const currentPrevious = entry.registry.snapshots?.[currentRepository.toLowerCase()] ||
+                (entry.state.activity?.scope === "user" ? null : entry.state.activity);
+            const currentSnapshot = await currentAdapter.discover({
+                members: entry.state.members,
+                previous: currentPrevious,
+            });
+            const nameWithOwner = currentSnapshot.repository?.nameWithOwner || currentRepository;
+            const global = new GitHubGlobalActivity({
+                runJson: runGhJson,
+                cwd: entry.state.repoRoot,
+                registry: entry.registry,
+            });
+            const activity = await global.refresh({
+                currentRepository: nameWithOwner,
+                currentSnapshot,
+                currentMembers: entry.state.members,
+                currentSquadDetected: entry.state.squad?.installed,
+                forceDiscovery: force,
+                forceAll: entry.forceAllRefresh,
+            });
+            entry.forceAllRefresh = false;
+            entry.registry = global.registry;
             await updateState(entry, (state) => {
                 state.activity = activity;
             });
+            await persistRegistry(entry);
         } catch (error) {
             const message = cleanText(error?.message || error, 1200);
             await updateState(entry, (state) => {
@@ -557,46 +602,6 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 };
                 state.activity.errors = [{ source: "GitHub", message }];
                 state.activity.stale = true;
-            });
-        }
-
-        if (entry.state.mode !== "setup") {
-            entry.remoteCheckPromise = null;
-            return;
-        }
-        try {
-            const automation = await inspectAutomationPullRequest(entry.state.repoRoot);
-            const previous = JSON.stringify(entry.state.onboarding?.automation || null);
-            const next = JSON.stringify(automation);
-            const hadError = Boolean(entry.state.onboarding?.syncError);
-            if (previous === next && !hadError) return;
-
-            await updateState(entry, (state) => {
-                state.onboarding ||= { automation: null, cast: null, syncError: "" };
-                state.onboarding.automation = automation;
-                state.onboarding.syncError = "";
-                if (!automation) return;
-                state.pullRequest = {
-                    url: automation.url,
-                    createdAt: state.pullRequest?.createdAt || new Date().toISOString(),
-                    kind: "automation-pr",
-                    status: automation.status,
-                    mergedAt: automation.mergedAt,
-                };
-                state.operation = {
-                    kind: "automation-pr",
-                    status: "complete",
-                    message: automation.status === "merged"
-                        ? "Automation pull request merged. Ready to cast your Squad."
-                        : "Automation pull request created. Review and merge it on GitHub.",
-                };
-            });
-        } catch (error) {
-            const message = cleanText(error?.message || error, 1200);
-            if (entry.state.onboarding?.syncError === message) return;
-            await updateState(entry, (state) => {
-                state.onboarding ||= { automation: null, cast: null, syncError: "" };
-                state.onboarding.syncError = message;
             });
         } finally {
             entry.remoteCheckPromise = null;
@@ -807,6 +812,31 @@ async function handleRequest(entry, req, res) {
         return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/repositories") {
+        const body = await parseBody(req);
+        const global = new GitHubGlobalActivity({
+            runJson: runGhJson,
+            cwd: entry.state.repoRoot,
+            registry: entry.registry,
+        });
+        if (!global.setIncluded(cleanText(body.nameWithOwner, 300), body.included)) {
+            sendJson(res, 404, { error: "Repository not found in the Squad registry." });
+            return;
+        }
+        entry.registry = global.registry;
+        await persistRegistry(entry);
+        entry.lastRemoteCheckAt = 0;
+        await refreshRemoteState(entry, { force: false });
+        sendJson(res, 200, entry.state);
+        return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/refresh") {
+        entry.forceAllRefresh = true;
+        entry.lastRemoteCheckAt = 0;
+        await refreshRemoteState(entry, { force: true });
+        sendJson(res, 200, entry.state);
+        return;
+    }
     if (req.method !== "GET") {
         sendJson(res, 405, { error: "Squadcaster is read-only." });
         return;
@@ -818,15 +848,20 @@ async function startServer(ctx) {
     const workingDirectory =
         cleanText(ctx.input?.workingDirectory || ctx.session?.workingDirectory || "", 1000);
     const { state, statePath } = await loadState(workingDirectory);
+    const userRegistryPath = await registryPath();
+    const registry = await readRegistry(userRegistryPath);
     const entry = {
         instanceId: ctx.instanceId,
         state,
         statePath,
+        registryPath: userRegistryPath,
+        registry,
         clients: new Set(),
         server: null,
         url: "",
         lastRemoteCheckAt: 0,
         remoteCheckPromise: null,
+        forceAllRefresh: false,
     };
     const server = createServer((req, res) => {
         handleRequest(entry, req, res).catch((error) => {
@@ -868,7 +903,7 @@ const canvas = createCanvas({
     actions: [
         {
             name: "get_state",
-            description: "Return the current repository, Squad, and normalized GitHub activity state.",
+            description: "Return user-wide Squad activity and the current repository context.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
                 if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
@@ -878,7 +913,7 @@ const canvas = createCanvas({
         },
         {
             name: "refresh",
-            description: "Reload Squad configuration and GitHub activity from the current repository.",
+            description: "Rediscover and refresh user-wide Squad activity.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
                 if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
@@ -891,7 +926,7 @@ const canvas = createCanvas({
         let entry = servers.get(ctx.instanceId);
         if (!entry) entry = await startServer(ctx);
         return {
-            title: entry.state.repoName ? `Squadcaster · ${entry.state.repoName}` : "Squadcaster",
+            title: entry.state.repoName ? `All Squads · ${entry.state.repoName}` : "All Squads",
             status: entry.state.activity?.summary?.active
                 ? `${entry.state.activity.summary.active} active`
                 : "Watching",

@@ -44,13 +44,23 @@ function issueReferences(value) {
     return [...found];
 }
 
-function dependencyReferences(body) {
-    const found = new Set();
+function dependencyReferences(body, currentRepository) {
+    const found = new Map();
+    let inDependencyBlock = false;
     for (const line of String(body || "").split(/\r?\n/)) {
-        if (!/^\s*(?:[-*]\s*)?(?:depends on|blocked by)\s*:/i.test(line)) continue;
-        for (const number of issueReferences(line)) found.add(number);
+        const heading = /^\s*(?:[-*]\s*)?(?:depends on|blocked by)\s*:/i.test(line);
+        if (heading) inDependencyBlock = true;
+        else if (!line.trim() || /^#{1,6}\s/.test(line) || !/^\s*[-*]\s+/.test(line)) inDependencyBlock = false;
+        if (!heading && !inDependencyBlock) continue;
+        for (const match of line.matchAll(
+            /(?:https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/|([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#|#)([1-9][0-9]*)\b/gi,
+        )) {
+            const repository = text(match[1] || match[2] || currentRepository, 300).toLowerCase();
+            const number = Number(match[3]);
+            found.set(`${repository}#${number}`, { repository, number });
+        }
     }
-    return [...found];
+    return [...found.values()];
 }
 
 function parseArtifacts(comments) {
@@ -173,11 +183,12 @@ function ownerFor(issue, members) {
         : { id: "", name: "Unknown", source: "unknown" };
 }
 
-function phaseFor({ issue, artifacts, pullRequests, workflowRuns, blockers }) {
+function phaseFor({ issue, artifacts, pullRequests, workflowRuns, blockers, ignoreBlockers = false }) {
     if (String(issue?.state).toUpperCase() === "CLOSED" || pullRequests.some((pullRequest) => pullRequest.state === "merged")) {
         return "completed";
     }
-    if (blockers.length > 0 || labelsOf(issue).some((label) => /^(blocked|status:blocked)$/i.test(label))) {
+    if ((!ignoreBlockers && blockers.length > 0) ||
+        labelsOf(issue).some((label) => /^(blocked|status:blocked)$/i.test(label))) {
         return "blocked";
     }
     const latestRuns = [...workflowRuns]
@@ -288,6 +299,8 @@ export function buildActivitySnapshot({
         issueNumbers: linkedRunNumbers(run),
     }));
     const goals = [];
+    const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
+    const repositoryKey = repositoryName.toLowerCase();
 
     for (const issue of issues) {
         const artifacts = parseArtifacts(issue?.comments);
@@ -300,20 +313,35 @@ export function buildActivitySnapshot({
             .filter((run) => run.issueNumbers.includes(number) ||
                 relatedPullRequests.some((pullRequest) => pullRequest.branch && pullRequest.branch === run.value.branch))
             .map((run) => run.value);
-        const blockers = dependencyReferences(issue?.body)
-            .filter((dependency) =>
-                !issueByNumber.has(dependency) ||
-                String(issueByNumber.get(dependency)?.state).toUpperCase() !== "CLOSED")
+        const dependencies = dependencyReferences(issue?.body, repositoryKey)
             .map((dependency) => {
-                const blocker = issueByNumber.get(dependency);
+                const blocker = dependency.repository === repositoryKey
+                    ? issueByNumber.get(dependency.number)
+                    : null;
                 return {
-                    issueNumber: dependency,
+                    id: `${dependency.repository}#${dependency.number}`,
+                    repository: dependency.repository,
+                    issueNumber: dependency.number,
                     title: text(blocker?.title || "Status unknown", 240),
-                    url: text(blocker?.url || `${repository?.url || ""}/issues/${dependency}`, 500),
+                    url: text(
+                        blocker?.url ||
+                        `https://github.com/${dependency.repository}/issues/${dependency.number}`,
+                        500,
+                    ),
                     status: blocker ? text(blocker.state || "unknown", 40).toLowerCase() : "unknown",
+                    phase: blocker && String(blocker.state).toUpperCase() === "CLOSED" ? "completed" : "unknown",
                 };
             });
+        const blockers = dependencies.filter((dependency) => dependency.phase !== "completed");
         const owner = ownerFor(issue, members);
+        const phaseWithoutBlockers = phaseFor({
+            issue,
+            artifacts,
+            pullRequests: relatedPullRequests,
+            workflowRuns: relatedRuns,
+            blockers: [],
+            ignoreBlockers: true,
+        });
         const phase = phaseFor({
             issue,
             artifacts,
@@ -322,7 +350,7 @@ export function buildActivitySnapshot({
             blockers,
         });
         goals.push({
-            id: `${text(repository?.nameWithOwner || repository?.name || "repository", 300)}#${number}`,
+            id: `${repositoryName}#${number}`,
             repository: {
                 name: text(repository?.name || String(repository?.nameWithOwner || "").split("/").at(-1), 160),
                 nameWithOwner: text(repository?.nameWithOwner, 300),
@@ -340,6 +368,7 @@ export function buildActivitySnapshot({
                 labels: labelsOf(issue),
             },
             phase,
+            phaseWithoutBlockers,
             owner,
             artifacts,
             workItems: relatedPullRequests.map((pullRequest) => ({
@@ -351,6 +380,7 @@ export function buildActivitySnapshot({
             })),
             pullRequests: relatedPullRequests,
             workflowRuns: relatedRuns,
+            dependencies,
             blockers,
             nextAction: nextActionFor(phase, relatedPullRequests, relatedRuns, artifacts),
             evidence: evidenceFor(issue, relatedPullRequests, relatedRuns, artifacts, owner),
@@ -387,6 +417,71 @@ export function buildActivitySnapshot({
         goals,
         errors: (Array.isArray(errors) ? errors : []).map((error) => ({
             source: text(error?.source || "GitHub", 80),
+            message: text(error?.message || error, 800),
+        })),
+    };
+}
+
+export function aggregateActivitySnapshots({
+    snapshots = [],
+    currentRepository = "",
+    repositories = [],
+    viewer = "",
+    errors = [],
+    fetchedAt = new Date().toISOString(),
+} = {}) {
+    const goals = snapshots.flatMap((snapshot) => Array.isArray(snapshot?.goals) ? snapshot.goals : []);
+    const goalsById = new Map(goals.map((goal) => [String(goal.id).toLowerCase(), goal]));
+
+    for (const goal of goals) {
+        goal.dependencies = (goal.dependencies || []).map((dependency) => {
+            const target = goalsById.get(String(dependency.id).toLowerCase());
+            return target
+                ? {
+                    ...dependency,
+                    title: target.issue.title,
+                    url: target.issue.url,
+                    status: target.issue.state,
+                    phase: target.phase,
+                }
+                : dependency;
+        });
+        goal.blockers = goal.dependencies.filter((dependency) => dependency.phase !== "completed");
+        goal.phase = goal.blockers.length ? "blocked" : goal.phaseWithoutBlockers || goal.phase;
+        goal.nextAction = nextActionFor(goal.phase, goal.pullRequests, goal.workflowRuns, goal.artifacts);
+    }
+
+    goals.sort((left, right) => {
+        const leftActive = ACTIVE_STATES.has(left.phase) ? 1 : 0;
+        const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
+        return rightActive - leftActive || String(right.updatedAt).localeCompare(String(left.updatedAt));
+    });
+    const count = (phase) => goals.filter((goal) => phase.includes(goal.phase)).length;
+    const snapshotErrors = snapshots.flatMap((snapshot) =>
+        (snapshot?.errors || []).map((error) => ({
+            ...error,
+            repository: snapshot?.repository?.nameWithOwner || "",
+        })));
+    return {
+        schemaVersion: 2,
+        scope: "user",
+        fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
+        currentRepository: text(currentRepository, 300),
+        viewer: text(viewer, 120),
+        repositories,
+        summary: {
+            active: goals.filter((goal) => ACTIVE_STATES.has(goal.phase)).length,
+            blocked: count(["blocked"]),
+            failed: count(["failed"]),
+            awaitingReview: count(["reviewing"]),
+            implementing: count(["implementing"]),
+            researching: count(["researching"]),
+            completed: count(["completed"]),
+        },
+        goals,
+        errors: [...snapshotErrors, ...errors].map((error) => ({
+            source: text(error?.source || "GitHub", 80),
+            repository: text(error?.repository || "", 300),
             message: text(error?.message || error, 800),
         })),
     };
