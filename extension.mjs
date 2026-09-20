@@ -10,6 +10,8 @@ import {
     createCanvas,
     joinSession,
 } from "@github/copilot-sdk/extension";
+import { activityModel } from "./activity-model.mjs";
+import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 import { renderHtml } from "./renderer.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -168,7 +170,7 @@ async function readPersistedState(statePath) {
     if (!(await exists(statePath))) return null;
     try {
         const parsed = JSON.parse(await fs.readFile(statePath, "utf8"));
-        return parsed && parsed.version === 1 ? parsed : null;
+        return parsed && [1, 2].includes(parsed.version) ? parsed : null;
     } catch {
         return null;
     }
@@ -201,6 +203,10 @@ async function loadState(workingDirectory) {
 
     const actualMembers = await parseTeam(repoRoot);
     const initialized = actualMembers.length > 0;
+    const workflowsInstalled = await Promise.all([
+        exists(path.join(repoRoot, ".github", "workflows", "squad.md")),
+        exists(path.join(repoRoot, ".github", "workflows", "squad.lock.yml")),
+    ]).then((values) => values.some(Boolean));
     let members = initialized ? actualMembers : normalizeMembers(persisted?.members);
 
     if (initialized && persisted?.members?.length) {
@@ -221,7 +227,7 @@ async function loadState(workingDirectory) {
     return {
         statePath,
         state: {
-            version: 1,
+            version: 2,
             mode: initialized ? "active" : "setup",
             workingDirectory,
             repoRoot,
@@ -237,6 +243,19 @@ async function loadState(workingDirectory) {
                 automation: persisted?.onboarding?.automation || null,
                 cast: persisted?.onboarding?.cast || null,
                 syncError: "",
+            },
+            squad: {
+                installed: initialized || workflowsInstalled,
+                rosterAvailable: initialized,
+                memberCount: members.length,
+            },
+            activity: persisted?.activity || {
+                schemaVersion: activityModel.schemaVersion,
+                fetchedAt: null,
+                repository: {},
+                summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+                goals: [],
+                errors: [],
             },
         },
     };
@@ -508,12 +527,43 @@ async function inspectAutomationPullRequest(repoRoot) {
 }
 
 async function refreshRemoteState(entry, { force = false } = {}) {
-    if (!entry.state.repoRoot || entry.state.mode !== "setup") return;
+    if (!entry.state.repoRoot) return;
     if (!force && Date.now() - (entry.lastRemoteCheckAt || 0) < 10000) return;
     if (entry.remoteCheckPromise) return entry.remoteCheckPromise;
 
     entry.lastRemoteCheckAt = Date.now();
     entry.remoteCheckPromise = (async () => {
+        const adapter = new GitHubSquadActivityAdapter({
+            runJson: runGhJson,
+            cwd: entry.state.repoRoot,
+        });
+        let activity;
+        try {
+            activity = await adapter.discover({
+                members: entry.state.members,
+                previous: entry.state.activity,
+            });
+            await updateState(entry, (state) => {
+                state.activity = activity;
+            });
+        } catch (error) {
+            const message = cleanText(error?.message || error, 1200);
+            await updateState(entry, (state) => {
+                state.activity ||= {
+                    schemaVersion: activityModel.schemaVersion,
+                    summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+                    goals: [],
+                    errors: [],
+                };
+                state.activity.errors = [{ source: "GitHub", message }];
+                state.activity.stale = true;
+            });
+        }
+
+        if (entry.state.mode !== "setup") {
+            entry.remoteCheckPromise = null;
+            return;
+        }
         try {
             const automation = await inspectAutomationPullRequest(entry.state.repoRoot);
             const previous = JSON.stringify(entry.state.onboarding?.automation || null);
@@ -908,7 +958,7 @@ async function refreshEntry(entry) {
 const canvas = createCanvas({
     id: "squadcaster",
     displayName: "Squadcaster",
-    description: "Analyze a repository, shape its Squad cast, and guide the team through reviewed onboarding pull requests.",
+    description: "Observe Squad goals, issues, pull requests, workflow runs, checks, blockers, and evidence.",
     inputSchema: {
         type: "object",
         properties: {
@@ -922,7 +972,7 @@ const canvas = createCanvas({
     actions: [
         {
             name: "get_state",
-            description: "Return the current repository, team, mission, and pull-request state.",
+            description: "Return the current repository, Squad, and normalized GitHub activity state.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
                 if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
@@ -932,7 +982,7 @@ const canvas = createCanvas({
         },
         {
             name: "refresh",
-            description: "Reload Squad configuration from the current repository.",
+            description: "Reload Squad configuration and GitHub activity from the current repository.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
                 if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
@@ -946,7 +996,9 @@ const canvas = createCanvas({
         if (!entry) entry = await startServer(ctx);
         return {
             title: entry.state.repoName ? `Squadcaster · ${entry.state.repoName}` : "Squadcaster",
-            status: entry.state.mode === "active" ? "Active" : "Setup",
+            status: entry.state.activity?.summary?.active
+                ? `${entry.state.activity.summary.active} active`
+                : "Watching",
             url: entry.url,
         };
     },

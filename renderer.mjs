@@ -520,6 +520,136 @@ export function renderHtml() {
     .empty h1 { margin: 0 auto; }
     .empty p { max-width: 620px; margin: 14px auto 0; color: var(--muted); }
     .error-text { color: var(--danger); }
+    .ops-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .refresh-status { color: var(--muted); font-size: var(--text-body-small, 12px); white-space: nowrap; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .metric {
+      padding: 15px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: var(--surface);
+    }
+    .metric strong { display: block; font-size: 26px; line-height: 1.1; }
+    .metric span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .metric.danger { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+    .metric.warning { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 25px 0 14px;
+    }
+    .filter {
+      min-height: 34px;
+      padding: 0 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .filter.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+    .goal-list { display: grid; gap: 12px; }
+    .goal-card {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      background: var(--surface);
+    }
+    .goal-card.blocked, .goal-card.failed { border-color: var(--danger); }
+    .goal-main { padding: 17px 18px; }
+    .goal-topline {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .goal-title { min-width: 0; }
+    .goal-title a { color: var(--text); text-decoration: none; }
+    .goal-title a:hover { color: var(--focus); text-decoration: underline; }
+    .goal-title p { margin: 5px 0 0; color: var(--muted); font-size: var(--text-body-small, 12px); }
+    .phase {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--soft);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+    .phase.blocked, .phase.failed { border-color: var(--danger); color: var(--danger); }
+    .phase.completed { border-color: var(--success); color: var(--success); }
+    .phase.reviewing { border-color: var(--warning); color: var(--warning); }
+    .goal-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px 18px;
+      margin-top: 13px;
+      color: var(--muted);
+      font-size: var(--text-body-small, 12px);
+    }
+    .next-step { margin: 13px 0 0; padding-top: 12px; border-top: 1px solid var(--border); }
+    .next-step strong { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    .next-step span { margin-left: 7px; color: var(--muted); }
+    .blockers { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 8%, var(--bg)); }
+    .blockers strong { color: var(--danger); }
+    .blockers a { color: var(--focus); }
+    .goal-details { border-top: 1px solid var(--border); }
+    .goal-details > summary { padding: 11px 18px; color: var(--focus); cursor: pointer; font-weight: 600; }
+    .goal-details-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .65fr); gap: 22px; padding: 4px 18px 18px; }
+    .timeline { margin: 0; padding: 0; list-style: none; }
+    .timeline li { position: relative; padding: 0 0 14px 20px; border-left: 1px solid var(--border); }
+    .timeline li:last-child { padding-bottom: 0; }
+    .timeline li::before {
+      content: "";
+      position: absolute;
+      top: 5px;
+      left: -4px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .timeline a { color: var(--focus); font-weight: 600; }
+    .timeline small { display: block; margin-top: 2px; color: var(--muted); }
+    .artifact-list { display: grid; gap: 7px; }
+    .artifact {
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: var(--text-body-small, 12px);
+    }
+    .artifact a { color: var(--focus); }
+    .sync-warning {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border: 1px solid var(--warning);
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--warning) 8%, var(--bg));
+    }
+    .sync-warning p { margin: 4px 0 0; color: var(--muted); }
+    .secondary {
+      margin-top: 30px;
+      padding: 17px 18px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: var(--soft);
+    }
+    .secondary summary { cursor: pointer; font-weight: 600; }
+    .secondary-content { margin-top: 14px; color: var(--muted); }
+    .roster { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .roster span { padding: 5px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); }
     @media (max-width: 800px) {
       .topbar { align-items: flex-start; flex-direction: column; }
       main { width: min(100% - 24px, 680px); padding-top: 26px; }
@@ -538,6 +668,10 @@ export function renderHtml() {
       .panel.sticky { position: static; }
       .task { grid-template-columns: 1fr; }
       .next-action { grid-template-columns: 1fr; }
+      .ops-heading { display: block; }
+      .refresh-status { margin-top: 8px; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .goal-details-body { grid-template-columns: 1fr; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
@@ -559,6 +693,7 @@ export function renderHtml() {
     let confirmCast = false;
     let confirmMission = false;
     let confirmCharters = false;
+    let phaseFilter = "active";
 
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
@@ -660,8 +795,8 @@ export function renderHtml() {
         repoHeader.innerHTML = '<span class="mode">No project</span>';
         return;
       }
-      const progress = onboardingSnapshot();
-      const mode = state.mode === "active" ? "Squad active" : \`Onboarding · \${progress.current} of \${progress.steps.length}\`;
+      const active = state.activity?.summary?.active || 0;
+      const mode = active ? \`\${active} active goal\${active === 1 ? "" : "s"}\` : "Operations";
       repoHeader.innerHTML = \`<strong>\${esc(state.repoName)}</strong><span class="mode">\${mode}</span>\`;
     }
 
@@ -955,34 +1090,144 @@ export function renderHtml() {
         </section>\`;
     }
 
+    function formatTime(value) {
+      if (!value) return "time unknown";
+      const date = new Date(value);
+      if (Number.isNaN(date.valueOf())) return "time unknown";
+      const seconds = Math.max(0, Math.round((Date.now() - date.valueOf()) / 1000));
+      if (seconds < 60) return "just now";
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return \`\${minutes}m ago\`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 48) return \`\${hours}h ago\`;
+      return \`\${Math.floor(hours / 24)}d ago\`;
+    }
+
+    function metricHtml(value, label, tone = "") {
+      return \`<div class="metric \${tone}"><strong>\${esc(value)}</strong><span>\${esc(label)}</span></div>\`;
+    }
+
+    function goalMatchesFilter(goal) {
+      if (phaseFilter === "all") return true;
+      if (phaseFilter === "active") return goal.phase !== "completed";
+      return goal.phase === phaseFilter;
+    }
+
+    function timelineHtml(goal) {
+      if (!goal.evidence?.length) return '<p class="help">No correlated evidence is available yet.</p>';
+      return \`
+        <ol class="timeline">
+          \${goal.evidence.map(item => \`
+            <li>
+              <a href="\${esc(item.url || goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
+              <small>\${esc(item.kind)} · \${esc(formatTime(item.timestamp))} · \${esc(item.confidence || "observed")}</small>
+            </li>\`).join("")}
+        </ol>\`;
+    }
+
+    function relatedArtifactsHtml(goal) {
+      const links = [
+        ...goal.pullRequests.map(item => ({
+          title: \`PR #\${item.number} · \${item.state}\`,
+          url: item.url
+        })),
+        ...goal.workflowRuns.map(item => ({
+          title: \`\${item.workflow} · \${item.conclusion || item.status}\`,
+          url: item.url
+        }))
+      ];
+      if (!links.length) return '<p class="help">No pull request or workflow run has been correlated yet.</p>';
+      return \`<div class="artifact-list">\${links.map(item => \`
+        <div class="artifact"><a href="\${esc(item.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a></div>
+      \`).join("")}</div>\`;
+    }
+
+    function goalCardHtml(goal) {
+      return \`
+        <article class="goal-card \${esc(goal.phase)}">
+          <div class="goal-main">
+            <div class="goal-topline">
+              <div class="goal-title">
+                <h2><a href="\${esc(goal.issue.url)}" target="_blank" rel="noreferrer">#\${esc(goal.issue.number)} · \${esc(goal.issue.title)}</a></h2>
+                <p>\${esc(goal.repository.nameWithOwner || state.repoName)}</p>
+              </div>
+              <span class="phase \${esc(goal.phase)}">\${esc(goal.phase)}</span>
+            </div>
+            <div class="goal-meta">
+              <span><strong>Owner:</strong> \${esc(goal.owner?.name || "Unknown")}</span>
+              <span><strong>Updated:</strong> \${esc(formatTime(goal.updatedAt))}</span>
+              <span><strong>PRs:</strong> \${esc(goal.pullRequests.length)}</span>
+              <span><strong>Runs:</strong> \${esc(goal.workflowRuns.length)}</span>
+            </div>
+            \${goal.blockers?.length ? \`
+              <div class="blockers"><strong>Blocked by:</strong> \${goal.blockers.map(blocker =>
+                '<a href="' + esc(blocker.url) + '" target="_blank" rel="noreferrer">#' + esc(blocker.issueNumber) + " " + esc(blocker.title) + "</a>"
+              ).join(", ")}</div>\` : ""}
+            <p class="next-step"><strong>Next</strong><span>\${esc(goal.nextAction || "Unknown — inspect the linked issue.")}</span></p>
+          </div>
+          <details class="goal-details">
+            <summary>Evidence timeline and related activity</summary>
+            <div class="goal-details-body">
+              <section><h3>Timeline</h3><div style="margin-top:12px">\${timelineHtml(goal)}</div></section>
+              <section><h3>Related activity</h3><div style="margin-top:12px">\${relatedArtifactsHtml(goal)}</div></section>
+            </div>
+          </details>
+        </article>\`;
+    }
+
+    function squadContextHtml() {
+      const installed = Boolean(state.squad?.installed);
+      return \`
+        <details class="secondary">
+          <summary>Squad configuration · \${installed ? "Installed" : "Not detected"}</summary>
+          <div class="secondary-content">
+            \${installed
+              ? \`<p>Squad workflows and repository-owned configuration are operational context. This canvas does not modify them.</p>
+                  <div class="roster">\${state.members.length
+                    ? state.members.map(member => '<span>' + esc(member.name) + " · " + esc(member.role) + "</span>").join("")
+                    : "<span>Roster unavailable</span>"}</div>\`
+              : \`<p>No local Squad workflow or roster was detected. Install the current Squad workflows, then refresh this canvas.</p>
+                  <p><a href="https://github.com/bradygaster/squad" target="_blank" rel="noreferrer">Open Squad installation guidance ↗</a></p>\`}
+          </div>
+        </details>\`;
+    }
+
     function activeHtml() {
-      const dirtyCount = state.members.filter(member => member.dirty).length;
+      const activity = state.activity || {};
+      const summary = activity.summary || {};
+      const goals = (activity.goals || []).filter(goalMatchesFilter);
+      const filters = ["active", "blocked", "failed", "reviewing", "completed", "all"];
       return \`
         <section>
-          <h1>Your Squad is ready.</h1>
-          <p class="lede">The repository owns the team and charters. Give it a real mission; Squad proposes the work breakdown and likely owners before anything changes.</p>
-          \${operationHtml()}
-          \${prHtml()}
-          <div class="layout">
-            <section>
-              <div class="section-heading"><div><h2>Team</h2><p>\${state.members.length} authorized members</p></div></div>
-              \${memberListHtml()}
-              \${dirtyCount ? \`
-                <div class="dirty">\${dirtyCount} charter change\${dirtyCount === 1 ? "" : "s"} waiting to be applied.</div>
-                <div class="actions" style="margin-top:12px"><button class="button" data-action="confirm-charters" type="button">Create charter PR</button></div>
-                \${confirmCharters ? \`
-                  <div class="confirmation">
-                    <p>Create a focused pull request containing only these charter changes?</p>
-                    <div class="actions">
-                      <button class="button" data-action="cancel-confirm" type="button">Cancel</button>
-                      <button class="button primary" data-action="create-charter-pr" type="button">Create pull request</button>
-                    </div>
-                  </div>\` : ""}
-              \` : ""}
-            </section>
-            \${memberEditorHtml()}
+          <div class="ops-heading">
+            <div>
+              <h1>Squad operations</h1>
+              <p class="lede">Live, read-only visibility into goals, implementation, review, blockers, and failures from GitHub evidence.</p>
+            </div>
+            <div class="refresh-status">\${activity.stale ? "Showing last known state" : "Last synced"} · \${esc(formatTime(activity.fetchedAt))}</div>
           </div>
-          \${missionHtml()}
+          <div class="metrics">
+            \${metricHtml(summary.active || 0, "Active goals")}
+            \${metricHtml(summary.blocked || 0, "Blocked", summary.blocked ? "danger" : "")}
+            \${metricHtml(summary.failed || 0, "Failed", summary.failed ? "danger" : "")}
+            \${metricHtml(summary.awaitingReview || 0, "Awaiting review", summary.awaitingReview ? "warning" : "")}
+            \${metricHtml(summary.completed || 0, "Completed")}
+          </div>
+          \${activity.errors?.length ? \`
+            <div class="sync-warning"><strong>Some GitHub data could not be refreshed.</strong>
+              \${activity.errors.map(error => '<p>' + esc(error.source) + ": " + esc(error.message) + "</p>").join("")}
+            </div>\` : ""}
+          <div class="filters" aria-label="Filter goals">
+            \${filters.map(filter => \`<button class="filter \${phaseFilter === filter ? "selected" : ""}" data-action="phase-filter" data-phase="\${filter}" type="button">\${esc(filter)}</button>\`).join("")}
+          </div>
+          <div class="goal-list">
+            \${goals.length ? goals.map(goalCardHtml).join("") : \`
+              <section class="empty">
+                <h2>No \${esc(phaseFilter === "all" ? "" : phaseFilter)} goals found.</h2>
+                <p>Squadcaster recognizes issues carrying <code>squad</code> or <code>squad:*</code> labels, Squad commands, or structured Squad artifacts.</p>
+              </section>\`}
+          </div>
+          \${squadContextHtml()}
         </section>\`;
     }
 
@@ -1001,7 +1246,7 @@ export function renderHtml() {
         return;
       }
       if (!selectedMemberId && state.members.length) selectedMemberId = state.members[0].id;
-      app.innerHTML = state.mode === "setup" ? setupHtml() : activeHtml();
+      app.innerHTML = activeHtml();
     }
 
     async function refresh() {
@@ -1017,6 +1262,9 @@ export function renderHtml() {
       try {
         if (action === "select-member") {
           selectedMemberId = target.dataset.id;
+          render();
+        } else if (action === "phase-filter") {
+          phaseFilter = target.dataset.phase || "active";
           render();
         } else if (action === "analyze" || action === "reanalyze") {
           confirmSetup = false;
