@@ -412,6 +412,8 @@ export function buildActivitySnapshot({
             blocked: count(["blocked"]),
             failed: count(["failed"]),
             awaitingReview: count(["reviewing"]),
+            implementing: count(["implementing"]),
+            researching: count(["researching"]),
             completed: count(["completed"]),
         },
         goals,

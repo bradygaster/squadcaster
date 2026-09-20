@@ -1479,11 +1479,12 @@ export function renderHtml() {
     document.addEventListener("input", event => {
       if (event.target.dataset.action !== "goal-search") return;
       goalSearch = event.target.value;
+      const cursor = event.target.selectionStart;
       render();
       const input = document.querySelector('[data-action="goal-search"]');
       if (input) {
         input.focus();
-        input.setSelectionRange(goalSearch.length, goalSearch.length);
+        input.setSelectionRange(cursor, cursor);
       }
     });
 

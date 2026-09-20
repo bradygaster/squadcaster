@@ -183,7 +183,6 @@ async function readPersistedState(statePath) {
     } catch {
         return null;
     }
-
 }
 
 async function readRegistry(filePath) {

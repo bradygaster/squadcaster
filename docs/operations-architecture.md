@@ -49,7 +49,7 @@ user across owner, collaborator, and organization-member affiliations. It
 maintains a user-level registry and combines repository snapshots using
 `repository.nameWithOwner` plus the immutable issue number as the goal key.
 
-The repository used to open the canvas is refreshed every 15 seconds. Other
+The repository used to open the canvas is refreshed every 10 seconds. Other
 repositories with active work refresh every minute, and inactive repositories
 refresh every ten minutes. Repository discovery runs every fifteen minutes.
 Actions are queried for the current repository and repositories already known

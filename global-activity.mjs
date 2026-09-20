@@ -239,8 +239,12 @@ export class GitHubGlobalActivity {
         }
 
         const now = Date.now();
-        const lowRateLimit = Number(this.registry.rateLimit?.remaining) < 100 &&
-            Date.parse(this.registry.rateLimit?.resetAt || 0) > now;
+        const remaining = Number(this.registry.rateLimit?.remaining);
+        const resetAt = this.registry.rateLimit?.resetAt
+            ? Date.parse(this.registry.rateLimit.resetAt)
+            : Number.NaN;
+        const lowRateLimit = Number.isFinite(remaining) && remaining < 100 &&
+            (!Number.isFinite(resetAt) || resetAt > now);
         const candidates = this.registry.repositories.filter((repository) => {
             if (!repository.included) return false;
             if (lowRateLimit && repository.nameWithOwner.toLowerCase() !== currentKey) return false;
