@@ -861,6 +861,10 @@ async function handleRequest(entry, req, res) {
         sendJson(res, 200, entry.state);
         return;
     }
+    if (req.method === "POST") {
+        sendJson(res, 404, { error: "Not found." });
+        return;
+    }
     if (req.method !== "GET") {
         sendJson(res, 405, { error: "Squadcaster is read-only." });
         return;

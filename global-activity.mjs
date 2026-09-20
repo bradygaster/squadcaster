@@ -103,6 +103,7 @@ async function mapConcurrent(items, limit, mapper) {
     let cursor = 0;
     async function worker() {
         while (cursor < items.length) {
+            // JavaScript runs this increment synchronously before the mapper yields.
             const index = cursor++;
             results[index] = await mapper(items[index], index);
         }

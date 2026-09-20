@@ -1209,7 +1209,7 @@ export function renderHtml() {
 
     function goalCardHtml(goal) {
       return \`
-        <article class="goal-card \${esc(goal.phase)} \${String(goal.repository.nameWithOwner).toLowerCase() === String(state.activity?.currentRepository).toLowerCase() ? "current-repository" : ""}">
+        <article class="goal-card \${esc(goal.phase)} \${String(goal.repository.nameWithOwner).toLowerCase() === String(state.activity?.currentRepository || "").toLowerCase() ? "current-repository" : ""}">
           <div class="goal-main">
             <div class="goal-topline">
               <div class="goal-title">
@@ -1299,7 +1299,7 @@ export function renderHtml() {
                 <label class="manage-repository">
                   <input data-action="repository-included" data-repository="\${esc(repository.nameWithOwner)}" type="checkbox" \${repository.included ? "checked" : ""}>
                   <span><strong>\${esc(repository.nameWithOwner)}</strong><br><small>\${esc(repository.error || "Last refreshed " + formatTime(repository.lastSuccessfulRefresh))}</small></span>
-                  <small>\${repository.nameWithOwner.toLowerCase() === String(state.activity?.currentRepository).toLowerCase() ? "Current" : repository.permission || ""}</small>
+                  <small>\${repository.nameWithOwner.toLowerCase() === String(state.activity?.currentRepository || "").toLowerCase() ? "Current" : repository.permission || ""}</small>
                 </label>\`).join("")}
             </div>
           </div>
