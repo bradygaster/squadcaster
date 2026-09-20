@@ -196,7 +196,9 @@ async function readRegistry(filePath) {
 }
 
 function withRegistryLock(operation) {
-    const queued = registryQueue.then(operation, () => operation());
+    const queued = registryQueue
+        .catch(() => undefined)
+        .then(() => operation());
     registryQueue = queued.catch(() => {});
     return queued;
 }
@@ -299,10 +301,10 @@ async function persist(entry) {
     await fs.rename(temporary, entry.statePath);
 }
 
-async function persistRegistry(entry) {
-    const temporary = `${entry.registryPath}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(entry.registry, null, 2)}\n`, "utf8");
-    await fs.rename(temporary, entry.registryPath);
+async function persistRegistry(registryPath, registry) {
+    const temporary = `${registryPath}.tmp`;
+    await fs.writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+    await fs.rename(temporary, registryPath);
 }
 
 function broadcast(entry) {
@@ -600,7 +602,7 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                     forceAll: entry.forceAllRefresh,
                 });
                 shareRegistry(global.registry);
-                await persistRegistry(entry);
+                await persistRegistry(entry.registryPath, global.registry);
                 return aggregated;
             });
             entry.forceAllRefresh = false;
@@ -840,7 +842,7 @@ async function handleRequest(entry, req, res) {
             });
             if (!global.setIncluded(cleanText(body.nameWithOwner, 300), body.included)) return false;
             shareRegistry(global.registry);
-            await persistRegistry(entry);
+            await persistRegistry(entry.registryPath, global.registry);
             return true;
         });
         if (!changed) {

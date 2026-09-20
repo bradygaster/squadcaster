@@ -131,7 +131,9 @@ export class GitHubGlobalActivity {
     }
 
     async discoverRepositories({ force = false } = {}) {
-        const discoveredAt = Date.parse(this.registry.discoveredAt || 0);
+        const discoveredAt = this.registry.discoveredAt
+            ? Date.parse(this.registry.discoveredAt)
+            : Number.NaN;
         if (!force && Number.isFinite(discoveredAt) && Date.now() - discoveredAt < DISCOVERY_TTL) {
             return this.registry;
         }

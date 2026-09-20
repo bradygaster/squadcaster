@@ -736,6 +736,7 @@ export function renderHtml() {
     let goalSearch = "";
     let activeRepositoriesOnly = false;
     let showRepositoryManager = false;
+    let refreshingAll = false;
 
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
@@ -1279,7 +1280,7 @@ export function renderHtml() {
           </label>
           <div class="scope-actions">
             <button class="button" data-action="manage-repositories" type="button">Manage</button>
-            <button class="button" data-action="refresh-all" type="button">Refresh all</button>
+            <button class="button" data-action="refresh-all" type="button" \${refreshingAll ? "disabled" : ""}>\${refreshingAll ? "Refreshing…" : "Refresh all"}</button>
           </div>
         </section>
         <label class="toggle"><input data-action="active-repositories" type="checkbox" \${activeRepositoriesOnly ? "checked" : ""}> Only repositories with active work</label>
@@ -1386,16 +1387,13 @@ export function renderHtml() {
           showRepositoryManager = !showRepositoryManager;
           render();
         } else if (action === "refresh-all") {
-          target.disabled = true;
-          target.textContent = "Refreshing…";
+          refreshingAll = true;
+          render();
           try {
             await post("/api/refresh");
           } finally {
-            const button = document.querySelector('[data-action="refresh-all"]');
-            if (button) {
-              button.disabled = false;
-              button.textContent = "Refresh all";
-            }
+            refreshingAll = false;
+            render();
           }
         } else if (action === "analyze" || action === "reanalyze") {
           confirmSetup = false;
