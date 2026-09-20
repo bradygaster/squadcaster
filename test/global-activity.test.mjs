@@ -60,23 +60,49 @@ test("preserves an explicit blocked label without dependency references", () => 
         }],
     });
 
-    test("terminal goal states take precedence over unresolved dependencies", () => {
-        const completed = buildActivitySnapshot({
-            repository: repository("octodemo/frontend"),
-            issues: [issue(
-                "octodemo/frontend",
-                57,
-                "Depends on: octodemo/missing#1",
-                "CLOSED",
-            )],
-        });
-        const aggregate = aggregateActivitySnapshots({ snapshots: [completed] });
-        assert.equal(aggregate.goals[0].phase, "completed");
-        assert.equal(aggregate.summary.completed, 1);
-        assert.equal(aggregate.summary.blocked, 0);
-    });
     const aggregate = aggregateActivitySnapshots({ snapshots: [snapshot] });
     assert.equal(aggregate.goals[0].phase, "blocked");
+});
+
+test("terminal goal states take precedence over unresolved dependencies", () => {
+    const completed = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue(
+            "octodemo/frontend",
+            57,
+            "Depends on: octodemo/missing#1",
+            "CLOSED",
+        )],
+    });
+    const aggregate = aggregateActivitySnapshots({ snapshots: [completed] });
+    assert.equal(aggregate.goals[0].phase, "completed");
+    assert.equal(aggregate.summary.completed, 1);
+    assert.equal(aggregate.summary.blocked, 0);
+});
+
+test("aggregation does not mutate cached repository snapshots", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57, "Depends on: octodemo/backend#41")],
+    });
+    const original = structuredClone(snapshot);
+    aggregateActivitySnapshots({ snapshots: [snapshot] });
+    assert.deepEqual(snapshot, original);
+});
+
+test("dependency resolution does not depend on snapshot order", () => {
+    const dependent = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57, "Depends on: octodemo/backend#41")],
+    });
+    const dependency = buildActivitySnapshot({
+        repository: repository("octodemo/backend"),
+        issues: [issue("octodemo/backend", 41, "", "CLOSED")],
+    });
+    const forward = aggregateActivitySnapshots({ snapshots: [dependent, dependency] });
+    const reverse = aggregateActivitySnapshots({ snapshots: [dependency, dependent] });
+    assert.equal(forward.goals.find((goal) => goal.id === "octodemo/frontend#57").phase, "queued");
+    assert.equal(reverse.goals.find((goal) => goal.id === "octodemo/frontend#57").phase, "queued");
 });
 
 test("registry normalization preserves inclusion preferences and snapshots", () => {
