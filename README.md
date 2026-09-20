@@ -66,7 +66,7 @@ context.
 
 ## Discovery boundaries
 
-Squadcaster currently reads up to 100 issues, pull requests, and workflow runs
+Squadcaster currently reads up to 1,000 issues, pull requests, and workflow runs
 from the active repository. Independent GitHub sources are fetched separately,
 so a permissions or rate-limit failure in one source does not discard data from
 the others. If issue discovery fails, the canvas keeps and labels the last

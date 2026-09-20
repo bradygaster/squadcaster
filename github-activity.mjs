@@ -4,7 +4,7 @@ const SOURCES = [
     {
         name: "issues",
         args: [
-            "issue", "list", "--state", "all", "--limit", "100",
+            "issue", "list", "--state", "all", "--limit", "1000",
             "--json", "number,title,body,state,url,labels,assignees,author,createdAt,updatedAt,closedAt,comments,milestone",
         ],
     },
@@ -12,7 +12,7 @@ const SOURCES = [
         name: "pull requests",
         key: "pullRequests",
         args: [
-            "pr", "list", "--state", "all", "--limit", "100",
+            "pr", "list", "--state", "all", "--limit", "1000",
             "--json", "number,title,body,state,url,isDraft,headRefName,author,labels,createdAt,updatedAt,closedAt,mergedAt,reviewDecision,statusCheckRollup,closingIssuesReferences",
         ],
     },
@@ -20,7 +20,7 @@ const SOURCES = [
         name: "workflow runs",
         key: "workflowRuns",
         args: [
-            "run", "list", "--limit", "100",
+            "run", "list", "--limit", "1000",
             "--json", "databaseId,name,displayTitle,event,status,conclusion,workflowName,createdAt,updatedAt,url,headBranch,headSha",
         ],
     },
