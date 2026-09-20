@@ -70,6 +70,32 @@ Squadcaster deliberately does not depend on a CAO-specific protocol yet. The
 undocumented contract is assumed. The adapter boundary allows a verified CAO
 event source to be added later without changing the dashboard model.
 
+### Squad in the wizard
+
+Squad should be offered as a reusable team option wherever CAO or `gh aw`
+presents repository setup:
+
+1. **Catalog entry:** list Squad as a maintained workflow bundle with its
+   dispatcher, implementation worker, and independent reviewer shown before
+   installation.
+2. **Repository-aware recommendation:** when a repository has no Squad
+   workflows, offer Squad alongside the standard workflow choices; when it is
+   already installed, offer update or connect rather than duplicate setup.
+3. **Deployment choice:** let the user choose repository-owned agents or
+   organization-provided agent profiles while making clear that workflow source
+   and lock files remain repository-local.
+4. **Reviewable output:** have the wizard create one pull request containing
+   pinned workflow sources and compiled lock files. Never write directly to the
+   default branch or merge the pull request.
+5. **Handoff:** after installation, link directly to this operations canvas so
+   the user moves from configuration to observable goals and evidence.
+
+Until the CAO wizard exposes a verified extension or catalog contract, these
+remain integration requirements rather than a custom protocol implemented by
+Squadcaster. A future wizard adapter should emit the selected repository,
+workflow version/SHA, deployment mode, and resulting pull request URL using the
+same repository identity consumed by the activity adapter.
+
 Authoritative references consulted:
 
 - [About GitHub Agentic Workflows](https://docs.github.com/en/copilot/concepts/agents/about-github-agentic-workflows)
