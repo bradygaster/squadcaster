@@ -115,6 +115,7 @@ test("preserves normalized read-only handoff readiness across cache migration", 
             fetchedAt: "2026-09-21T12:00:00Z",
             goals: [{
                 id: "octodemo/demo#12",
+                issue: { number: 12 },
                 handoff: {
                     schemaVersion: 1,
                     readiness: {
@@ -131,7 +132,22 @@ test("preserves normalized read-only handoff readiness across cache migration", 
                         },
                         automatedHandoffAvailable: false,
                     },
-                    activation: { issue: "octodemo/demo#12" },
+                    activation: {
+                        schemaVersion: "1",
+                        artifactKind: "activated",
+                        issue: "octodemo/demo#12",
+                        issueNumber: 12,
+                        epicIssue: "octodemo/demo#11",
+                        epicIssueNumber: 11,
+                        rootIssue: "octodemo/demo#10",
+                        rootIssueNumber: 10,
+                        task: "3",
+                        epic: "2.1",
+                        agent: "Kint",
+                        epicAgents: ["kint"],
+                        rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
+                        artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
+                    },
                     acceptanceCriteria: [{ text: "Ship it", sourceUrl: "https://example.test/12" }],
                     acceptanceCriteriaComplete: true,
                     leaf: { subIssues: [], complete: true },
@@ -420,4 +436,58 @@ test("normalizes malformed persisted generated goals to an empty collection", ()
     });
 
     assert.deepEqual(normalized.activity.goals[0].bootstrap.generatedGoals, []);
+});
+
+test("downgrades cached ready handoff with malformed activation provenance", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 12 },
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: true,
+                    },
+                    activation: {},
+                    acceptanceCriteria: [{ text: "Works" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [],
+                },
+            }],
+        },
+    });
+    const handoff = normalized.activity.goals[0].handoff;
+
+    assert.equal(handoff.activation, null);
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.equal(handoff.readiness.automatedHandoffAvailable, false);
 });

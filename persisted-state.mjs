@@ -96,7 +96,51 @@ function safeUnknownHandoff(reason) {
     };
 }
 
-function normalizeHandoff(handoff) {
+function positiveInteger(value) {
+    return Number.isInteger(value) && value > 0;
+}
+
+function qualifiedIssueMatches(value, number) {
+    return new RegExp(`#${number}$`).test(String(value || ""));
+}
+
+function normalizeActivation(value, expectedIssueNumber) {
+    if (!isRecord(value)) return null;
+    const issueNumber = value.issueNumber;
+    const epicIssueNumber = value.epicIssueNumber;
+    const rootIssueNumber = value.rootIssueNumber;
+    const epicAgents = Array.isArray(value.epicAgents)
+        ? value.epicAgents.map(String).filter(Boolean)
+        : [];
+    const valid = value.schemaVersion === "1" &&
+        ["activated", "phases-activated", "plan-accepted", "phases-accepted"]
+            .includes(value.artifactKind) &&
+        positiveInteger(issueNumber) &&
+        positiveInteger(epicIssueNumber) &&
+        positiveInteger(rootIssueNumber) &&
+        issueNumber === expectedIssueNumber &&
+        issueNumber !== epicIssueNumber &&
+        issueNumber !== rootIssueNumber &&
+        epicIssueNumber !== rootIssueNumber &&
+        qualifiedIssueMatches(value.issue, issueNumber) &&
+        qualifiedIssueMatches(value.epicIssue, epicIssueNumber) &&
+        qualifiedIssueMatches(value.rootIssue, rootIssueNumber) &&
+        Boolean(String(value.task || "").trim()) &&
+        Boolean(String(value.epic || "").trim()) &&
+        Boolean(String(value.agent || "").trim()) &&
+        epicAgents.length > 0 &&
+        new Set(epicAgents.map((agent) => agent.toLowerCase())).size === epicAgents.length &&
+        Boolean(String(value.rootIssueUrl || "").trim()) &&
+        Boolean(String(value.artifactUrl || "").trim());
+    return valid
+        ? {
+            ...value,
+            epicAgents,
+        }
+        : null;
+}
+
+function normalizeHandoff(handoff, expectedIssueNumber) {
     if (!isRecord(handoff)) return null;
     if (Number(handoff.schemaVersion) !== 1) {
         return safeUnknownHandoff("Cached handoff readiness uses an unsupported schema.");
@@ -122,7 +166,7 @@ function normalizeHandoff(handoff) {
             sourceStates: isRecord(readiness.sourceStates) ? readiness.sourceStates : {},
             automatedHandoffAvailable: Boolean(readiness.automatedHandoffAvailable),
         },
-        activation: isRecord(handoff.activation) ? handoff.activation : null,
+        activation: normalizeActivation(handoff.activation, expectedIssueNumber),
         acceptanceCriteria: recordArray(handoff.acceptanceCriteria),
         acceptanceCriteriaComplete: Boolean(handoff.acceptanceCriteriaComplete),
         leaf: isRecord(handoff.leaf)
@@ -213,7 +257,7 @@ function normalizeGoal(goal) {
                 generatedGoals: recordArray(goal.bootstrap.generatedGoals),
             }
             : undefined,
-        handoff: normalizeHandoff(goal.handoff),
+        handoff: normalizeHandoff(goal.handoff, Number(goal.issue?.number)),
     };
 }
 

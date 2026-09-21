@@ -504,6 +504,36 @@ test("activation identity collisions fail the whole envelope closed", () => {
         roleCollision.get(11).errors.join(" "),
         /both a task and an epic/i,
     );
+
+    issues[0].comments = [activationComment([
+        binding({ issue: "#10", label: "" }),
+    ])];
+    const rootCollision = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+    assert.equal(rootCollision.get(10).activation, null);
+    assert.match(rootCollision.get(10).errors.join(" "), /root issue/i);
+
+    issues[0].comments = [activationComment([
+        binding(),
+        binding({
+            task: "4",
+            issue: "#13",
+            epic_agents: ["kint", "other"],
+            agent: "Other",
+        }),
+    ])];
+    const epicAgentCollision = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+    assert.equal(epicAgentCollision.get(12).activation, null);
+    assert.equal(epicAgentCollision.get(13).activation, null);
+    assert.match(
+        [...epicAgentCollision.get(12).errors, ...epicAgentCollision.get(13).errors].join(" "),
+        /conflicting identity or agents/i,
+    );
 });
 
 test("uses native and fallback sub-issue relationships to reject non-leaf tasks", () => {

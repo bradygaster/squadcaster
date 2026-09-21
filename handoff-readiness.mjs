@@ -277,6 +277,17 @@ export function parseActivationEvidence({
             const epicIssues = new Map();
             const seenTaskIssues = new Set();
             for (const binding of validatedBindings) {
+                if (
+                    binding.issueNumber === rootNumber ||
+                    binding.epicIssueNumber === rootNumber
+                ) {
+                    envelopeErrors.push({
+                        reason: `Activation root issue #${rootNumber} cannot be assigned as generated work.`,
+                        target: binding.issueNumber === rootNumber
+                            ? binding.issueNumber
+                            : binding.epicIssueNumber,
+                    });
+                }
                 if (binding.issueNumber === binding.epicIssueNumber) {
                     envelopeErrors.push({
                         reason: `Activation binding issue #${binding.issueNumber} cannot be both a task and an epic.`,
@@ -326,14 +337,21 @@ export function parseActivationEvidence({
                     });
                 }
                 taskIssues.set(binding.task, binding.issueNumber);
-                const priorEpicIssue = epicIssues.get(binding.epic);
-                if (priorEpicIssue && priorEpicIssue !== binding.epicIssueNumber) {
+                const normalizedEpicAgents = [...binding.epicAgents].sort();
+                const priorEpic = epicIssues.get(binding.epic);
+                if (priorEpic && (
+                    priorEpic.issueNumber !== binding.epicIssueNumber ||
+                    priorEpic.agents.join("\0") !== normalizedEpicAgents.join("\0")
+                )) {
                     envelopeErrors.push({
-                        reason: `Activation epic ${binding.epic} resolves to multiple issues.`,
+                        reason: `Activation epic ${binding.epic} has conflicting identity or agents.`,
                         target: binding.epicIssueNumber,
                     });
                 }
-                epicIssues.set(binding.epic, binding.epicIssueNumber);
+                epicIssues.set(binding.epic, {
+                    issueNumber: binding.epicIssueNumber,
+                    agents: normalizedEpicAgents,
+                });
             }
             if (envelopeErrors.length > 0) {
                 for (const { reason, target } of envelopeErrors) {
