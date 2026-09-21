@@ -46,6 +46,25 @@ test("includes accessible drawer, stage, and reduced-motion behavior", () => {
     assert.match(html, /Export context/);
     assert.match(html, /Open existing/);
     assert.doesNotMatch(html, /data-action="(?:launch|create|assign|dispatch|post)-/);
+    assert.match(html, /Automatic bootstrap/);
+    assert.match(html, /aria-label="Automatic bootstrap:/);
+    assert.match(html, /Derived from GitHub evidence/);
+    assert.match(html, /Observed GitHub evidence/);
+    assert.match(html, /Bootstrap status is unknown/);
+    assert.match(html, /Status is stale; reclassification is paused/);
+    assert.match(html, /data-action="bootstrap-filter"/);
+    assert.doesNotMatch(html, /data-phase="bootstrap"/);
+});
+
+test("keeps bootstrap observability read-only and fail closed", () => {
+    const html = renderHtml();
+
+    assert.match(html, /multiple or conflicting candidates prevent safe canonical selection/);
+    assert.match(html, /a unique candidate violates the canonical bootstrap contract/);
+    assert.match(html, /closed without merge/);
+    assert.match(html, /repositoryBootstrapEntries/);
+    assert.doesNotMatch(html, /(?:rerun|retry|create)[-_ ]bootstrap/i);
+    assert.doesNotMatch(html, /\/api\/bootstrap/);
 });
 
 test("bounds dense collections without changing the authoritative total", () => {
