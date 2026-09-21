@@ -120,6 +120,11 @@ See [the optional implementation handoff design](docs/optional-handoff-design.md
 for the recommended gated path from activated Squad tasks to local Copilot
 sessions, Copilot cloud agent, or `/squad implement`. The current product
 remains read-only; that document does not enable mutation.
+The
+[automatic-bootstrap observability decision](docs/automatic-bootstrap-observability.md)
+defines the fail-closed state model for Squad's deterministic Cast pull request,
+research-proposals issue, workflow attempts, and downstream research-to-
+activation journey.
 
 ## Development
 
