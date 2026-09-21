@@ -813,7 +813,7 @@ export function buildActivitySnapshot({
         source: text(error?.source || "GitHub", 80),
         message: text(error?.message || error, 800),
     }));
-    const staleSources = ["issues", "pullRequests", "workflowRuns"]
+    const staleSources = ["issues", "pullRequests", "workflowRuns", "workflowJobs"]
         .map((source) => [source, normalizedSources[source]])
         .filter(([, state]) => state.status === "stale")
         .map(([source]) => source);
