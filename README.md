@@ -10,14 +10,25 @@ the team. Squadcaster observes the GitHub-native evidence they produce; it does
 not start work, edit Squad configuration, merge pull requests, or bypass branch
 protection.
 
+## Read-only boundary
+
+Squadcaster never creates or edits GitHub issues, posts Squad commands, installs
+or changes workflows, creates branches or pull requests, edits `.squad`
+configuration or charters, plans or executes missions, changes task ownership,
+or modifies repository settings.
+
+The dashboard only writes local Squadcaster preferences and cache state. Users
+can include or exclude discovered repositories, request a refresh, and change
+in-browser filters. GitHub and repository content remain read-only.
+
 ## What the canvas shows
 
-- Summary counts for active, blocked, failed, awaiting-review, and completed goals
-- A lifecycle pipeline for queued, researching, implementing, reviewing, and completed goals, with blocked and failed work separated as exception states
-- A recent-activity stream built from correlated issue, artifact, pull-request, workflow-run, and check evidence
-- Expandable lifecycle stages and a keyboard-accessible goal details drawer
+- A compact **Factory Mission Control** summary with tracked, in-progress, attention, and delivery counts
+- A **Factory floor** lifecycle for queued, researching, implementing, reviewing, and completed work
+- Active workflow runs with repository identity, goal, branch, owner, status, timestamp, and source link
+- A semantic recent-activity timeline and accessible goal-details drawer
 - One combined view of every discovered Squad repository the authenticated user can read
-- Owner, repository, current-repository, status, active-work, and text filters
+- Progressive owner, repository, current-repository, status, active-work, and text filters
 - Every discoverable issue carrying `squad`/`squad:*` labels, a Squad command, or structured Squad artifact
 - Derived lifecycle state: queued, researching, implementing, reviewing, blocked, completed, or failed
 - Squad member ownership from repository labels, with GitHub assignment fallback
@@ -28,7 +39,9 @@ protection.
 
 Every conclusion links to its source on GitHub. Relationships inferred from
 branch or run metadata are explicitly marked `inferred`; missing ownership and
-other ambiguous data remain `Unknown`.
+other ambiguous data remain `Unknown`. The canvas follows the operating
+system's light or dark color preference by default and uses semantic theme
+tokens for both schemes.
 
 ## Install
 
@@ -66,13 +79,7 @@ view is **All Squads** across every discovered repository. The canvas uses the
 authenticated GitHub CLI to refresh the current repository every 15 seconds,
 active repositories every minute, and inactive repositories every ten minutes.
 Repository discovery refreshes every fifteen minutes. The browser remains bound
-to `127.0.0.1` on an ephemeral port. The canvas follows the operating system's
-light or dark color preference by default and uses the host canvas semantic
-theme tokens when available. Background refreshes preserve the focused control,
-filter text and caret, selected stage, open disclosures and goal drawer, and
-document, pipeline, repository-list, and drawer scroll positions. Dense stage
-and evidence collections keep authoritative totals while bounding the rendered
-DOM; narrow the existing filters to inspect items outside the displayed window.
+to `127.0.0.1` on an ephemeral port.
 
 If Squad is not detected, the canvas links to the Squad installation guidance.
 Once installed, the repository-owned roster is shown as secondary operational
@@ -83,59 +90,49 @@ context. Use **Manage** to exclude repositories from refresh and totals, and
 
 Squadcaster discovers repositories through the authenticated user's owner,
 collaborator, and organization-member affiliations. A repository is included
-when it has a Squad workflow, roster, open `squad` issue/PR, or searchable
-structured Squad artifact. It reads up to 1,000 issues and pull requests per
-included repository; Actions runs are refreshed for the current repository and
-repositories with active work.
+when it has a Squad workflow, roster, open `squad`/`squad:*` issue or pull
+request, or searchable structured Squad artifact. Prefix-label and artifact
+fallbacks are scoped to each affiliated repository. Prefix discovery caches its
+last conclusive result, pages label definitions, and checks exact open-label
+existence with a one-item request while respecting the REST core budget; it does
+not use a capped global search or treat a failed probe as a negative result.
+Squadcaster reads up to 1,000 issues and pull requests per included repository;
+Actions runs are refreshed for the current repository and repositories with
+active work.
 
 Independent GitHub sources are fetched separately, so a permissions or
-rate-limit failure in one source does not discard data from the others. If issue
-discovery fails, the canvas keeps and labels the last known snapshot as stale.
-When the GraphQL rate-limit budget is low, background refresh pauses until reset
-while the current repository continues refreshing.
+rate-limit failure in one source does not discard data from the others. Failed
+sources retain their last-known evidence while successful sources continue to
+update, and the canvas labels the combined result as partial or stale. Refresh
+attempts are shown separately from the last fully successful synchronization;
+stale or partial data never advances the successful timestamp.
+When either the GraphQL or REST core rate-limit budget is low, background
+refresh pauses until the limiting budgets reset while the current repository
+continues refreshing.
 
 See [the operations architecture](docs/operations-architecture.md) for the
-normalized model, correlation rules, adapter boundary, and CAO findings.
+normalized model, correlation rules, adapter boundary, and compatibility notes.
 
 ## Development
 
-The extension has no build step. Node's built-in test runner covers the data and
-renderer contracts, and Playwright provides focused Chromium regression coverage
-for the browser-only responsive, theme, motion, keyboard, and accessibility behavior.
-
-Install the test dependency and Chromium once:
+Configure the package proxy, restore dependencies, and run the complete syntax,
+unit, and browser regression suite:
 
 ```bash
+npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
 npm install
-npx playwright install chromium
-```
-
-Run all checks:
-
-```bash
 npm run test:all
 ```
-
-The browser suite covers 320px, 375px, 768px, and desktop layouts; document and
-pipeline overflow; OS light/dark defaults; reduced motion; forced colors; stage
-expansion; filters and live-region updates; drawer focus containment, Escape close,
-and focus return; and supported UI state across server-sent rerenders.
-
-Screen-reader behavior still requires periodic manual verification with VoiceOver
-and Safari plus NVDA with Firefox or Chrome. Confirm heading and region navigation,
-stage-button announcements, concise live updates, horizontal pipeline discoverability,
-and the goal drawer's dialog announcement and complete focus cycle. Also verify 200%
-text enlargement because browser automation cannot substitute for assistive-technology
-speech output or user-specific zoom and font settings.
 
 ## How it is organized
 
 - `activity-model.mjs` — normalized goals, lifecycle derivation, and evidence correlation
 - `github-activity.mjs` — read-only GitHub/Squad discovery adapter
 - `global-activity.mjs` — user-wide registry, discovery, adaptive refresh, and aggregation
-- `extension.mjs` — canvas provider, persistence, refresh, and legacy tool compatibility
+- `extension.mjs` — canvas provider, persistence, refresh, and legacy storage migration
+- `persisted-state.mjs` — safe normalization of current and legacy persisted state
 - `renderer.mjs` — responsive operations dashboard
-- `test/` — model, degraded-source, renderer, and production-scale stress fixtures using Node's built-in test runner
+- `test/` — model and degraded-source tests using Node's built-in test runner
 - `copilot-extension.json` — extension install and share manifest
 
 ## License

@@ -90,6 +90,121 @@ test("aggregation does not mutate cached repository snapshots", () => {
     assert.deepEqual(snapshot, original);
 });
 
+test("aggregation exposes partial and stale repository snapshots", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        errors: [{ source: "pull requests", message: "temporary failure" }],
+        sourceState: {
+            issues: { data: [issue("octodemo/frontend", 57)], status: "fresh" },
+            pullRequests: { data: [], status: "stale", error: "temporary failure" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const aggregate = aggregateActivitySnapshots({ snapshots: [snapshot] });
+    assert.equal(aggregate.partial, true);
+    assert.equal(aggregate.stale, true);
+    assert.deepEqual(aggregate.staleSources, [{
+        repository: "octodemo/frontend",
+        source: "pullRequests",
+    }]);
+    assert.equal(aggregate.errors[0].repository, "octodemo/frontend");
+});
+
+test("aggregation exposes attempted and fully successful refresh timestamps", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        fetchedAt: "2026-09-20T14:00:00Z",
+        repositories: [
+            {
+                nameWithOwner: "octodemo/frontend",
+                included: true,
+                lastAttemptedRefresh: "2026-09-20T14:00:00Z",
+                lastSuccessfulRefresh: "2026-09-20T13:00:00Z",
+            },
+            {
+                nameWithOwner: "octodemo/backend",
+                included: true,
+                lastAttemptedRefresh: "2026-09-20T13:30:00Z",
+                lastSuccessfulRefresh: "2026-09-20T12:00:00Z",
+            },
+        ],
+    });
+    assert.equal(aggregate.lastAttemptedRefresh, "2026-09-20T14:00:00.000Z");
+    assert.equal(aggregate.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
+});
+
+test("aggregation propagates a repository refresh failure with a retained fresh snapshot", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        repositories: [{
+            nameWithOwner: "octodemo/frontend",
+            included: true,
+            partial: true,
+            stale: true,
+            error: "refresh crashed",
+            lastAttemptedRefresh: "2026-09-20T13:00:00Z",
+            lastSuccessfulRefresh: "2026-09-20T12:00:00Z",
+        }],
+    });
+    assert.equal(aggregate.partial, true);
+    assert.equal(aggregate.stale, true);
+    assert.deepEqual(aggregate.errors, [{
+        source: "repository refresh",
+        repository: "octodemo/frontend",
+        message: "refresh crashed",
+    }]);
+    assert.equal(aggregate.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
+});
+
+test("aggregation retains a new total refresh failure after a partial snapshot", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        errors: [{ source: "pull requests", message: "temporary PR failure" }],
+        sourceState: {
+            issues: { data: [issue("octodemo/frontend", 57)], status: "fresh" },
+            pullRequests: {
+                data: [],
+                status: "stale",
+                error: "temporary PR failure",
+            },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        repositories: [{
+            nameWithOwner: "octodemo/frontend",
+            included: true,
+            partial: true,
+            stale: true,
+            error: "GitHub CLI exited before completing the repository refresh",
+        }],
+    });
+
+    assert.deepEqual(aggregate.errors, [
+        {
+            source: "pull requests",
+            repository: "octodemo/frontend",
+            message: "temporary PR failure",
+        },
+        {
+            source: "repository refresh",
+            repository: "octodemo/frontend",
+            message: "GitHub CLI exited before completing the repository refresh",
+        },
+    ]);
+});
+
 test("dependency resolution does not depend on snapshot order", () => {
     const dependent = buildActivitySnapshot({
         repository: repository("octodemo/frontend"),
@@ -110,9 +225,19 @@ test("registry normalization preserves inclusion preferences and snapshots", () 
         viewer: "octocat",
         repositories: [{ nameWithOwner: "octodemo/demo", included: false }],
         snapshots: { "octodemo/demo": { goals: [] } },
+        restRateLimit: { remaining: 4321, reset: 1790028000 },
+        discoverySignals: {
+            "OCTODEMO/DEMO": {
+                detected: true,
+                checkedAt: "2026-09-20T12:00:00Z",
+                labels: ["Squad:Frontend"],
+            },
+        },
     });
     assert.equal(registry.repositories[0].included, false);
     assert.deepEqual(registry.snapshots["octodemo/demo"].goals, []);
+    assert.equal(registry.restRateLimit.remaining, 4321);
+    assert.equal(registry.discoverySignals["octodemo/demo"].detected, true);
 });
 
 test("repository discovery preserves exclusions and ignores non-Squad repositories", async () => {
@@ -156,6 +281,489 @@ test("repository discovery preserves exclusions and ignores non-Squad repositori
     assert.equal(global.registry.rateLimit.remaining, 4999);
 });
 
+test("discovers repositories whose only Squad signal is an open prefixed label", async () => {
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/prefix-only"),
+                                    viewerPermission: "WRITE",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "rate_limit") {
+                return { resources: { core: { remaining: 5000, reset: 1790028000 } } };
+            }
+            if (args[1] === "repos/octodemo/prefix-only/labels") {
+                return ["bug", "squad:frontend"];
+            }
+            if (args[1] === "repos/octodemo/prefix-only/issues") {
+                return 1;
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.deepEqual(
+        global.registry.repositories.map((candidate) => candidate.nameWithOwner),
+        ["octodemo/prefix-only"],
+    );
+    assert.equal(global.registry.repositories[0].squadDetected, true);
+    const labelCall = calls.find((args) => args[1] === "repos/octodemo/prefix-only/labels");
+    assert.ok(labelCall.includes("per_page=100"));
+    assert.equal(labelCall.includes("--paginate"), false);
+    const issueCall = calls.find((args) => args[1] === "repos/octodemo/prefix-only/issues");
+    assert.ok(issueCall.includes("labels=squad:frontend"));
+    assert.ok(issueCall.includes("per_page=1"));
+    assert.equal(global.registry.restRateLimit.remaining, 4998);
+    assert.equal(calls.some((args) => args[0] === "search"), false);
+});
+
+test("multiple prefixed labels discover a repository only once", async () => {
+    const issueCalls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/multiple-prefixes"),
+                                    viewerPermission: "READ",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "rate_limit") {
+                return { resources: { core: { remaining: 5000, reset: 1790028000 } } };
+            }
+            if (args[1] === "repos/octodemo/multiple-prefixes/labels") {
+                return ["squad:frontend", "squad:backend", "SQUAD:FRONTEND", "squad:unused"];
+            }
+            if (args[1] === "repos/octodemo/multiple-prefixes/issues") {
+                issueCalls.push(args);
+                return args.includes("labels=squad:backend") ? 1 : 0;
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.equal(global.registry.repositories.length, 1);
+    assert.equal(global.registry.repositories[0].nameWithOwner, "octodemo/multiple-prefixes");
+    assert.equal(issueCalls.length, 2);
+    assert.equal(issueCalls.some((args) => args.includes("labels=squad:unused")), false);
+});
+
+test("prefixed label matching and repository deduplication are case-insensitive", async () => {
+    let page = 0;
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[1] === "graphql") {
+                page += 1;
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository(page === 1
+                                        ? "octodemo/case-test"
+                                        : "OCTODEMO/CASE-TEST"),
+                                    viewerPermission: "WRITE",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: page === 1
+                                    ? { hasNextPage: true, endCursor: "page-2" }
+                                    : { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "rate_limit") {
+                return { resources: { core: { remaining: 5000, reset: 1790028000 } } };
+            }
+            if (args[1] === "repos/OCTODEMO/CASE-TEST/labels") return ["Squad:Frontend"];
+            if (args[1] === "repos/OCTODEMO/CASE-TEST/issues") return 1;
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.equal(global.registry.repositories.length, 1);
+    assert.equal(global.registry.repositories[0].nameWithOwner.toLowerCase(), "octodemo/case-test");
+    assert.equal(global.registry.repositories[0].squadDetected, true);
+});
+
+test("fresh prefix discovery cache avoids REST probes", async () => {
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoverySignals: {
+                "octodemo/cached": {
+                    detected: true,
+                    checkedAt: new Date().toISOString(),
+                    labels: ["squad:frontend"],
+                },
+            },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/cached"),
+                                    viewerPermission: "READ",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories();
+
+    assert.deepEqual(
+        global.registry.repositories.map((candidate) => candidate.nameWithOwner),
+        ["octodemo/cached"],
+    );
+    assert.equal(calls.length, 1);
+});
+
+test("low REST budget preserves a prior positive prefix signal", async () => {
+    const checkedAt = "2026-09-20T12:00:00Z";
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoverySignals: {
+                "octodemo/stale-positive": {
+                    detected: true,
+                    checkedAt,
+                    labels: ["squad:frontend"],
+                },
+            },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/stale-positive"),
+                                    viewerPermission: "READ",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "rate_limit") {
+                return { resources: { core: { remaining: 100, reset: 1790028000 } } };
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.equal(global.registry.repositories[0].nameWithOwner, "octodemo/stale-positive");
+    assert.equal(global.registry.discoverySignals["octodemo/stale-positive"].checkedAt, checkedAt);
+    assert.match(
+        global.registry.discoverySignals["octodemo/stale-positive"].error,
+        /rate-limit budget is too low/,
+    );
+    assert.match(global.registry.discoveryError, /rate-limit budget is too low/);
+    assert.equal(calls.some((args) => /\/(?:labels|issues)$/.test(args[1] || "")), false);
+});
+
+test("failed prefix refresh retains the prior positive cache", async () => {
+    const checkedAt = "2026-09-20T12:00:00Z";
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoverySignals: {
+                "octodemo/transient": {
+                    detected: true,
+                    checkedAt,
+                    labels: ["squad:frontend"],
+                },
+            },
+        },
+        runJson: async (args) => {
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/transient"),
+                                    viewerPermission: "READ",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "rate_limit") {
+                return { resources: { core: { remaining: 5000, reset: 1790028000 } } };
+            }
+            if (args[1] === "repos/octodemo/transient/labels") {
+                throw new Error("temporary labels failure");
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.equal(global.registry.repositories[0].nameWithOwner, "octodemo/transient");
+    assert.equal(global.registry.discoverySignals["octodemo/transient"].checkedAt, checkedAt);
+    assert.match(
+        global.registry.discoverySignals["octodemo/transient"].error,
+        /temporary labels failure/,
+    );
+    assert.match(global.registry.discoveryError, /temporary labels failure/);
+});
+
+test("failed prefix refresh preserves a repository discovered before signal caching", async () => {
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            repositories: [{
+                ...repository("octodemo/previously-discovered"),
+                included: true,
+                squadDetected: true,
+            }],
+        },
+        runJson: async (args) => {
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/previously-discovered"),
+                                    viewerPermission: "READ",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "rate_limit") {
+                return { resources: { core: { remaining: 5000, reset: 1790028000 } } };
+            }
+            if (args[1] === "repos/octodemo/previously-discovered/labels") {
+                throw new Error("temporary labels failure");
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.equal(
+        global.registry.repositories[0].nameWithOwner,
+        "octodemo/previously-discovered",
+    );
+    assert.equal(
+        global.registry.discoverySignals["octodemo/previously-discovered"].detected,
+        true,
+    );
+});
+
+test("fallback discovery searches each affiliated repository and rejects unrelated results", async () => {
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [
+                                    {
+                                        ...repository("octodemo/artifacts"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                    {
+                                        ...repository("octodemo/ordinary"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                ],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[0] === "api") return [];
+            if (args.includes("octodemo/artifacts")) {
+                return [
+                    { repository: { nameWithOwner: "octodemo/artifacts" } },
+                    { repository: { nameWithOwner: "unrelated/public" } },
+                ];
+            }
+            return [{ repository: { nameWithOwner: "unrelated/public" } }];
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.deepEqual(
+        global.registry.repositories.map((candidate) => candidate.nameWithOwner),
+        ["octodemo/artifacts"],
+    );
+    assert.equal(global.registry.repositories[0].squadDetected, true);
+    assert.equal(calls.filter((args) => args[0] === "search").length, 2);
+    assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("--repo")));
+    assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("1")));
+    const discoveryQuery = calls.find((args) => args[1] === "graphql").find(
+        (argument) => argument.startsWith("query="),
+    );
+    assert.match(discoveryQuery, /affiliations: \[OWNER, COLLABORATOR, ORGANIZATION_MEMBER\]/);
+});
+
+test("fallback discovery keeps every paginated affiliated repository eligible", async () => {
+    const searchCalls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[1] === "graphql") {
+                const cursorIndex = args.indexOf("cursor=page-2");
+                if (cursorIndex >= 0) {
+                    return {
+                        data: {
+                            viewer: {
+                                login: "octocat",
+                                repositories: {
+                                    nodes: [
+                                        {
+                                            ...repository("octodemo/second-page"),
+                                            viewerPermission: "WRITE",
+                                            issues: { totalCount: 0 },
+                                            pullRequests: { totalCount: 0 },
+                                        },
+                                    ],
+                                    pageInfo: { hasNextPage: false, endCursor: null },
+                                },
+                            },
+                        },
+                    };
+                }
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [
+                                    {
+                                        ...repository("octodemo/already-detected"),
+                                        viewerPermission: "ADMIN",
+                                        squadSource: { oid: "abc" },
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                    {
+                                        ...repository("octodemo/first-page"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                ],
+                                pageInfo: { hasNextPage: true, endCursor: "page-2" },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[0] === "api") return [];
+            searchCalls.push(args);
+            assert.ok(args.includes("--repo"), "fallback searches must never use a global result window");
+            return args.includes("octodemo/second-page")
+                ? [{ repository: { nameWithOwner: "OCTODEMO/SECOND-PAGE" } }]
+                : Array.from({ length: 1001 }, () => ({
+                    repository: { nameWithOwner: "unrelated/public" },
+                }));
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.deepEqual(
+        global.registry.repositories.map((candidate) => candidate.nameWithOwner),
+        ["octodemo/already-detected", "octodemo/second-page"],
+    );
+    assert.equal(global.registry.repositories[1].permission, "write");
+    assert.equal(searchCalls.length, 2);
+    assert.deepEqual(
+        new Set(searchCalls.map((args) => args[args.indexOf("--repo") + 1])),
+        new Set(["octodemo/first-page", "octodemo/second-page"]),
+    );
+});
+
 test("refresh policy gives active repositories a shorter interval", () => {
     assert.ok(refreshPolicy.activeMilliseconds < refreshPolicy.inactiveMilliseconds);
     assert.ok(refreshPolicy.inactiveMilliseconds < refreshPolicy.discoveryMilliseconds);
@@ -189,4 +797,205 @@ test("aggregate refresh skips excluded repositories and reuses the current snaps
     assert.equal(aggregate.repositories.length, 2);
     assert.equal(aggregate.goals.length, 1);
     assert.equal(calls.length, 0);
+});
+
+test("combined rate-limit guard reports the later limiting reset", async () => {
+    const current = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+    });
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            rateLimit: {
+                remaining: 50,
+                resetAt: "2099-09-21T13:00:00.000Z",
+            },
+            restRateLimit: {
+                remaining: 100,
+                resetAt: "2099-09-21T14:00:00.000Z",
+            },
+            repositories: [
+                { ...repository("octodemo/frontend"), owner: "octodemo", included: true },
+                { ...repository("octodemo/backend"), owner: "octodemo", included: true },
+            ],
+            snapshots: {},
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            return [];
+        },
+    });
+
+    const aggregate = await global.refresh({
+        currentRepository: "octodemo/frontend",
+        currentSnapshot: current,
+    });
+
+    assert.equal(calls.length, 0);
+    assert.match(aggregate.errors[0].message, /2099-09-21T14:00:00.000Z/);
+});
+
+test("partial refresh retains the last fully successful timestamp and later recovers", async () => {
+    const previous = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        pullRequests: [{
+            number: 44,
+            title: "Implement #57",
+            body: "Closes #57",
+            state: "OPEN",
+            url: "https://github.com/octodemo/frontend/pull/44",
+            headRefName: "squad/implement-57-dashboard",
+        }],
+    });
+    const successfulAt = "2026-09-20T12:00:00Z";
+    let failPullRequests = true;
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/frontend"),
+                owner: "octodemo",
+                included: true,
+                lastSuccessfulRefresh: successfulAt,
+            }],
+            snapshots: { "octodemo/frontend": previous },
+        },
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository("octodemo/frontend");
+            if (args[0] === "issue") return [issue("octodemo/frontend", 57)];
+            if (args[0] === "pr" && failPullRequests) throw new Error("temporary PR failure");
+            return [];
+        },
+    });
+
+    const partial = await global.refresh({ forceAll: true });
+    assert.equal(partial.goals[0].phase, "reviewing");
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.equal(global.registry.repositories[0].partial, true);
+    assert.equal(global.registry.repositories[0].stale, true);
+    assert.ok(global.registry.repositories[0].lastAttemptedRefresh);
+    assert.equal(partial.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
+    assert.ok(partial.lastAttemptedRefresh);
+    assert.equal(partial.errors.length, 1);
+    assert.match(global.registry.repositories[0].error, /pull requests: temporary PR failure/);
+
+    failPullRequests = false;
+    const recovered = await global.refresh({ forceAll: true });
+    assert.equal(recovered.goals[0].phase, "queued");
+    assert.notEqual(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.equal(global.registry.repositories[0].partial, false);
+    assert.equal(global.registry.repositories[0].stale, false);
+    assert.equal(global.registry.repositories[0].error, "");
+    assert.equal(recovered.partial, false);
+    assert.equal(recovered.stale, false);
+});
+
+test("stale current snapshots never advance successful refresh time and later recovery clears state", async () => {
+    const successfulAt = "2026-09-20T12:00:00Z";
+    const stale = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        fetchedAt: "2026-09-20T13:00:00Z",
+        sourceState: {
+            issues: {
+                data: [issue("octodemo/frontend", 57)],
+                fetchedAt: successfulAt,
+                status: "stale",
+                error: "",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/frontend"),
+                owner: "octodemo",
+                included: true,
+                lastSuccessfulRefresh: successfulAt,
+            }],
+            snapshots: {},
+        },
+        runJson: async () => [],
+    });
+
+    const partial = await global.refresh({
+        currentRepository: "octodemo/frontend",
+        currentSnapshot: stale,
+    });
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.equal(global.registry.repositories[0].lastAttemptedRefresh, "2026-09-20T13:00:00.000Z");
+    assert.equal(partial.partial, true);
+    assert.equal(partial.stale, true);
+
+    const recovered = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        fetchedAt: "2026-09-20T14:00:00Z",
+    });
+    const fresh = await global.refresh({
+        currentRepository: "octodemo/frontend",
+        currentSnapshot: recovered,
+    });
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, "2026-09-20T14:00:00.000Z");
+    assert.equal(global.registry.repositories[0].partial, false);
+    assert.equal(global.registry.repositories[0].stale, false);
+    assert.equal(fresh.partial, false);
+    assert.equal(fresh.stale, false);
+});
+
+test("background refresh retries stale workflow sources for inactive repositories", async () => {
+    const previous = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57, "", "CLOSED")],
+        workflowRuns: [{
+            databaseId: 78,
+            workflowName: "Squad Implement Worker",
+            displayTitle: "Implement #57",
+            status: "completed",
+            conclusion: "success",
+            headBranch: "squad/implement-57-dashboard",
+        }],
+    });
+    previous.sourceState.workflowRuns.status = "stale";
+    previous.sourceState.workflowRuns.error = "workflow service unavailable";
+    previous.partial = true;
+    previous.stale = true;
+    previous.staleSources = ["workflowRuns"];
+    previous.errors = [{ source: "workflow runs", message: "workflow service unavailable" }];
+    const successfulAt = "2026-09-20T12:00:00Z";
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/frontend"),
+                owner: "octodemo",
+                included: true,
+                lastSuccessfulRefresh: successfulAt,
+            }],
+            snapshots: { "octodemo/frontend": previous },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository("octodemo/frontend");
+            if (args[0] === "issue") return [issue("octodemo/frontend", 57, "", "CLOSED")];
+            return [];
+        },
+    });
+
+    const recovered = await global.refresh({ forceAll: true });
+    assert.ok(calls.some((args) => args[0] === "run"));
+    assert.equal(recovered.partial, false);
+    assert.equal(recovered.stale, false);
+    assert.notEqual(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
 });

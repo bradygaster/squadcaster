@@ -104,8 +104,8 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /Showing the newest/);
     assert.match(html, /active workflow runs/);
     assert.doesNotMatch(html, /runs today/);
-    assert.match(html, /Data may be stale/);
-    assert.match(html, /Oldest included repository snapshot/);
+    assert.match(html, /Some GitHub data is from an earlier sync/);
+    assert.match(html, /last fully synced/);
     assert.doesNotMatch(html, /Last successful snapshot/);
     assert.match(html, /goal-drawer, \.runs-panel/);
     assert.match(html, /keyedDisclosure/);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildActivitySnapshot } from "../activity-model.mjs";
+import { buildActivitySnapshot, isCompleteActivitySnapshot } from "../activity-model.mjs";
 
 const repository = {
     name: "demo",
@@ -44,6 +44,22 @@ test("derives blockers and Squad ownership from observed issue data", () => {
     assert.equal(snapshot.goals[0].phase, "blocked");
     assert.equal(snapshot.goals[0].owner.name, "Frontend");
     assert.equal(snapshot.goals[0].blockers[0].issueNumber, 9);
+});
+
+test("normalizes mixed-case Squad labels for goal and owner matching", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        members: [{ id: "frontend", name: "Frontend", role: "UI" }],
+        issues: [issue({
+            body: "",
+            labels: [{ name: "Squad:Frontend" }],
+        })],
+    });
+
+    assert.equal(snapshot.goals.length, 1);
+    assert.equal(snapshot.goals[0].owner.name, "Frontend");
+    assert.equal(snapshot.goals[0].owner.source, "squad-label");
+    assert.deepEqual(snapshot.goals[0].issue.labels, ["Squad:Frontend"]);
 });
 
 test("correlates durable worker provenance, checks, and workflow runs", () => {
@@ -151,6 +167,79 @@ test("does not correlate an incidental pull request issue mention", () => {
     assert.equal(snapshot.summary.queued, 1);
 });
 
+test("does not correlate qualified external closing references with a same-number local goal", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        pullRequests: [
+            {
+                number: 45,
+                title: "Close an external API issue",
+                body: "Fixes octodemo/backend#12",
+                state: "OPEN",
+                url: "https://github.com/octodemo/demo/pull/45",
+            },
+            {
+                number: 46,
+                title: "Close another external API issue",
+                body: "",
+                state: "OPEN",
+                url: "https://github.com/octodemo/demo/pull/46",
+                closingIssuesReferences: [{
+                    number: 12,
+                    repository: {
+                        name: "backend",
+                        owner: { login: "octodemo" },
+                    },
+                }],
+            },
+        ],
+    });
+    assert.equal(snapshot.goals[0].pullRequests.length, 0);
+    assert.equal(snapshot.goals[0].phase, "queued");
+});
+
+test("correlates qualified and unqualified closing references in the pull request repository", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        pullRequests: [
+            {
+                number: 47,
+                title: "Qualified local close",
+                body: "Fixes octodemo/demo#12",
+                state: "OPEN",
+                url: "https://github.com/octodemo/demo/pull/47",
+            },
+            {
+                number: 48,
+                title: "Unqualified local close",
+                body: "Closes #12",
+                state: "OPEN",
+                url: "https://github.com/octodemo/demo/pull/48",
+            },
+            {
+                number: 49,
+                title: "GitHub local close",
+                body: "",
+                state: "OPEN",
+                url: "https://github.com/octodemo/demo/pull/49",
+                closingIssuesReferences: [{
+                    number: 12,
+                    repository: {
+                        nameWithOwner: "octodemo/demo",
+                    },
+                }],
+            },
+        ],
+    });
+    assert.deepEqual(
+        snapshot.goals[0].pullRequests.map((pullRequest) => pullRequest.number),
+        [47, 48, 49],
+    );
+    assert.equal(snapshot.goals[0].phase, "reviewing");
+});
+
 test("uses only the latest run outcome for the same workflow branch", () => {
     const snapshot = buildActivitySnapshot({
         repository,
@@ -177,4 +266,29 @@ test("uses only the latest run outcome for the same workflow branch", () => {
         ],
     });
     assert.equal(snapshot.goals[0].phase, "queued");
+});
+
+test("treats stale or unavailable source state as incomplete without requiring an error", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        fetchedAt: "2026-09-20T13:00:00Z",
+        sourceState: {
+            issues: {
+                data: [issue({ body: "" })],
+                fetchedAt: "2026-09-20T12:00:00Z",
+                status: "stale",
+                error: "",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "unavailable", error: "" },
+        },
+    });
+
+    assert.equal(snapshot.fetchedAt, "2026-09-20T13:00:00.000Z");
+    assert.equal(snapshot.sourceState.issues.fetchedAt, "2026-09-20T12:00:00.000Z");
+    assert.equal(snapshot.partial, true);
+    assert.equal(snapshot.stale, true);
+    assert.deepEqual(snapshot.staleSources, ["issues"]);
+    assert.equal(isCompleteActivitySnapshot(snapshot), false);
 });

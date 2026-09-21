@@ -25,10 +25,42 @@ function timestamp(value) {
     return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
+function normalizedSourceState(value, data, fetchedAt) {
+    const status = ["fresh", "stale", "unavailable", "skipped"].includes(value?.status)
+        ? value.status
+        : "fresh";
+    return {
+        data: Array.isArray(value?.data) ? value.data : data,
+        fetchedAt: timestamp(value?.fetchedAt || fetchedAt),
+        status,
+        error: text(value?.error, 800),
+    };
+}
+
+function latestTimestamp(values) {
+    return values
+        .map(timestamp)
+        .filter(Boolean)
+        .sort()
+        .at(-1) || null;
+}
+
+function earliestTimestamp(values) {
+    return values
+        .map(timestamp)
+        .filter(Boolean)
+        .sort()
+        .at(0) || null;
+}
+
 function labelsOf(item) {
     return (Array.isArray(item?.labels) ? item.labels : [])
         .map((label) => text(typeof label === "string" ? label : label?.name, 120))
         .filter(Boolean);
+}
+
+function normalizedLabelsOf(item) {
+    return labelsOf(item).map((label) => label.toLowerCase());
 }
 
 function peopleOf(item) {
@@ -89,7 +121,7 @@ function parseArtifacts(comments) {
 }
 
 function isSquadGoal(issue, artifacts) {
-    const labels = labelsOf(issue);
+    const labels = normalizedLabelsOf(issue);
     const comments = Array.isArray(issue?.comments) ? issue.comments : [];
     return labels.some((label) => label === "squad" || label.startsWith("squad:")) ||
         artifacts.length > 0 ||
@@ -97,22 +129,45 @@ function isSquadGoal(issue, artifacts) {
         /^squad\b|\[squad\]/i.test(text(issue?.title));
 }
 
-function linkedIssueNumbers(pullRequest) {
-    const numbers = new Set(
+function issueKey(repository, number) {
+    const repositoryKey = text(repository, 300).toLowerCase();
+    const issueNumber = Number(number);
+    return repositoryKey && Number.isInteger(issueNumber)
+        ? `${repositoryKey}#${issueNumber}`
+        : "";
+}
+
+function closingReferenceRepository(reference, currentRepository) {
+    const repository = reference?.repository;
+    return text(
+        repository?.nameWithOwner ||
+        (repository?.owner?.login && repository?.name
+            ? `${repository.owner.login}/${repository.name}`
+            : "") ||
+        currentRepository,
+        300,
+    ).toLowerCase();
+}
+
+function linkedIssueKeys(pullRequest, currentRepository) {
+    const keys = new Set(
         (Array.isArray(pullRequest?.closingIssuesReferences) ? pullRequest.closingIssuesReferences : [])
-            .map((issue) => Number(issue?.number))
-            .filter(Number.isInteger),
+            .map((reference) => issueKey(
+                closingReferenceRepository(reference, currentRepository),
+                reference?.number,
+            ))
+            .filter(Boolean),
     );
     for (const match of String(pullRequest?.body || "").matchAll(
-        /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#([1-9][0-9]*)\b/gi,
+        /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#([1-9][0-9]*)\b/gi,
     )) {
-        numbers.add(Number(match[1]));
+        keys.add(issueKey(match[1] || currentRepository, match[2]));
     }
     const marker = String(pullRequest?.body || "").match(/<!--\s*squad:implement\s+issue=([1-9][0-9]*)\s+run=/i);
-    if (marker) numbers.add(Number(marker[1]));
+    if (marker) keys.add(issueKey(currentRepository, marker[1]));
     const branch = String(pullRequest?.headRefName || "").match(/^squad\/implement-([1-9][0-9]*)-/i);
-    if (branch) numbers.add(Number(branch[1]));
-    return [...numbers];
+    if (branch) keys.add(issueKey(currentRepository, branch[1]));
+    return [...keys].filter(Boolean);
 }
 
 function linkedRunNumbers(run) {
@@ -170,7 +225,7 @@ function normalizeRun(run) {
 }
 
 function ownerFor(issue, members) {
-    const labels = labelsOf(issue);
+    const labels = normalizedLabelsOf(issue);
     const member = (Array.isArray(members) ? members : []).find((candidate) => {
         const id = text(candidate?.id).toLowerCase();
         const name = text(candidate?.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -285,13 +340,24 @@ export function buildActivitySnapshot({
     workflowRuns = [],
     members = [],
     errors = [],
+    sourceState = null,
     fetchedAt = new Date().toISOString(),
 } = {}) {
+    const normalizedSources = {
+        issues: normalizedSourceState(sourceState?.issues, issues, fetchedAt),
+        pullRequests: normalizedSourceState(sourceState?.pullRequests, pullRequests, fetchedAt),
+        workflowRuns: normalizedSourceState(sourceState?.workflowRuns, workflowRuns, fetchedAt),
+    };
+    issues = normalizedSources.issues.data;
+    pullRequests = normalizedSources.pullRequests.data;
+    workflowRuns = normalizedSources.workflowRuns.data;
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
+    const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
+    const repositoryKey = repositoryName.toLowerCase();
     const normalizedPullRequests = pullRequests.map((pullRequest) => ({
         source: pullRequest,
         value: normalizePullRequest(pullRequest),
-        issueNumbers: linkedIssueNumbers(pullRequest),
+        issueKeys: linkedIssueKeys(pullRequest, repositoryKey),
     }));
     const normalizedRuns = workflowRuns.map((run) => ({
         source: run,
@@ -299,15 +365,14 @@ export function buildActivitySnapshot({
         issueNumbers: linkedRunNumbers(run),
     }));
     const goals = [];
-    const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
-    const repositoryKey = repositoryName.toLowerCase();
 
     for (const issue of issues) {
         const artifacts = parseArtifacts(issue?.comments);
         if (!isSquadGoal(issue, artifacts)) continue;
         const number = Number(issue?.number);
+        const goalKey = issueKey(repositoryKey, number);
         const relatedPullRequests = normalizedPullRequests
-            .filter((pullRequest) => pullRequest.issueNumbers.includes(number))
+            .filter((pullRequest) => pullRequest.issueKeys.includes(goalKey))
             .map((pullRequest) => pullRequest.value);
         const relatedRuns = normalizedRuns
             .filter((run) => run.issueNumbers.includes(number) ||
@@ -398,6 +463,15 @@ export function buildActivitySnapshot({
         return rightActive - leftActive || String(right.updatedAt).localeCompare(String(left.updatedAt));
     });
     const count = (phase) => goals.filter((goal) => phase.includes(goal.phase)).length;
+    const normalizedErrors = (Array.isArray(errors) ? errors : []).map((error) => ({
+        source: text(error?.source || "GitHub", 80),
+        message: text(error?.message || error, 800),
+    }));
+    const staleSources = Object.entries(normalizedSources)
+        .filter(([, state]) => state.status === "stale")
+        .map(([source]) => source);
+    const incompleteSources = Object.values(normalizedSources)
+        .some((state) => ["stale", "unavailable"].includes(state.status));
     return {
         schemaVersion: 1,
         fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
@@ -418,10 +492,13 @@ export function buildActivitySnapshot({
             completed: count(["completed"]),
         },
         goals,
-        errors: (Array.isArray(errors) ? errors : []).map((error) => ({
-            source: text(error?.source || "GitHub", 80),
-            message: text(error?.message || error, 800),
-        })),
+        sourceState: normalizedSources,
+        partial: incompleteSources ||
+            normalizedErrors.length > 0 ||
+            Object.values(normalizedSources).some((state) => Boolean(state.error)),
+        stale: staleSources.length > 0,
+        staleSources,
+        errors: normalizedErrors,
     };
 }
 
@@ -473,10 +550,52 @@ export function aggregateActivitySnapshots({
             ...error,
             repository: snapshot?.repository?.nameWithOwner || "",
         })));
+    const includedRepositories = repositories.filter((repository) => repository?.included !== false);
+    const snapshotByRepository = new Map(snapshots.map((snapshot) => [
+        String(snapshot?.repository?.nameWithOwner || "").toLowerCase(),
+        snapshot,
+    ]));
+    const repositoryErrors = includedRepositories.flatMap((repository) => {
+        const snapshot = snapshotByRepository.get(String(repository?.nameWithOwner || "").toLowerCase());
+        if (!repository?.error) return [];
+        const snapshotErrorsForRepository = snapshot?.errors || [];
+        const mirroredSnapshotError = snapshotErrorsForRepository
+            .map((error) => `${error.source}: ${error.message}`)
+            .join("; ")
+            .slice(0, 800);
+        const duplicatesSnapshotError = repository.error === mirroredSnapshotError ||
+            snapshotErrorsForRepository.some((error) =>
+                repository.error === error.message ||
+                repository.error === `${error.source}: ${error.message}`);
+        if (duplicatesSnapshotError) return [];
+        return [{
+            source: "repository refresh",
+            repository: repository.nameWithOwner,
+            message: repository.error,
+        }];
+    });
+    const aggregateErrors = [...snapshotErrors, ...repositoryErrors, ...errors].map((error) => ({
+        source: text(error?.source || "GitHub", 80),
+        repository: text(error?.repository || "", 300),
+        message: text(error?.message || error, 800),
+    }));
+    const staleSources = snapshots.flatMap((snapshot) =>
+        (snapshot?.staleSources || []).map((source) => ({
+            repository: snapshot?.repository?.nameWithOwner || "",
+            source,
+        })));
+    const attemptedRefreshes = includedRepositories.map((repository) => repository?.lastAttemptedRefresh);
+    const successfulRefreshes = includedRepositories.map((repository) => repository?.lastSuccessfulRefresh);
+    const allRepositoriesSucceeded = includedRepositories.length > 0 &&
+        successfulRefreshes.every((value) => timestamp(value));
     return {
         schemaVersion: 2,
         scope: "user",
         fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
+        lastAttemptedRefresh: latestTimestamp(attemptedRefreshes) || timestamp(fetchedAt),
+        lastSuccessfulRefresh: allRepositoriesSucceeded
+            ? earliestTimestamp(successfulRefreshes)
+            : null,
         currentRepository: text(currentRepository, 300),
         viewer: text(viewer, 120),
         repositories,
@@ -491,12 +610,23 @@ export function aggregateActivitySnapshots({
             completed: count(["completed"]),
         },
         goals,
-        errors: [...snapshotErrors, ...errors].map((error) => ({
-            source: text(error?.source || "GitHub", 80),
-            repository: text(error?.repository || "", 300),
-            message: text(error?.message || error, 800),
-        })),
+        partial: aggregateErrors.length > 0 ||
+            snapshots.some((snapshot) => snapshot?.partial) ||
+            includedRepositories.some((repository) => repository?.partial),
+        stale: snapshots.some((snapshot) => snapshot?.stale) ||
+            includedRepositories.some((repository) => repository?.stale),
+        staleSources,
+        errors: aggregateErrors,
     };
+}
+
+export function isCompleteActivitySnapshot(snapshot) {
+    return Boolean(snapshot) &&
+        !snapshot.partial &&
+        !snapshot.stale &&
+        !(snapshot.errors?.length) &&
+        !Object.values(snapshot.sourceState || {})
+            .some((state) => ["stale", "unavailable"].includes(state?.status));
 }
 
 export const activityModel = {
