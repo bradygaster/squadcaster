@@ -126,5 +126,8 @@ Authoritative references consulted:
 - The local renderer binds only to loopback.
 - Renderer output is escaped before insertion.
 - Independent API failures appear in the canvas.
-- Existing goals are retained as stale if issue discovery fails.
+- Each failed activity source retains its last-known evidence while successful
+  issue, pull-request, and workflow sources continue to update.
+- Partial snapshots expose source-specific errors and identify retained evidence
+  as stale until that source refreshes successfully.
 - Unknown relationships are not promoted to observed facts.
