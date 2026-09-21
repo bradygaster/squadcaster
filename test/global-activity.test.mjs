@@ -946,30 +946,60 @@ test("forced discovery omission preserves the current repository exclusion", asy
         repository: repository(nameWithOwner),
         issues: [issue(nameWithOwner, 57)],
     });
+    const remoteIssue = {
+        ...issue(nameWithOwner, 58),
+        labels: [{ name: "squad" }, { name: "squad:frontend" }],
+    };
     const calls = [];
     const global = new GitHubGlobalActivity({
         cwd: "/repo",
         registry: {
             repositories: [
-                { ...repository(nameWithOwner), owner: "octodemo", included: false },
+                {
+                    ...repository(nameWithOwner),
+                    owner: "octodemo",
+                    included: false,
+                    squadDetected: true,
+                    squadTeamOid: "oid-a",
+                },
             ],
             snapshots: { [nameWithOwner]: cached },
+            rosters: {
+                [nameWithOwner]: {
+                    blobOid: "oid-a",
+                    observedOid: "oid-a",
+                    members: [{
+                        id: "frontend",
+                        name: "Frontend",
+                        role: "Frontend Lead",
+                        lead: true,
+                    }],
+                    status: "fresh",
+                    fetchedAt: "2026-09-21T12:00:00Z",
+                    error: "",
+                },
+            },
         },
         runJson: async (args) => {
             calls.push(args);
-            if (args[0] !== "api") throw new Error(`Unexpected activity call: ${args[0]}`);
-            return {
-                data: {
-                    viewer: {
-                        login: "octocat",
-                        repositories: {
-                            nodes: [],
-                            pageInfo: { hasNextPage: false, endCursor: null },
+            if (args[0] === "api" && args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
                         },
+                        rateLimit: { remaining: 4999, resetAt: "2026-09-21T22:00:00Z" },
                     },
-                    rateLimit: { remaining: 4999, resetAt: "2026-09-21T22:00:00Z" },
-                },
-            };
+                };
+            }
+            if (args[0] === "repo") return repository(nameWithOwner);
+            if (args[0] === "issue") return [remoteIssue];
+            if (args[0] === "pr" || args[0] === "run") return [];
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
         },
     });
 
@@ -990,10 +1020,22 @@ test("forced discovery omission preserves the current repository exclusion", asy
     assert.deepEqual(calls.map((args) => args[0]), ["api"]);
     assert.equal(global.registry.repositories.length, 1);
     assert.equal(global.registry.repositories[0].included, false);
+    assert.equal(global.registry.repositories[0].squadTeamOid, "oid-a");
     assert.equal(global.registry.snapshots[nameWithOwner], cached);
     assert.equal(excludedActivity.snapshot, cached);
     assert.equal(excludedActivity.refreshed, false);
     assert.equal(aggregate.goals.length, 0);
+
+    assert.equal(global.setIncluded(nameWithOwner, true), true);
+    const refreshed = await global.refresh({
+        currentRepository: "octodemo/other",
+        forceAll: true,
+    });
+
+    assert.deepEqual(calls.map((args) => args[0]), ["api", "repo", "issue", "pr", "run"]);
+    assert.equal(global.registry.rosters[nameWithOwner].status, "fresh");
+    assert.equal(global.registry.rosters[nameWithOwner].members.length, 1);
+    assert.equal(refreshed.goals[0].owner.name, "Frontend");
 });
 
 test("combined rate-limit guard reports the later limiting reset", async () => {

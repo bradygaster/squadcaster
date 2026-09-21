@@ -528,6 +528,9 @@ export class GitHubGlobalActivity {
                     ...currentSnapshot.repository,
                     nameWithOwner: currentRepository,
                     squadSource: {},
+                    squadTeam: previousCurrent?.squadTeamOid
+                        ? { oid: previousCurrent.squadTeamOid }
+                        : null,
                 }, previousCurrent);
                 this.registry.repositories.unshift(current);
             }
