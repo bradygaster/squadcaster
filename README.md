@@ -10,6 +10,17 @@ the team. Squadcaster observes the GitHub-native evidence they produce; it does
 not start work, edit Squad configuration, merge pull requests, or bypass branch
 protection.
 
+## Read-only boundary
+
+Squadcaster never creates or edits GitHub issues, posts Squad commands, installs
+or changes workflows, creates branches or pull requests, edits `.squad`
+configuration or charters, plans or executes missions, changes task ownership,
+or modifies repository settings.
+
+The dashboard only writes local Squadcaster preferences and cache state. Users
+can include or exclude discovered repositories, request a refresh, and change
+in-browser filters. GitHub and repository content remain read-only.
+
 ## What the canvas shows
 
 - Summary counts for active, blocked, failed, awaiting-review, and completed goals
@@ -87,7 +98,7 @@ When the GraphQL rate-limit budget is low, background refresh pauses until reset
 while the current repository continues refreshing.
 
 See [the operations architecture](docs/operations-architecture.md) for the
-normalized model, correlation rules, adapter boundary, and CAO findings.
+normalized model, correlation rules, adapter boundary, and compatibility notes.
 
 ## Development
 
@@ -107,7 +118,8 @@ node --test test/*.test.mjs
 - `activity-model.mjs` — normalized goals, lifecycle derivation, and evidence correlation
 - `github-activity.mjs` — read-only GitHub/Squad discovery adapter
 - `global-activity.mjs` — user-wide registry, discovery, adaptive refresh, and aggregation
-- `extension.mjs` — canvas provider, persistence, refresh, and legacy tool compatibility
+- `extension.mjs` — canvas provider, persistence, refresh, and legacy storage migration
+- `persisted-state.mjs` — safe normalization of current and legacy persisted state
 - `renderer.mjs` — responsive operations dashboard
 - `test/` — model and degraded-source tests using Node's built-in test runner
 - `copilot-extension.json` — extension install and share manifest

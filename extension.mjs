@@ -12,6 +12,7 @@ import {
 } from "@github/copilot-sdk/extension";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 import { GitHubGlobalActivity, normalizeRegistry } from "./global-activity.mjs";
+import { normalizePersistedState } from "./persisted-state.mjs";
 import { renderHtml } from "./renderer.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -19,9 +20,6 @@ const servers = new Map();
 let session;
 let sharedRegistry = null;
 let registryQueue = Promise.resolve();
-
-const TOOL_PROPOSAL = "squadcaster_publish_proposal";
-const TOOL_MISSION = "squadcaster_publish_mission_plan";
 
 function slug(value) {
     return String(value || "")
@@ -55,19 +53,6 @@ function normalizeMembers(members) {
                 status: cleanText(member?.status || "Active", 40),
             };
         });
-}
-
-function normalizeTasks(tasks, memberIds) {
-    const validMembers = new Set(memberIds);
-    return (Array.isArray(tasks) ? tasks : [])
-        .slice(0, 40)
-        .map((task, index) => ({
-            id: slug(task?.id || task?.title || `task-${index + 1}`),
-            title: cleanText(task?.title || `Task ${index + 1}`, 180),
-            description: cleanText(task?.description || "", 1200),
-            ownerId: validMembers.has(task?.ownerId) ? task.ownerId : "",
-            rationale: cleanText(task?.rationale || "", 1200),
-        }));
 }
 
 function hashKey(value) {
@@ -176,12 +161,11 @@ async function registryPath() {
 }
 
 async function readPersistedState(statePath) {
-    if (!(await exists(statePath))) return null;
+    if (!(await exists(statePath))) return normalizePersistedState(null);
     try {
-        const parsed = JSON.parse(await fs.readFile(statePath, "utf8"));
-        return parsed && [1, 2].includes(parsed.version) ? parsed : null;
+        return normalizePersistedState(JSON.parse(await fs.readFile(statePath, "utf8")));
     } catch {
-        return null;
+        return normalizePersistedState(null);
     }
 }
 
@@ -216,18 +200,14 @@ async function loadState(workingDirectory) {
         return {
             statePath,
             state: {
-                version: 1,
+                version: 3,
                 mode: "unavailable",
                 workingDirectory: workingDirectory || "",
                 repoRoot: "",
                 repoName: "",
                 message: "Open Squadcaster from a Copilot project session.",
-                signals: [],
                 members: [],
-                mission: null,
-                operation: null,
-                pullRequest: null,
-                onboarding: { automation: null, cast: null, syncError: "" },
+                activity: persisted.activity,
             },
         };
     }
@@ -238,57 +218,24 @@ async function loadState(workingDirectory) {
         exists(path.join(repoRoot, ".github", "workflows", "squad.md")),
         exists(path.join(repoRoot, ".github", "workflows", "squad.lock.yml")),
     ]).then((values) => values.some(Boolean));
-    let members = initialized ? actualMembers : normalizeMembers(persisted?.members);
-
-    if (initialized && persisted?.members?.length) {
-        const drafts = new Map(persisted.members.map((member) => [member.id, member]));
-        members = actualMembers.map((member) => {
-            const draft = drafts.get(member.id);
-            return draft
-                ? {
-                    ...member,
-                    draftRole: draft.draftRole || draft.role || member.role,
-                    draftCharter: draft.draftCharter || draft.charter || member.charter,
-                    dirty: Boolean(draft.dirty),
-                }
-                : member;
-        });
-    }
+    const members = actualMembers;
 
     return {
         statePath,
         state: {
-            version: 2,
+            version: 3,
             mode: initialized ? "active" : "setup",
             workingDirectory,
             repoRoot,
             repoName: path.basename(repoRoot),
             message: "",
-            signals: Array.isArray(persisted?.signals) ? persisted.signals.slice(0, 12) : [],
-            summary: cleanText(persisted?.summary || "", 1800),
             members,
-            mission: persisted?.mission || null,
-            operation: null,
-            pullRequest: persisted?.pullRequest || null,
-            onboarding: {
-                automation: persisted?.onboarding?.automation || null,
-                cast: persisted?.onboarding?.cast || null,
-                syncError: "",
-            },
             squad: {
                 installed: initialized || workflowsInstalled,
                 rosterAvailable: initialized,
                 memberCount: members.length,
             },
-            activity: persisted?.activity?.schemaVersion === 2 ? persisted.activity : {
-                schemaVersion: 2,
-                fetchedAt: null,
-                repository: {},
-                repositories: [],
-                summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
-                goals: [],
-                errors: [],
-            },
+            activity: persisted.activity,
         },
     };
 }
@@ -315,67 +262,6 @@ async function updateState(entry, updater) {
     updater(entry.state);
     await persist(entry);
     broadcast(entry);
-}
-
-function responseContent(response) {
-    return cleanText(response?.data?.content || "", 20000);
-}
-
-function pullRequestFrom(text) {
-    const content = String(text || "");
-    const fullUrl = content.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/i);
-    if (fullUrl) return fullUrl[0];
-    const shorthand = content.match(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)\b/);
-    return shorthand ? `https://github.com/${shorthand[1]}/pull/${shorthand[2]}` : "";
-}
-
-function castingText(value, fallback = "") {
-    return cleanText(value || fallback, 12000).replace(/\/squad\b/gi, "Squad");
-}
-
-function castIssueBody(state) {
-    const signals = state.signals.length
-        ? `\n## Repository signals\n\n${state.signals.map((signal) => `- ${castingText(signal)}`).join("\n")}\n`
-        : "";
-    const members = state.members.map((member) => {
-        const name = castingText(member.name, "Squad member").replace(/\r?\n/g, " ");
-        const role = castingText(member.draftRole || member.role, "Specialist").replace(/\r?\n/g, " ");
-        const charter = castingText(
-            member.draftCharter || member.charter,
-            `Own ${role} outcomes and collaborate with the rest of the Squad.`,
-        );
-        const designation = member.lead
-            ? "Squad lead"
-            : member.reviewer ? "Independent reviewer" : "Specialist";
-        return `### ${name} — ${role}
-
-**Designation:** ${designation}
-
-**Why this role:** ${castingText(member.rationale, `Own the ${role} responsibility for this repository.`)}
-
-#### Operating charter
-
-${charter}`;
-    }).join("\n\n");
-    return `# Approved Squad
-
-Create this repository-specific Squad exactly as reviewed. This issue is the source of truth for the roster, role boundaries, and operating charters.
-
-## Repository context
-
-${castingText(state.summary, `A tailored Squad for ${state.repoName}.`)}
-${signals}
-## Team specification
-
-${members}
-
-## Casting requirements
-
-- Preserve these member names, roles, designations, and responsibility boundaries.
-- Generate the standard Squad team, charter, routing, history, and agent files.
-- Open a pull request for human review.
-- Do not merge the pull request.
-`;
 }
 
 async function runGhJson(args, cwd, input) {
@@ -420,148 +306,6 @@ async function runGhJson(args, cwd, input) {
         child.stdin.on("error", (error) => reject(new Error(`Unable to send data to GitHub CLI: ${error.message}`)));
         child.stdin.end(input === undefined ? "" : JSON.stringify(input));
     });
-}
-
-async function createCastIssue(entry) {
-    if (entry.state.operation?.status === "running") return;
-    await updateState(entry, (state) => {
-        state.operation = {
-            kind: "cast-issue",
-            status: "running",
-            message: "Creating the cast issue and starting Squad…",
-        };
-    });
-
-    try {
-        const repository = await runGhJson(
-            ["repo", "view", "--json", "nameWithOwner"],
-            entry.state.repoRoot,
-        );
-        const nameWithOwner = cleanText(repository.nameWithOwner, 300);
-        if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(nameWithOwner)) {
-            throw new Error("GitHub CLI did not return a valid repository name.");
-        }
-
-        const issues = await runGhJson(
-            [
-                "issue", "list",
-                "--state", "all",
-                "--search", "\"Cast the Squad\" in:title",
-                "--json", "number,title,url,state",
-                "--limit", "100",
-            ],
-            entry.state.repoRoot,
-        );
-        let issue = Array.isArray(issues)
-            ? issues.find((candidate) => candidate.title === "Cast the Squad")
-            : null;
-        if (!issue) {
-            issue = await runGhJson(
-                ["api", "--method", "POST", `repos/${nameWithOwner}/issues`, "--input", "-"],
-                entry.state.repoRoot,
-                {
-                    title: "Cast the Squad",
-                    body: castIssueBody(entry.state),
-                },
-            );
-        } else {
-            issue = await runGhJson(
-                ["api", "--method", "PATCH", `repos/${nameWithOwner}/issues/${issue.number}`, "--input", "-"],
-                entry.state.repoRoot,
-                {
-                    title: "Cast the Squad",
-                    body: castIssueBody(entry.state),
-                    state: "open",
-                },
-            );
-        }
-
-        const issueNumber = Number(issue.number);
-        const issueUrl = cleanText(issue.html_url || issue.url, 500);
-        if (!Number.isInteger(issueNumber) || issueNumber <= 0 || !issueUrl) {
-            throw new Error("GitHub did not return the created cast issue.");
-        }
-
-        const comments = await runGhJson(
-            ["api", `repos/${nameWithOwner}/issues/${issueNumber}/comments?per_page=100`],
-            entry.state.repoRoot,
-        );
-        const castAlreadyStarted = Array.isArray(comments) &&
-            comments.some((comment) =>
-                String(comment?.body || "").trim() === "/squad cast" &&
-                Date.now() - Date.parse(comment?.created_at || 0) < 15 * 60 * 1000);
-        if (!castAlreadyStarted) {
-            await runGhJson(
-                [
-                    "api", "--method", "POST",
-                    `repos/${nameWithOwner}/issues/${issueNumber}/comments`,
-                    "--input", "-",
-                ],
-                entry.state.repoRoot,
-                { body: "/squad cast" },
-            );
-        }
-
-        await updateState(entry, (state) => {
-            state.onboarding ||= { automation: null, cast: null, syncError: "" };
-            state.onboarding.cast = {
-                issueUrl,
-                issueNumber,
-                status: "triggered",
-                command: "/squad cast",
-                triggeredAt: new Date().toISOString(),
-            };
-            state.operation = {
-                kind: "cast-issue",
-                status: "complete",
-                message: "Cast issue created and /squad cast posted. Squad is preparing pull request 2 of 2.",
-            };
-        });
-    } catch (error) {
-        await updateState(entry, (state) => {
-            state.operation = {
-                kind: "cast-issue",
-                status: "error",
-                message: cleanText(error?.message || error, 1200),
-            };
-        });
-    }
-}
-
-function isAutomationPullRequest(pullRequest) {
-    const files = Array.isArray(pullRequest?.files) ? pullRequest.files : [];
-    const workflowFiles = files.filter((file) =>
-        /^\.github\/workflows\/squad(?:-implement-worker|-review)?(?:\.md|\.lock\.yml)$/i.test(file?.path || ""));
-    return /(?:squad.*automation|automation.*squad)/i.test(pullRequest?.title || "") ||
-        workflowFiles.length >= 2;
-}
-
-async function inspectAutomationPullRequest(repoRoot) {
-    try {
-        const { stdout } = await execFileAsync(
-            "gh",
-            ["pr", "view", "--json", "url,state,mergedAt,title,files"],
-            {
-                cwd: repoRoot,
-                windowsHide: true,
-                maxBuffer: 4 * 1024 * 1024,
-            },
-        );
-        const pullRequest = JSON.parse(stdout);
-        if (!isAutomationPullRequest(pullRequest)) return null;
-        return {
-            url: cleanText(pullRequest.url, 500),
-            status: pullRequest.mergedAt || pullRequest.state === "MERGED"
-                ? "merged"
-                : cleanText(pullRequest.state || "open", 40).toLowerCase(),
-            mergedAt: pullRequest.mergedAt || null,
-            title: cleanText(pullRequest.title, 240),
-        };
-    } catch (error) {
-        const detail = cleanText(`${error?.stderr || ""}\n${error?.message || error}`, 1600);
-        if (/no pull requests found|could not resolve to a pullrequest/i.test(detail)) return null;
-        throw new Error(`Unable to check the automation pull request: ${detail}`);
-    }
 }
 
 async function refreshRemoteState(entry, { force = false } = {}) {
@@ -626,156 +370,6 @@ async function refreshRemoteState(entry, { force = false } = {}) {
         }
     })();
     return entry.remoteCheckPromise;
-}
-
-function proposalPrompt(entry) {
-    return `Analyze the repository at ${entry.state.repoRoot} without modifying it.
-
-Your goal is to propose the smallest useful Squad for this repository. Infer responsibilities from the actual architecture, tests, documentation, workflows, and recurring ownership boundaries. Do not ask the user to assign hypothetical tasks during onboarding.
-
-When complete, call the ${TOOL_PROPOSAL} tool exactly once with:
-- instanceId: ${entry.instanceId}
-- repositoryName
-- summary: a concise repository-specific explanation
-- signals: 3-8 concrete repository signals
-- members: 3-8 proposed members, each with id, name, role, rationale, charter, lead, and reviewer
-
-Every charter must be repository-specific and actionable. Include one lead and one independent reviewer. Do not edit files, create branches, or open pull requests during this analysis.`;
-}
-
-function missionPrompt(entry, goal) {
-    const team = entry.state.members.map(({ id, name, role }) => ({ id, name, role }));
-    return `Plan a Squad mission for the repository at ${entry.state.repoRoot}.
-
-Goal:
-${goal}
-
-Authorized roster:
-${JSON.stringify(team, null, 2)}
-
-Inspect the repository as needed, but do not modify it. Decompose the goal into the smallest coherent set of tasks and assign each task to the member most likely to handle it well. The user should only need to override exceptional assignments.
-
-When complete, call ${TOOL_MISSION} exactly once with:
-- instanceId: ${entry.instanceId}
-- goal
-- summary
-- tasks: id, title, description, ownerId, rationale
-
-Use only ownerId values from the authorized roster.`;
-}
-
-function automationPullRequestPrompt(entry) {
-    return `Create the first of two Squad onboarding pull requests in ${entry.state.repoRoot}.
-
-This pull request bootstraps repository automation only. The approved Squad proposal remains in the canvas and will be delivered later through a separate Cast pull request.
-
-Work in the current Copilot project-session worktree.
-
-Requirements:
-1. Verify the GitHub Agentic Workflows extension is available. Install github/gh-aw only if it is missing.
-2. Add the Squad dispatcher, implementation worker, and reviewer in this order:
-   gh aw add bradygaster/squad/workflows/squad.md@dev bradygaster/squad/workflows/squad-implement-worker.md@dev bradygaster/squad/workflows/squad-review.md@dev
-3. If gh-aw reports a restricted-secret safe-update approval requirement, stop and surface the exact warning instead of approving it automatically.
-4. Do not generate or modify .squad/**, .github/agents/squad.agent.md, or meet-the-squad.md in this pull request.
-5. Confirm the diff is limited to the gh-aw bootstrap surface: .gitattributes, .github/workflows/**, and .github/skills/**.
-6. Commit, push the project-session branch, and open a reviewable pull request titled to make clear that it installs Squad automation.
-7. Never merge the pull request, change repository Actions settings, or bypass branch protection.
-
-If npm access becomes necessary, first run:
-npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
-
-Finish with the pull request URL on its own line.`;
-}
-
-function charterPullRequestPrompt(entry) {
-    const changes = entry.state.members
-        .filter((member) => member.dirty)
-        .map((member) => ({
-            id: member.id,
-            name: member.name,
-            charterPath: member.charterPath,
-            role: member.draftRole || member.role,
-            charter: member.draftCharter || member.charter,
-        }));
-    return `Apply the confirmed Squad charter changes in ${entry.state.repoRoot}.
-
-Approved changes:
-${JSON.stringify(changes, null, 2)}
-
-Only edit the listed Squad member records and charter files. Preserve all other team configuration. Validate the resulting Squad state, commit, push the project-session branch, and open a reviewable pull request. Never merge it.
-
-If npm access becomes necessary, first run:
-npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
-
-Finish with the pull request URL on its own line.`;
-}
-
-function executeMissionPrompt(entry) {
-    const mission = entry.state.mission;
-    return `Execute this confirmed Squad mission in ${entry.state.repoRoot}.
-
-Goal:
-${mission.goal}
-
-Approved plan:
-${JSON.stringify(mission.tasks, null, 2)}
-
-Execution rules:
-1. The current project session is the sole writer to the candidate branch.
-2. Use separate agent contexts for specialist investigation and evidence when useful.
-3. Follow the approved ownership plan unless a repository fact makes it impossible; surface that conflict instead of silently rerouting.
-4. Synthesize one candidate diff, run targeted validation, then perform an independent review of the exact candidate.
-5. Address blocking review findings, revalidate, commit, push, and open a pull request.
-6. Never merge the pull request or bypass branch protection.
-
-If npm access becomes necessary, first run:
-npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
-
-Finish with the pull request URL on its own line.`;
-}
-
-async function runAgentOperation(entry, kind, prompt) {
-    if (entry.state.operation?.status === "running") return;
-    await updateState(entry, (state) => {
-        state.operation = { kind, status: "running", message: "Copilot is working…" };
-    });
-    try {
-        const response = await session.sendAndWait({ prompt }, 15 * 60 * 1000);
-        const content = responseContent(response);
-        if (kind === "analyze" && entry.state.members.length > 0) return;
-        if (kind === "plan" && entry.state.mission?.tasks?.length > 0) return;
-
-        const prUrl = pullRequestFrom(content);
-        await updateState(entry, (state) => {
-            state.operation = {
-                kind,
-                status: prUrl ? "complete" : "error",
-                message: prUrl
-                    ? "Pull request created."
-                    : "Copilot finished without returning the expected structured result.",
-            };
-            if (prUrl) {
-                state.pullRequest = { url: prUrl, createdAt: new Date().toISOString(), kind, status: "open" };
-                if (kind === "automation-pr") {
-                    state.onboarding ||= { automation: null, cast: null, syncError: "" };
-                    state.onboarding.automation = {
-                        url: prUrl,
-                        status: "open",
-                        mergedAt: null,
-                        title: "",
-                    };
-                }
-            }
-        });
-    } catch (error) {
-        await updateState(entry, (state) => {
-            state.operation = {
-                kind,
-                status: "error",
-                message: cleanText(error?.message || error, 1200),
-            };
-        });
-    }
 }
 
 async function parseBody(req) {
