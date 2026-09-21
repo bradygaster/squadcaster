@@ -216,6 +216,39 @@ If comment retrieval fails after the issue and Cast pull request are observed,
 the last complete classification is retained. Without a prior classification,
 the state is unknown rather than `partial`.
 
+The repository adapter implements this contract with paginated REST reads:
+
+- workflow definitions and default-branch workflow-run history
+- all-state pull requests and issues, with pull requests removed from the
+  issue endpoint's mixed response
+- comments only after the shared classifier selects one exact canonical
+  research issue
+
+Every collection request uses `per_page=100`, `--paginate`, and `--slurp`; a
+capped search result is never used to prove uniqueness. A normal refresh costs
+four REST requests when no unique research issue exists and five when its
+comments must be hydrated. Transient rate-limit, timeout, connection-reset, and
+5xx failures receive bounded retries. Permission and structural failures remain
+visible without retry loops.
+
+The repository snapshot exposes the classifier result as `bootstrap`. Its
+cached discovery inputs are retained independently under:
+
+```text
+sourceState.bootstrap.workflows
+sourceState.bootstrap.workflowRuns
+sourceState.bootstrap.pullRequests
+sourceState.bootstrap.issues
+sourceState.bootstrap.comments
+```
+
+Each entry uses the existing `{ data, fetchedAt, status, error }` source
+contract. A successful source can advance its own cache while another remains
+stale. The adapter passes only freshness metadata to the pure classifier and
+keeps the raw cached evidence for the next refresh. The classifier's guarded
+`lastClassified` state is therefore the sole authority for last-complete
+retention; discovery does not duplicate or weaken its precedence rules.
+
 ## Renderer direction
 
 The dashboard should add:

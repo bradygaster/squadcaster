@@ -43,6 +43,11 @@ function remoteActivityRunJson({ rosterByOid = {}, issues = [] } = {}) {
     const blobCalls = [];
     const runJson = async (args) => {
         if (args[0] === "api") {
+            if (!args[1].includes("/git/blobs/")) {
+                if (args[1].includes("/actions/workflows?")) return [{ workflows: [] }];
+                if (args[1].includes("/actions/runs?")) return [{ workflow_runs: [] }];
+                return [[]];
+            }
             const oid = args[1].split("/").at(-1);
             blobCalls.push(oid);
             const configured = rosterByOid[oid];
@@ -1296,7 +1301,10 @@ test("excluded cached activity preserves refresh timestamps and resumes after re
     });
 
     assert.equal(refreshedActivity.refreshed, true);
-    assert.deepEqual(calls.map((args) => args[0]), ["repo", "issue", "pr", "run"]);
+    assert.deepEqual(
+        calls.map((args) => args[0]),
+        ["repo", "issue", "pr", "run", "api", "api", "api", "api"],
+    );
     assert.equal(refreshed.goals.length, 1);
     assert.equal(refreshed.goals[0].id, `${nameWithOwner}#58`);
     assert.equal(refreshed.repositories[0].included, true);
@@ -1422,7 +1430,10 @@ test("forced discovery omission preserves the current repository exclusion", asy
         forceAll: true,
     });
 
-    assert.deepEqual(calls.map((args) => args[0]), ["api", "repo", "issue", "pr", "run"]);
+    assert.deepEqual(
+        calls.map((args) => args[0]),
+        ["api", "repo", "issue", "pr", "run", "api", "api", "api", "api"],
+    );
     assert.equal(global.registry.rosters[nameWithOwner].status, "fresh");
     assert.equal(global.registry.rosters[nameWithOwner].members.length, 1);
     assert.equal(refreshed.goals[0].owner.name, "Frontend");
@@ -1590,7 +1601,10 @@ test("surfaces a missing remote roster without downloading and uses assignee fal
 
     assert.equal(aggregate.goals[0].owner.name, "octocat");
     assert.equal(aggregate.goals[0].owner.source, "assignee");
-    assert.equal(calls.filter((args) => args[0] === "api").length, 0);
+    assert.equal(
+        calls.filter((args) => args[0] === "api" && args[1].includes("/git/blobs/")).length,
+        0,
+    );
     assert.match(aggregate.errors[0].message, /does not contain .squad\/team.md/);
 });
 
