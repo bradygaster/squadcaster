@@ -464,7 +464,18 @@ test("requires exact task and epic issue identity and observed binding labels", 
 
     const handoff = taskGoal(snapshot({ issues: missingLabel })).handoff;
     assert.equal(handoff.readiness.state, "unknown");
-    assert.match(handoff.readiness.reasons.join(" "), /not observed on task issue/i);
+    assert.match(handoff.readiness.reasons.join(" "), /ownership is not validated/i);
+
+    const omittedLabels = readyIssues({
+        labels: [{ name: "squad" }],
+    });
+    omittedLabels.find((candidate) => candidate.number === 11).labels = [{ name: "squad" }];
+    omittedLabels[0].comments = [activationComment([
+        binding({ label: "", epic_label: "" }),
+    ])];
+    const omitted = taskGoal(snapshot({ issues: omittedLabels })).handoff;
+    assert.equal(omitted.readiness.state, "unknown");
+    assert.match(omitted.readiness.reasons.join(" "), /ownership is not validated/i);
 });
 
 test("activation identity collisions fail the whole envelope closed", () => {
@@ -506,7 +517,7 @@ test("activation identity collisions fail the whole envelope closed", () => {
     );
 
     issues[0].comments = [activationComment([
-        binding({ issue: "#10", label: "" }),
+        binding({ issue: "#10", label: "", omission_reason: "non-roster" }),
     ])];
     const rootCollision = parseActivationEvidence({
         issues,
@@ -644,7 +655,8 @@ test("uses active runs, authoritative Copilot assignment, and enabled session ev
             labels: [{ name: "squad" }, { name: "squad:copilot" }, { name: "squad:kint" }],
         },
     })).handoff;
-    assert.equal(labelOnly.readiness.state, "ready");
+    assert.equal(labelOnly.readiness.state, "unknown");
+    assert.match(labelOnly.readiness.reasons.join(" "), /ownership is not validated/i);
 
     const assigned = taskGoal(snapshot({
         task: {

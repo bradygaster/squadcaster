@@ -162,12 +162,22 @@ function validateBinding(raw, repository, issueByNumber) {
             .map((value) => normalized(typeof value === "string" ? value : value?.name))
             .filter(Boolean),
     );
-    if (label && !taskLabels.has(normalized(label))) {
-        return { error: `Activation binding label ${label} is not observed on task issue #${number}.` };
+    const validatesLabel = (labels, reportedLabel, omissionReason) => {
+        if (!labels.has("squad")) return false;
+        const agentLabels = [...labels].filter((value) => value.startsWith("squad:"));
+        if (reportedLabel) {
+            return agentLabels.length === 1 &&
+                agentLabels[0] === normalized(reportedLabel);
+        }
+        return ["multi-owner", "non-roster"].includes(normalized(omissionReason)) &&
+            agentLabels.length === 0;
+    };
+    if (!validatesLabel(taskLabels, label, raw.omission_reason)) {
+        return { error: `Activation binding ownership is not validated on task issue #${number}.` };
     }
-    if (epicLabel && !epicLabels.has(normalized(epicLabel))) {
+    if (!validatesLabel(epicLabels, epicLabel, raw.epic_omission_reason)) {
         return {
-            error: `Activation binding epic label ${epicLabel} is not observed on epic issue #${epicIssueNumber}.`,
+            error: `Activation binding ownership is not validated on epic issue #${epicIssueNumber}.`,
         };
     }
     return {

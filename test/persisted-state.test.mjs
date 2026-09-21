@@ -115,6 +115,7 @@ test("preserves normalized read-only handoff readiness across cache migration", 
             fetchedAt: "2026-09-21T12:00:00Z",
             goals: [{
                 id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
                 issue: { number: 12 },
                 handoff: {
                     schemaVersion: 1,
@@ -470,6 +471,75 @@ test("downgrades cached ready handoff with malformed activation provenance", () 
                         automatedHandoffAvailable: true,
                     },
                     activation: {},
+                    acceptanceCriteria: [{ text: "Works" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [],
+                },
+            }],
+        },
+    });
+    const handoff = normalized.activity.goals[0].handoff;
+
+    assert.equal(handoff.activation, null);
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+});
+
+test("rejects cached activation with foreign repository or contradictory agent", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 12 },
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: true,
+                    },
+                    activation: {
+                        schemaVersion: "1",
+                        artifactKind: "activated",
+                        issue: "evil/repo#12",
+                        issueNumber: 12,
+                        epicIssue: "evil/repo#11",
+                        epicIssueNumber: 11,
+                        rootIssue: "evil/repo#10",
+                        rootIssueNumber: 10,
+                        task: "3",
+                        epic: "2.1",
+                        agent: "missing",
+                        epicAgents: ["other"],
+                        rootIssueUrl: "https://github.com/evil/repo/issues/10",
+                        artifactUrl: "https://github.com/evil/repo/issues/10#issuecomment-100",
+                    },
                     acceptanceCriteria: [{ text: "Works" }],
                     acceptanceCriteriaComplete: true,
                     leaf: { subIssues: [], complete: true },

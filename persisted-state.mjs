@@ -100,11 +100,12 @@ function positiveInteger(value) {
     return Number.isInteger(value) && value > 0;
 }
 
-function qualifiedIssueMatches(value, number) {
-    return new RegExp(`#${number}$`).test(String(value || ""));
+function qualifiedIssueMatches(value, repository, number) {
+    return String(value || "").toLowerCase() ===
+        `${String(repository || "").toLowerCase()}#${number}`;
 }
 
-function normalizeActivation(value, expectedIssueNumber) {
+function normalizeActivation(value, expectedRepository, expectedIssueNumber) {
     if (!isRecord(value)) return null;
     const issueNumber = value.issueNumber;
     const epicIssueNumber = value.epicIssueNumber;
@@ -112,6 +113,8 @@ function normalizeActivation(value, expectedIssueNumber) {
     const epicAgents = Array.isArray(value.epicAgents)
         ? value.epicAgents.map(String).filter(Boolean)
         : [];
+    const normalizedAgent = String(value.agent || "").trim().toLowerCase();
+    const normalizedEpicAgents = epicAgents.map((agent) => agent.toLowerCase());
     const valid = value.schemaVersion === "1" &&
         ["activated", "phases-activated", "plan-accepted", "phases-accepted"]
             .includes(value.artifactKind) &&
@@ -122,14 +125,16 @@ function normalizeActivation(value, expectedIssueNumber) {
         issueNumber !== epicIssueNumber &&
         issueNumber !== rootIssueNumber &&
         epicIssueNumber !== rootIssueNumber &&
-        qualifiedIssueMatches(value.issue, issueNumber) &&
-        qualifiedIssueMatches(value.epicIssue, epicIssueNumber) &&
-        qualifiedIssueMatches(value.rootIssue, rootIssueNumber) &&
+        Boolean(String(expectedRepository || "").trim()) &&
+        qualifiedIssueMatches(value.issue, expectedRepository, issueNumber) &&
+        qualifiedIssueMatches(value.epicIssue, expectedRepository, epicIssueNumber) &&
+        qualifiedIssueMatches(value.rootIssue, expectedRepository, rootIssueNumber) &&
         Boolean(String(value.task || "").trim()) &&
         Boolean(String(value.epic || "").trim()) &&
-        Boolean(String(value.agent || "").trim()) &&
+        Boolean(normalizedAgent) &&
         epicAgents.length > 0 &&
-        new Set(epicAgents.map((agent) => agent.toLowerCase())).size === epicAgents.length &&
+        new Set(normalizedEpicAgents).size === epicAgents.length &&
+        normalizedEpicAgents.includes(normalizedAgent) &&
         Boolean(String(value.rootIssueUrl || "").trim()) &&
         Boolean(String(value.artifactUrl || "").trim());
     return valid
@@ -140,7 +145,7 @@ function normalizeActivation(value, expectedIssueNumber) {
         : null;
 }
 
-function normalizeHandoff(handoff, expectedIssueNumber) {
+function normalizeHandoff(handoff, expectedRepository, expectedIssueNumber) {
     if (!isRecord(handoff)) return null;
     if (Number(handoff.schemaVersion) !== 1) {
         return safeUnknownHandoff("Cached handoff readiness uses an unsupported schema.");
@@ -166,7 +171,11 @@ function normalizeHandoff(handoff, expectedIssueNumber) {
             sourceStates: isRecord(readiness.sourceStates) ? readiness.sourceStates : {},
             automatedHandoffAvailable: Boolean(readiness.automatedHandoffAvailable),
         },
-        activation: normalizeActivation(handoff.activation, expectedIssueNumber),
+        activation: normalizeActivation(
+            handoff.activation,
+            expectedRepository,
+            expectedIssueNumber,
+        ),
         acceptanceCriteria: recordArray(handoff.acceptanceCriteria),
         acceptanceCriteriaComplete: Boolean(handoff.acceptanceCriteriaComplete),
         leaf: isRecord(handoff.leaf)
@@ -257,7 +266,11 @@ function normalizeGoal(goal) {
                 generatedGoals: recordArray(goal.bootstrap.generatedGoals),
             }
             : undefined,
-        handoff: normalizeHandoff(goal.handoff, Number(goal.issue?.number)),
+        handoff: normalizeHandoff(
+            goal.handoff,
+            goal.repository?.nameWithOwner,
+            Number(goal.issue?.number),
+        ),
     };
 }
 
