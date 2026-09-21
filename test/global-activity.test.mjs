@@ -423,6 +423,111 @@ test("records dependency-driven aggregate phase changes with dependency freshnes
     );
 });
 
+test("dependency observation does not contaminate raw repository snapshots across recovery", async () => {
+    const frontendName = "octodemo/frontend";
+    const backendName = "octodemo/backend";
+    const frontend = buildActivitySnapshot({
+        repository: repository(frontendName),
+        issues: [issue(frontendName, 57, `Blocked by:\n- ${backendName}#41`)],
+        fetchedAt: "2026-09-21T12:00:00Z",
+    });
+    const backendOpen = buildActivitySnapshot({
+        repository: repository(backendName),
+        issues: [issue(backendName, 41)],
+        fetchedAt: "2026-09-21T12:00:00Z",
+    });
+    const registry = {
+        discoveredAt: new Date().toISOString(),
+        repositories: [
+            {
+                ...repository(frontendName),
+                owner: "octodemo",
+                included: true,
+                squadDetected: true,
+            },
+            {
+                ...repository(backendName),
+                owner: "octodemo",
+                included: true,
+                squadDetected: true,
+            },
+        ],
+        snapshots: {
+            [frontendName]: frontend,
+            [backendName]: backendOpen,
+        },
+    };
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry,
+        runJson: async () => {
+            throw new Error("No GitHub request expected.");
+        },
+    });
+    await global.refresh({
+        currentRepository: frontendName,
+        currentSnapshot: frontend,
+    });
+    global.registry.repositories.find(
+        (candidate) => candidate.nameWithOwner === frontendName,
+    ).lastAttemptedRefresh = new Date().toISOString();
+
+    const backendPartialClosed = buildActivitySnapshot({
+        repository: repository(backendName),
+        fetchedAt: "2026-09-21T12:01:00Z",
+        sourceState: {
+            issues: {
+                data: [issue(backendName, 41, "", "CLOSED")],
+                fetchedAt: "2026-09-21T12:01:00Z",
+                status: "fresh",
+            },
+            pullRequests: {
+                data: [],
+                fetchedAt: "2026-09-21T12:00:00Z",
+                status: "stale",
+                error: "temporary failure",
+            },
+            workflowRuns: {
+                data: [],
+                fetchedAt: "2026-09-21T12:01:00Z",
+                status: "fresh",
+            },
+        },
+        errors: [{ source: "pull requests", message: "temporary failure" }],
+    });
+    const partial = await global.refresh({
+        currentRepository: backendName,
+        currentSnapshot: backendPartialClosed,
+    });
+    const partialFrontend = partial.goals.find((goal) => goal.id === `${frontendName}#57`);
+    assert.equal(partialFrontend.phase, "queued");
+    assert.equal(partialFrontend.lifecycleHistory.transitions.at(-1).freshness.status, "partial");
+    assert.equal(global.registry.snapshots[frontendName].stale, false);
+    assert.deepEqual(global.registry.snapshots[frontendName].errors, []);
+    assert.equal(
+        Object.keys(global.registry.snapshots[frontendName].sourceState)
+            .some((source) => source.startsWith("dependency:")),
+        false,
+    );
+
+    const backendRecoveredOpen = buildActivitySnapshot({
+        repository: repository(backendName),
+        issues: [issue(backendName, 41)],
+        fetchedAt: "2026-09-21T12:02:00Z",
+    });
+    const recovered = await global.refresh({
+        currentRepository: backendName,
+        currentSnapshot: backendRecoveredOpen,
+    });
+    const recoveredFrontend = recovered.goals.find((goal) => goal.id === `${frontendName}#57`);
+    assert.equal(recoveredFrontend.phase, "blocked");
+    assert.equal(recoveredFrontend.lifecycleHistory.transitions.at(-1).from, "queued");
+    assert.equal(recoveredFrontend.lifecycleHistory.transitions.at(-1).to, "blocked");
+    assert.equal(recovered.stale, false);
+    assert.deepEqual(recovered.errors, []);
+    assert.deepEqual(global.registry.snapshots[frontendName].errors, []);
+});
+
 test("repository discovery preserves exclusions and ignores non-Squad repositories", async () => {
     const registry = {
         repositories: [{ nameWithOwner: "octodemo/squad", included: false }],

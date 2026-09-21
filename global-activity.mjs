@@ -713,10 +713,13 @@ export class GitHubGlobalActivity {
                     { included: true },
                 );
                 this.registry.lifecycleHistory = observed.lifecycleHistory;
-                this.registry.snapshots[key] = observed.snapshot;
+                this.registry.snapshots[key] = attachLifecycleHistory(
+                    snapshot,
+                    this.registry.lifecycleHistory,
+                );
             } else {
                 this.registry.snapshots[key] = attachLifecycleHistory(
-                    aggregateSnapshot,
+                    snapshot,
                     this.registry.lifecycleHistory,
                 );
             }
