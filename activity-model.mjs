@@ -265,13 +265,14 @@ function parseArtifacts(comments, issueNumber) {
     for (const comment of Array.isArray(comments) ? comments : []) {
         const body = String(comment?.body || "");
         const blocks = body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
+        const commentArtifacts = [];
         for (const block of blocks) {
             let value;
             try {
                 value = JSON.parse(block[1]);
             } catch {
                 if (!/squad_artifact/i.test(block[1]) && !/Structured data:/i.test(body)) continue;
-                artifacts.push({
+                commentArtifacts.push({
                     kind: "unknown",
                     schemaVersion: "unknown",
                     originIssue: null,
@@ -319,7 +320,7 @@ function parseArtifacts(comments, issueNumber) {
                     validationReason = parsedBindings.error;
                 }
             }
-            artifacts.push({
+            commentArtifacts.push({
                 kind,
                 schemaVersion,
                 originIssue,
@@ -331,6 +332,16 @@ function parseArtifacts(comments, issueNumber) {
                 bindings,
             });
         }
+        const activationArtifacts = commentArtifacts.filter((artifact) =>
+            ACTIVATION_ARTIFACT_KINDS.has(artifact.kind));
+        if (activationArtifacts.length > 1) {
+            for (const artifact of activationArtifacts) {
+                artifact.validation = "malformed";
+                artifact.validationReason = "duplicate-activation-artifacts";
+                artifact.bindings = null;
+            }
+        }
+        artifacts.push(...commentArtifacts);
     }
     return artifacts.sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
 }

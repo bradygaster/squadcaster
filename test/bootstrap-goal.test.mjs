@@ -489,6 +489,48 @@ test("duplicate activation binding blocks fail closed", () => {
     assert.deepEqual(goal.bootstrap.generatedGoals, []);
 });
 
+test("duplicate activation artifact envelopes fail closed", () => {
+    const binding = {
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    };
+    const duplicateArtifacts = artifactComment("activated", {
+        bindings: [binding],
+        createdAt: "2026-09-21T11:00:00Z",
+    });
+    duplicateArtifacts.body += `\nStructured data:\n\`\`\`json\n${JSON.stringify({
+        squad_artifact: "activated",
+        schema_version: "1",
+        origin_issue: 6,
+        phases: [],
+    })}\n\`\`\``;
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        duplicateArtifacts,
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic 1.1", ["squad", "squad:dev"]),
+            goalIssue(21, "Implement the feature", ["squad", "squad:dev"]),
+        ],
+    });
+    const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+    const activated = goal.artifacts.filter((artifact) => artifact.kind === "activated");
+
+    assert.equal(activated.length, 2);
+    assert.ok(activated.every((artifact) =>
+        artifact.validation === "malformed" &&
+        artifact.validationReason === "duplicate-activation-artifacts"));
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+});
+
 test("links generated implementation goals only from validated activation bindings", () => {
     const bindings = [{
         task: "1",
