@@ -254,9 +254,33 @@ export function parseActivationEvidence({
     };
 
     for (const [rootNumber, issueComments] of commentsByIssue) {
-        for (const comment of issueComments) {
+        const activationComments = issueComments
+            .map((comment, index) => ({
+                comment,
+                index,
+                parsed: parseStructuredArtifact(String(comment?.body || "")),
+                createdAt: timestamp(comment?.createdAt || comment?.created_at) || "",
+            }))
+            .filter(({ parsed }) =>
+                Boolean(parsed.error) ||
+                ACTIVATION_KINDS.has(parsed.artifact?.squad_artifact))
+            .sort((left, right) =>
+                left.createdAt.localeCompare(right.createdAt) ||
+                left.index - right.index);
+        const latestActivation = activationComments.at(-1);
+        if (!latestActivation) continue;
+        if (
+            activationComments.filter(({ createdAt }) =>
+                createdAt === latestActivation.createdAt).length > 1
+        ) {
+            const reason = "Multiple activation bindings share the latest artifact timestamp.";
+            addError(rootNumber, reason);
+            globalErrors.push(reason);
+            continue;
+        }
+        for (const { comment, parsed } of [latestActivation]) {
             const body = String(comment?.body || "");
-            const { artifact, error } = parseStructuredArtifact(body);
+            const { artifact, error } = parsed;
             if (error) {
                 addError(rootNumber, error);
                 globalErrors.push(error);

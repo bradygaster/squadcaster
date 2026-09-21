@@ -133,6 +133,30 @@ test("derives ready only from complete activated leaf evidence", () => {
     assert.equal(handoff.readiness.automatedHandoffAvailable, false);
 });
 
+test("uses only the latest activation artifact for handoff authority", () => {
+    const issues = readyIssues();
+    issues[0].comments.push(activationComment([
+        binding({
+            task: "4",
+            issue: "#13",
+        }),
+    ], {
+        url: "https://github.com/octodemo/demo/issues/10#issuecomment-101",
+        createdAt: "2026-09-21T18:45:00Z",
+    }));
+    issues.push(issue(13, {
+        labels: [{ name: "squad" }, { name: "squad:kint" }],
+    }));
+
+    const evidence = parseActivationEvidence({
+        issues,
+        repository: repository.nameWithOwner,
+    });
+
+    assert.equal(evidence.get(12).activation, null);
+    assert.equal(evidence.get(13).activation?.issue, "octodemo/demo#13");
+});
+
 test("keeps task readiness independent from mechanism availability", () => {
     const handoff = taskGoal(snapshot({
         mechanismAvailability: {
