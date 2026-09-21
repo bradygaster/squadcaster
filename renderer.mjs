@@ -1120,9 +1120,11 @@ export function renderHtml() {
 
     function stageHtml(phase, goals) {
       const selected = expandedStage === phase;
-      const owners = [...new Map(goals.map(goal => {
-        const name = goal.owner?.name || "Unknown";
-        return [goal.owner?.id || name, name];
+      const owners = [...new Map(goals.flatMap(goal => {
+        const owner = goal.owner;
+        const name = String(owner?.name || "").trim();
+        if (!name || name.toLowerCase() === "unknown" || owner?.source === "unknown") return [];
+        return [[owner?.id || name, name]];
       })).values()];
       const visibleOwners = owners.slice(0, 2);
       return \`

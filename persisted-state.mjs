@@ -27,6 +27,16 @@ function recordArray(value) {
     return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+function stripReservedIdentity(value) {
+    if (Array.isArray(value)) return value.map(stripReservedIdentity);
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([key]) => key !== "agentIdentity")
+            .map(([key, nested]) => [key, stripReservedIdentity(nested)]),
+    );
+}
+
 function normalizeRepository(repository) {
     return {
         ...repository,
@@ -35,9 +45,8 @@ function normalizeRepository(repository) {
 }
 
 function normalizeGoal(goal) {
-    const { agentIdentity: _unvalidatedAgentIdentity, ...supportedGoal } = goal;
     return {
-        ...supportedGoal,
+        ...goal,
         repository: isRecord(goal.repository) ? normalizeRepository(goal.repository) : {},
         issue: isRecord(goal.issue) ? goal.issue : {},
         owner: isRecord(goal.owner) ? goal.owner : null,
@@ -65,6 +74,6 @@ export function normalizePersistedState(value) {
     const source = isRecord(value) ? value : {};
     return {
         version: 3,
-        activity: normalizeActivity(source.activity),
+        activity: normalizeActivity(stripReservedIdentity(source.activity)),
     };
 }

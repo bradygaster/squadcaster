@@ -348,6 +348,18 @@ test("supports stage expansion and a contained modal focus cycle", async ({ page
     await expect(page.locator("body")).not.toHaveCSS("overflow", "hidden");
 });
 
+test("does not count or render unknown owners as observed", async ({ page }) => {
+    const nextState = fixture.state();
+    const queuedGoal = nextState.activity.goals.find(goal => goal.phase === "queued");
+    queuedGoal.owner = { id: "", name: "Unknown", source: "unknown" };
+    fixture.emit(nextState);
+
+    const queuedStage = page.locator(".stage-card.queued");
+    await expect(queuedStage.locator(".stage-agents")).toHaveAttribute("aria-label", "No observed owners");
+    await expect(queuedStage.locator(".stage-foot")).toHaveText("0 owners observed");
+    await expect(queuedStage.locator(".agent-chip")).toHaveCount(0);
+});
+
 test("opens blocked goals from the Needs attention section", async ({ page }) => {
     await page.getByText("Browse goals").click();
     await page.locator('[data-action="phase-filter"][data-phase="blocked"]').click();

@@ -36,8 +36,7 @@ validates and versions an authoritative source:
 
 ```js
 agentIdentity: {
-  status: "resolved" | "unknown" | "stale" | "unavailable" |
-    "malformed" | "forbidden" | "deleted",
+  status: "resolved" | "unknown" | "deleted",
   record: null | {
     schemaVersion: 1,
     id: string,             // Opaque, immutable, producer-scoped ID.
@@ -49,7 +48,14 @@ agentIdentity: {
   source: null | {
     producer: string,       // Stable producer namespace.
     revision: string,       // Opaque producer revision or content identity.
-    fetchedAt: string       // Successful or attempted observation time.
+    status: "fresh" | "stale" | "unavailable" | "missing" |
+      "malformed" | "forbidden" | "partial",
+    lastAttemptedRefresh: string,
+    lastSuccessfulRefresh: string | null,
+    error: null | {
+      kind: "fetch_failed" | "permission_denied" | "malformed" | "partial",
+      message: string
+    }
   }
 }
 ```
@@ -69,34 +75,39 @@ must not be inferred from a temporary fetch failure.
 
 | Condition | Normalized status | Cache behavior |
 |---|---|---|
-| No validated producer is configured | `unknown` | Do not create the field in the current contract and do not consult candidate fields. |
-| Successful fetch with an explicit valid binding and record | `resolved` | Replace the cached record atomically at the producer revision. |
-| Successful fetch with no binding or no record | `unknown` | Treat the identity as absent. Do not retain or infer a prior identity for that work item. |
-| Explicit producer tombstone | `deleted` | Remove the cached active record and never render the old name or avatar as current. |
-| Fetch failure after a valid cached record | `stale` | Preserve the last valid record with its prior revision and visibly label it stale. |
-| Fetch failure without a valid cached record | `unavailable` | Keep `record: null`; never fall back to owner, participant, or roster data. |
-| Permission denial after a valid cached record | `stale` | Preserve the last valid record, label it stale, and expose the permission error. |
-| Permission denial without a valid cached record | `forbidden` | Keep `record: null` and expose the permission boundary. |
-| Malformed replacement after a valid cached record | `stale` | Reject the replacement atomically and preserve the last valid record with an error. |
-| Malformed data without a valid cached record | `malformed` | Keep `record: null`; do not partially normalize or guess missing values. |
-| Partially valid producer response | Per binding | Accept independently valid records only if the producer contract permits partial responses; affected invalid or missing bindings follow the rules above. |
+| No validated producer is configured | Field absent in the current contract | Do not consult candidate fields. |
+| Successful fetch with an explicit valid binding and record | Identity `resolved`; source `fresh` | Replace the cached record atomically, and set both refresh timestamps to the attempt time. |
+| Successful fetch with no binding or no record | Identity `unknown`; source `missing` | Treat the identity as absent, clear the work item's prior record, and advance both refresh timestamps. |
+| Explicit producer tombstone | Identity `deleted`; source `fresh` | Remove the cached active record, retain the tombstone revision, and never render the old name or avatar as current. |
+| Fetch failure after a valid cached record | Identity `resolved`; source `stale` | Preserve the last valid record and successful timestamp; advance only the attempted timestamp and expose `fetch_failed`. |
+| Fetch failure without a valid cached record | Identity `unknown`; source `unavailable` | Keep `record: null`; advance only the attempted timestamp and expose `fetch_failed`. |
+| Permission denial after a valid cached record | Identity `resolved`; source `stale` | Preserve the last valid record and successful timestamp; advance only the attempted timestamp and expose `permission_denied`. |
+| Permission denial without a valid cached record | Identity `unknown`; source `forbidden` | Keep `record: null`; advance only the attempted timestamp and expose `permission_denied`. |
+| Malformed replacement after a valid cached record | Identity `resolved`; source `stale` | Reject the replacement atomically, preserve the last valid record and successful timestamp, advance only the attempted timestamp, and expose `malformed`. |
+| Malformed data without a valid cached record | Identity `unknown`; source `malformed` | Keep `record: null`; advance only the attempted timestamp and expose `malformed`. |
+| Partially valid producer response | Identity per valid binding; source `partial` | Accept independently valid records only if the producer contract permits partial responses; advance the successful timestamp only for accepted records and expose a bounded `partial` error for affected bindings. |
 
 Identity cache freshness must be independent from issues, pull requests,
 workflow runs, and rosters. A successful refresh of those sources cannot make
 identity fresh, and an identity failure cannot make their observed fields
-stale.
+stale. `lastAttemptedRefresh` records every completed attempt.
+`lastSuccessfulRefresh` records only the latest accepted authoritative record
+or authoritative missing result; errors never advance it. Error messages are
+bounded presentation-safe summaries, not raw producer payloads.
 
 ## Renderer behavior
 
 - Until a producer is validated, render goal owners as **owners**, roster
   entries as **roster entries**, and GitHub users or teams as participants.
   Do not show an agent identity or avatar surface.
-- `resolved` may show the authoritative display name and optional avatar.
-- `stale` may show the cached authoritative record only with a visible stale
-  label and source error affordance.
-- `unknown`, `unavailable`, `malformed`, `forbidden`, and `deleted` show no
-  synthesized name, initials, avatar, or link. If the surface must be present,
-  its value is `Unknown agent`.
+- Identity `resolved` with source `fresh` may show the authoritative display
+  name and optional avatar.
+- Identity `resolved` with source `stale` or `partial` may show the cached
+  authoritative record only with a visible source-status label and error
+  affordance.
+- Identity `unknown` or `deleted`, and any source state without a valid cached
+  record, shows no synthesized name, initials, avatar, or link. If the surface
+  must be present, its value is `Unknown agent`.
 - An avatar reference is optional. Its absence does not permit a GitHub avatar
   lookup. Any future fetch must follow the producer's permission, URL, size,
   media-type, and cache rules.
