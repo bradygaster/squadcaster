@@ -112,6 +112,7 @@ test("preserves normalized read-only handoff readiness across cache migration", 
         activity: {
             ...emptyActivity(),
             schemaVersion: 2,
+            fetchedAt: "2026-09-21T12:00:00Z",
             goals: [{
                 id: "octodemo/demo#12",
                 handoff: {
@@ -159,6 +160,7 @@ test("coerces malformed handoff cache fields into renderer-safe shapes", () => {
         activity: {
             ...emptyActivity(),
             schemaVersion: 2,
+            fetchedAt: "2026-09-21T12:00:00Z",
             goals: [{
                 id: "octodemo/demo#12",
                 handoff: {
@@ -219,6 +221,7 @@ test("fails closed on unsupported or incomplete cached ready contracts", () => {
             activity: {
                 ...emptyActivity(),
                 schemaVersion: 2,
+                fetchedAt: "2026-09-21T12:00:00Z",
                 goals: [{ id: "octodemo/demo#12", handoff }],
             },
         }).activity.goals[0].handoff;
