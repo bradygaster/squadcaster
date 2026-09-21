@@ -700,9 +700,9 @@ export function renderHtml() {
     .stage-card.selected { border-color: var(--accent); background: var(--accent-soft); }
     .stage-button {
       width: 100%;
-      min-height: 108px;
+      min-height: 210px;
       display: block;
-      padding: 14px 14px 8px;
+      padding: 15px 14px 13px;
       border: 0;
       background: transparent;
       color: var(--text);
@@ -711,56 +711,38 @@ export function renderHtml() {
     }
     .stage-heading { display: flex; align-items: center; gap: 8px; }
     .stage-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
-    .stage-icon {
-      width: 22px;
-      height: 22px;
-      flex: 0 0 auto;
-      display: grid;
-      place-items: center;
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 15px;
-      line-height: 1;
-    }
     .stage-load { display: flex; align-items: baseline; gap: 7px; margin-top: 20px; }
     .stage-load b { color: var(--warning); font-size: 28px; line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; }
     .stage-load span { color: var(--muted); font-size: 12px; }
-    .stage-preview {
-      min-width: 0;
+    .stage-agents {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      min-height: 44px;
-      padding: 0 14px 10px;
+      min-height: 38px;
+      margin-top: 18px;
     }
-    .stage-goal-chip, .stage-more {
+    .agent-chip, .agent-more {
       width: 38px;
       height: 38px;
       flex: 0 0 auto;
       display: grid;
       place-items: center;
-      padding: 0;
       border: 1px solid var(--border-strong);
       border-radius: 7px;
       background: var(--bg);
       color: var(--text);
-      cursor: pointer;
       font-size: 10px;
       font-weight: var(--font-weight-semibold, 600);
-      font-variant-numeric: tabular-nums;
     }
-    .stage-goal-chip:hover, .stage-more:hover { border-color: var(--warning); }
-    .stage-card.researching .stage-goal-chip,
-    .stage-card.implementing .stage-goal-chip { border-color: var(--warning); }
-    .stage-card.reviewing .stage-goal-chip { border-color: var(--accent); }
-    .stage-card.completed .stage-goal-chip { border-color: var(--success); }
-    .stage-more { color: var(--muted); font-size: 11px; font-weight: 400; }
+    .agent-chip.tone-0 { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--bg)); }
+    .agent-chip.tone-1 { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+    .agent-chip.tone-2 { border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--bg)); }
+    .agent-chip.tone-3 { border-color: var(--focus); background: color-mix(in srgb, var(--focus) 10%, var(--bg)); }
+    .agent-more { color: var(--muted); font-size: 11px; font-weight: 400; }
     .stage-foot {
-      min-height: 35px;
-      padding: 8px 14px 10px;
-      border-top: 1px solid var(--border);
+      margin-top: 16px;
       color: var(--muted);
-      font-size: 11px;
+      font-size: 12px;
     }
     .stage-foot strong { color: var(--text); font-weight: var(--font-weight-semibold, 600); }
     .goal-trigger {
@@ -1569,38 +1551,40 @@ export function renderHtml() {
     }
 
     function stageHtml(phase, goals) {
-      const preview = goals.slice(0, 2);
       const selected = expandedStage === phase;
-      const icons = {
-        queued: "▣",
-        researching: "⌕",
-        implementing: "<>",
-        reviewing: "◇",
-        completed: "✓"
-      };
-      const pullRequests = goals.reduce((total, goal) => total + (goal.pullRequests?.length || 0), 0);
-      const workflowRuns = goals.reduce((total, goal) => total + (goal.workflowRuns?.length || 0), 0);
+      const owners = [...new Map(goals.map(goal => {
+        const name = goal.owner?.name || "Unknown";
+        return [goal.owner?.id || name, name];
+      })).values()];
+      const visibleOwners = owners.slice(0, 2);
+      const today = new Date().toDateString();
+      const runsToday = new Set(goals.flatMap(goal =>
+        (goal.workflowRuns || [])
+          .filter(run => {
+            const value = run.createdAt || run.updatedAt;
+            const date = value ? new Date(value) : null;
+            return date && !Number.isNaN(date.valueOf()) && date.toDateString() === today;
+          })
+          .map(run => run.id || run.url || \`\${run.workflow}:\${run.branch}:\${run.createdAt || run.updatedAt}\`)
+      )).size;
       return \`
         <section class="stage-card \${esc(phase)} \${selected ? "selected" : ""}">
           <button class="stage-button" data-action="expand-stage" data-phase="\${phase}" type="button"
             aria-expanded="\${selected}" aria-controls="stage-detail">
             <span class="stage-heading">
-              <span class="stage-icon" aria-hidden="true">\${icons[phase] || "·"}</span>
               <strong>\${esc(phase)}</strong>
             </span>
-            <span class="stage-load"><b>\${goals.length}</b><span>\${goals.length === 1 ? "goal" : "goals"}</span></span>
+            <span class="stage-load"><b>\${goals.length}</b><span>active</span></span>
+            <span class="stage-agents" aria-label="\${owners.length ? "Agents: " + esc(owners.join(", ")) : "No assigned agents"}">
+              \${visibleOwners.map((owner, index) => \`
+                <span class="agent-chip tone-\${index % 4}" title="\${esc(owner)}" aria-hidden="true">\${esc(initials(owner))}</span>
+              \`).join("")}
+              \${owners.length > visibleOwners.length ? \`
+                <span class="agent-more" aria-hidden="true">+\${owners.length - visibleOwners.length}</span>
+              \` : ""}
+            </span>
+            <span class="stage-foot"><strong>\${runsToday}</strong> \${runsToday === 1 ? "run" : "runs"} today</span>
           </button>
-          <div class="stage-preview">
-            \${preview.map(goal => \`
-              <button class="stage-goal-chip" data-action="open-goal" data-goal-id="\${esc(goal.id)}" type="button"
-                aria-label="Open #\${esc(goal.issue.number)}: \${esc(goal.issue.title)}">#\${esc(goal.issue.number)}</button>
-            \`).join("")}
-            \${goals.length > preview.length ? \`
-              <button class="stage-more" data-action="expand-stage" data-phase="\${phase}" type="button"
-                aria-label="Inspect \${goals.length - preview.length} more \${esc(phase)} goals">+\${goals.length - preview.length}</button>
-            \` : ""}
-          </div>
-          <div class="stage-foot"><strong>\${pullRequests}</strong> PR\${pullRequests === 1 ? "" : "s"} · <strong>\${workflowRuns}</strong> run\${workflowRuns === 1 ? "" : "s"}</div>
         </section>\`;
     }
 
