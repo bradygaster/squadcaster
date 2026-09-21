@@ -832,4 +832,17 @@ test("invalidates conflicting cached activations across one envelope", () => {
         assert.equal(handoff.readiness.state, "unknown");
         assert.equal(handoff.readiness.automatedHandoffAvailable, false);
     }
+
+    activity.goals.find((goal) => goal.issue.number === 12)
+        .issue.labels[1].name = "squad:kint";
+    activity.goals.find((goal) => goal.issue.number === 13)
+        .handoff.activation.epicAgents = ["kint", "KINT"];
+    const malformedSibling = normalizePersistedState({ activity });
+    for (const issueNumber of [12, 13]) {
+        const handoff = malformedSibling.activity.goals.find((goal) =>
+            goal.issue.number === issueNumber).handoff;
+        assert.equal(handoff.activation, null);
+        assert.equal(handoff.readiness.state, "unknown");
+        assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+    }
 });

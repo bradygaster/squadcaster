@@ -326,16 +326,25 @@ function invalidateCachedActivation(goal, reason) {
     goal.handoff.readiness.automatedHandoffAvailable = false;
 }
 
-function reconcileCachedActivations(goals) {
+function reconcileCachedActivations(goals, rawGoals) {
     const goalsById = new Map(goals.map((goal) => [
         String(goal.id || "").toLowerCase(),
         goal,
     ]));
     const envelopes = new Map();
-    for (const goal of goals) {
+    for (const [index, goal] of goals.entries()) {
         const activation = goal.handoff?.activation;
-        if (!activation) continue;
-        const key = `${String(activation.rootIssue).toLowerCase()}|${activation.artifactUrl}`;
+        const rawActivation = isRecord(rawGoals[index]?.handoff?.activation)
+            ? rawGoals[index].handoff.activation
+            : null;
+        const rootIssue = typeof rawActivation?.rootIssue === "string"
+            ? rawActivation.rootIssue.trim().toLowerCase()
+            : "";
+        const artifactUrl = typeof rawActivation?.artifactUrl === "string"
+            ? rawActivation.artifactUrl.trim()
+            : "";
+        if (!rootIssue || !artifactUrl) continue;
+        const key = `${rootIssue}|${artifactUrl}`;
         const current = envelopes.get(key) || [];
         current.push({ goal, activation });
         envelopes.set(key, current);
@@ -346,6 +355,10 @@ function reconcileCachedActivations(goals) {
         const epics = new Map();
         let valid = true;
         for (const { goal, activation } of entries) {
+            if (!activation) {
+                valid = false;
+                break;
+            }
             const taskGoal = goalsById.get(String(activation.issue).toLowerCase());
             const epicGoal = goalsById.get(String(activation.epicIssue).toLowerCase());
             const rootGoal = goalsById.get(String(activation.rootIssue).toLowerCase());
@@ -439,8 +452,10 @@ export function normalizeActivity(value) {
                 : defaults.summary.bootstrap,
         }
         : defaults.summary;
+    const rawGoals = recordArray(contract.goals);
     const goals = reconcileCachedActivations(
-        recordArray(contract.goals).map(normalizeGoal),
+        rawGoals.map(normalizeGoal),
+        rawGoals,
     );
     return {
         ...contract,
