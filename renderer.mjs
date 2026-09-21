@@ -7,6 +7,7 @@ export function renderHtml() {
   <title>Squadcaster</title>
   <style>
     :root {
+      color-scheme: light dark;
       --bg: var(--background-color-default, #ffffff);
       --surface: var(--background-color-default, #ffffff);
       --soft: color-mix(in srgb, var(--text-color-default, #1f2328) 5%, var(--background-color-default, #ffffff));
@@ -23,6 +24,24 @@ export function renderHtml() {
       --danger: var(--true-color-red, #cf222e);
       --sans: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
       --mono: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: var(--background-color-default, #0d1117);
+        --surface: var(--background-color-default, #161b22);
+        --soft: color-mix(in srgb, var(--text-color-default, #e6edf3) 7%, var(--background-color-default, #0d1117));
+        --soft-strong: color-mix(in srgb, var(--text-color-default, #e6edf3) 13%, var(--background-color-default, #0d1117));
+        --border: var(--border-color-default, #30363d);
+        --border-strong: color-mix(in srgb, var(--text-color-default, #e6edf3) 48%, var(--background-color-default, #0d1117));
+        --text: var(--text-color-default, #e6edf3);
+        --muted: var(--text-color-muted, #8b949e);
+        --focus: var(--color-focus-outline, #58a6ff);
+        --accent: var(--true-color-red, #ff7b9c);
+        --accent-soft: var(--true-color-red-muted, color-mix(in srgb, var(--accent) 16%, var(--bg)));
+        --success: var(--true-color-green, #56d364);
+        --warning: var(--true-color-yellow, #e3b341);
+        --danger: var(--true-color-red, #ff7b72);
+      }
     }
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
@@ -526,23 +545,27 @@ export function renderHtml() {
       justify-content: space-between;
       gap: 20px;
     }
+    .ops-heading h1 { font-size: clamp(28px, 4vw, 40px); }
     .refresh-status { color: var(--muted); font-size: var(--text-body-small, 12px); white-space: nowrap; }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(7, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 24px;
-    }
-    .metric {
-      padding: 15px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      margin-top: 20px;
+      overflow: hidden;
       border: 1px solid var(--border);
       border-radius: 11px;
+    }
+    .metric {
+      min-width: 0;
+      padding: 13px 14px;
+      border-right: 1px solid var(--border);
       background: var(--surface);
     }
-    .metric strong { display: block; font-size: 26px; line-height: 1.1; }
+    .metric:last-child { border-right: 0; }
+    .metric strong { display: block; font-size: 22px; line-height: 1.1; font-variant-numeric: tabular-nums; }
     .metric span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
-    .metric.danger { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
-    .metric.warning { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+    .metric.danger strong { color: var(--danger); }
+    .metric.warning strong { color: var(--warning); }
     .filters {
       display: flex;
       flex-wrap: wrap;
@@ -570,6 +593,24 @@ export function renderHtml() {
       border-radius: 11px;
       background: var(--soft);
     }
+    .filter-disclosure {
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: var(--surface);
+    }
+    .filter-disclosure > summary {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      cursor: pointer;
+      font-weight: var(--font-weight-semibold, 600);
+    }
+    .filter-summary { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 400; }
+    .filter-disclosure .scope-controls { margin: 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; }
+    .filter-disclosure .filters { margin: 0; padding: 0 14px 14px; background: var(--soft); }
     .scope-controls label { color: var(--muted); font-size: 11px; }
     .scope-controls label span { display: block; margin-bottom: 5px; font-weight: 600; }
     .scope-actions { display: flex; gap: 8px; align-items: center; }
@@ -595,6 +636,105 @@ export function renderHtml() {
     .manage-repository input { width: auto; height: auto; }
     .manage-repository small { color: var(--muted); }
     .current-repository { box-shadow: inset 3px 0 0 var(--accent); }
+    .mission-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+      gap: 18px;
+      margin-top: 18px;
+      align-items: start;
+    }
+    .mission-layout > * { min-width: 0; }
+    .pipeline-panel, .activity-panel, .exceptions {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    .panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 13px 15px;
+      border-bottom: 1px solid var(--border);
+      background: var(--soft);
+    }
+    .panel-header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+    .pipeline-scroll {
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-color: var(--border) transparent;
+    }
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(148px, 1fr));
+      min-width: 760px;
+      gap: 10px;
+      padding: 14px;
+    }
+    .stage-card {
+      min-width: 0;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--soft);
+    }
+    .stage-card.selected { border-color: var(--accent); background: var(--accent-soft); }
+    .stage-button {
+      width: 100%;
+      min-height: 74px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+    .stage-button strong { display: block; text-transform: capitalize; }
+    .stage-button small { display: block; margin-top: 4px; color: var(--muted); }
+    .stage-count { font-size: 24px; line-height: 1; font-weight: var(--font-weight-semibold, 600); font-variant-numeric: tabular-nums; }
+    .stage-preview { display: grid; gap: 6px; padding: 0 8px 8px; }
+    .goal-trigger {
+      width: 100%;
+      min-height: 44px;
+      padding: 8px 9px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+    .goal-trigger:hover { border-color: var(--border-strong); }
+    .goal-trigger strong, .goal-trigger small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .goal-trigger small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .stage-detail {
+      padding: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .stage-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .stage-detail-heading h3 { text-transform: capitalize; }
+    .stage-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 9px; margin-top: 12px; }
+    .exceptions { margin-top: 14px; }
+    .exception-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px; }
+    .exception-lane { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+    .exception-lane.danger { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+    .exception-lane.danger h3 { color: var(--danger); }
+    .exception-lane h3 { display: flex; justify-content: space-between; gap: 8px; }
+    .exception-lane .stage-goals { grid-template-columns: 1fr; }
+    .activity-panel { position: sticky; top: 14px; }
+    .activity-stream { max-height: min(620px, calc(100vh - 190px)); overflow: auto; margin: 0; padding: 0; list-style: none; }
+    .activity-item { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 9px; padding: 11px 14px; border-top: 1px solid var(--border); }
+    .activity-item:first-child { border-top: 0; }
+    .activity-dot { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
+    .activity-item a { color: var(--text); font-weight: var(--font-weight-semibold, 600); text-decoration: none; }
+    .activity-item a:hover { color: var(--focus); text-decoration: underline; }
+    .activity-item small { display: block; margin-top: 3px; color: var(--muted); }
     .goal-list { display: grid; gap: 12px; }
     .goal-card {
       overflow: hidden;
@@ -686,6 +826,58 @@ export function renderHtml() {
     .secondary-content { margin-top: 14px; color: var(--muted); }
     .roster { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .roster span { padding: 5px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); }
+    .drawer-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      background: color-mix(in srgb, #000 38%, transparent);
+    }
+    .goal-drawer {
+      position: fixed;
+      z-index: 21;
+      top: 0;
+      right: 0;
+      width: min(520px, 92vw);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: var(--surface);
+      box-shadow: -10px 0 32px color-mix(in srgb, #000 18%, transparent);
+    }
+    .drawer-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--soft);
+    }
+    .drawer-header p { margin: 5px 0 0; color: var(--muted); }
+    .drawer-close { width: 44px; height: 44px; flex: 0 0 auto; padding: 0; }
+    .drawer-body { overflow: auto; padding: 18px; }
+    .drawer-section { padding: 16px 0; border-top: 1px solid var(--border); }
+    .drawer-section:first-child { padding-top: 0; border-top: 0; }
+    .drawer-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+    .drawer-fact { padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+    .drawer-fact small, .drawer-fact strong { display: block; }
+    .drawer-fact small { color: var(--muted); }
+    .drawer-list { display: grid; gap: 8px; margin-top: 10px; }
+    .drawer-item { padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+    .drawer-item a { color: var(--focus); font-weight: var(--font-weight-semibold, 600); }
+    .drawer-item small { display: block; margin-top: 3px; color: var(--muted); }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     @media (max-width: 800px) {
       .topbar { align-items: flex-start; flex-direction: column; }
       main { width: min(100% - 24px, 680px); padding-top: 26px; }
@@ -707,11 +899,29 @@ export function renderHtml() {
       .ops-heading { display: block; }
       .refresh-status { margin-top: 8px; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric { border-right: 0; border-bottom: 1px solid var(--border); }
+      .metric:nth-child(odd) { border-right: 1px solid var(--border); }
+      .metric:last-child { border-bottom: 0; }
       .scope-controls { grid-template-columns: 1fr; }
       .goal-details-body { grid-template-columns: 1fr; }
+      .mission-layout { grid-template-columns: 1fr; }
+      .activity-panel { position: static; }
+      .activity-stream { max-height: 360px; }
+      .exception-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 420px) {
+      main { width: 100%; padding: 18px 12px 42px; }
+      .topbar { padding-inline: 12px; }
+      .metrics { grid-template-columns: 1fr; }
+      .metric, .metric:nth-child(odd) { border-right: 0; }
+      .drawer-facts { grid-template-columns: 1fr; }
+      .goal-drawer { width: 100vw; }
+    }
+    @media (pointer: coarse) {
+      .button, .filter, .stage-button, .goal-trigger, .filter-disclosure > summary, select, input { min-height: 44px; }
     }
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
     }
   </style>
 </head>
@@ -721,7 +931,8 @@ export function renderHtml() {
       <div class="brand"><span class="mark">SC</span><span>Squadcaster</span></div>
       <div class="repo" id="repo-header"></div>
     </header>
-    <main id="app" aria-live="polite"></main>
+    <main id="app"></main>
+    <div id="live-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
   </div>
   <script>
     let state = null;
@@ -737,9 +948,14 @@ export function renderHtml() {
     let activeRepositoriesOnly = false;
     let showRepositoryManager = false;
     let refreshingAll = false;
+    let expandedStage = "";
+    let selectedGoalId = "";
+    let drawerReturnSelector = "";
+    let filtersOpen = false;
 
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
+    const liveStatus = document.getElementById("live-status");
 
     function esc(value) {
       return String(value ?? "")
@@ -748,6 +964,13 @@ export function renderHtml() {
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+    }
+
+    function announce(message) {
+      liveStatus.textContent = "";
+      requestAnimationFrame(() => {
+        liveStatus.textContent = message;
+      });
     }
 
     function initials(name) {
@@ -1207,6 +1430,158 @@ export function renderHtml() {
       \`).join("")}</div>\`;
     }
 
+    function goalById(id) {
+      return (state.activity?.goals || []).find(goal => goal.id === id);
+    }
+
+    function goalTriggerHtml(goal, compact = false) {
+      const current = String(goal.repository?.nameWithOwner || "").toLowerCase() ===
+        String(state.activity?.currentRepository || "").toLowerCase();
+      return \`
+        <button class="goal-trigger \${current ? "current-repository" : ""}" data-action="open-goal" data-goal-id="\${esc(goal.id)}" type="button">
+          <strong>#\${esc(goal.issue.number)} · \${esc(goal.issue.title)}</strong>
+          <small>\${esc(goal.repository.nameWithOwner || state.repoName)} · \${esc(goal.owner?.name || "Unknown")}\${compact ? "" : " · " + esc(formatTime(goal.updatedAt))}</small>
+        </button>\`;
+    }
+
+    function stageHtml(phase, goals) {
+      const preview = goals.slice(0, 3);
+      const selected = expandedStage === phase;
+      return \`
+        <section class="stage-card \${selected ? "selected" : ""}">
+          <button class="stage-button" data-action="expand-stage" data-phase="\${phase}" type="button"
+            aria-expanded="\${selected}" aria-controls="stage-detail">
+            <span><strong>\${esc(phase)}</strong><small>\${goals.length ? "Current Squad goals" : "No goals in this stage"}</small></span>
+            <span class="stage-count">\${goals.length}</span>
+          </button>
+          \${preview.length ? \`<div class="stage-preview">\${preview.map(goal => goalTriggerHtml(goal, true)).join("")}\${
+            goals.length > preview.length ? \`<small class="help">+\${goals.length - preview.length} more in stage details</small>\` : ""
+          }</div>\` : ""}
+        </section>\`;
+    }
+
+    function stageDetailHtml(goals) {
+      if (!expandedStage) return "";
+      const stageGoals = goals.filter(goal => goal.phase === expandedStage);
+      return \`
+        <section class="stage-detail" id="stage-detail" aria-labelledby="stage-detail-title">
+          <div class="stage-detail-heading">
+            <div>
+              <h3 id="stage-detail-title" tabindex="-1">\${esc(expandedStage)} goals</h3>
+              <p class="help">Open a goal to inspect its evidence, dependencies, and linked delivery activity.</p>
+            </div>
+            <button class="button" data-action="close-stage" type="button">Close</button>
+          </div>
+          <div class="stage-goals">
+            \${stageGoals.length ? stageGoals.map(goal => goalTriggerHtml(goal)).join("") : '<p class="help">No visible goals are in this stage.</p>'}
+          </div>
+        </section>\`;
+    }
+
+    function exceptionLaneHtml(phase, goals) {
+      const laneGoals = goals.filter(goal => goal.phase === phase);
+      return \`
+        <section class="exception-lane danger" aria-labelledby="\${phase}-title">
+          <h3 id="\${phase}-title"><span>\${esc(phase)}</span><span>\${laneGoals.length}</span></h3>
+          <p class="help">\${phase === "blocked" ? "Dependencies or an explicit blocker need attention." : "A workflow or required check has failed."}</p>
+          <div class="stage-goals">
+            \${laneGoals.length ? laneGoals.map(goal => goalTriggerHtml(goal)).join("") : '<p class="help">No goals need attention.</p>'}
+          </div>
+        </section>\`;
+    }
+
+    function recentActivityHtml(goals) {
+      const activity = goals.flatMap(goal =>
+        (goal.evidence || []).map(item => ({ ...item, goal })))
+        .sort((left, right) => String(right.timestamp || "").localeCompare(String(left.timestamp || "")))
+        .slice(0, 18);
+      return \`
+        <aside class="activity-panel" aria-labelledby="activity-title">
+          <div class="panel-header">
+            <div><h2 id="activity-title">Recent activity</h2><p>Observed and inferred evidence for visible goals.</p></div>
+            <span class="evidence-count">\${activity.length}</span>
+          </div>
+          \${activity.length ? \`
+            <ol class="activity-stream">
+              \${activity.map(item => \`
+                <li class="activity-item">
+                  <span class="activity-dot" aria-hidden="true"></span>
+                  <div>
+                    <a href="\${esc(item.url || item.goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
+                    <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))}\${item.confidence === "inferred" ? " · inferred" : ""}</small>
+                  </div>
+                </li>\`).join("")}
+            </ol>\`
+            : '<p class="help" style="padding:14px">No correlated evidence is available for the current filters.</p>'}
+        </aside>\`;
+    }
+
+    function dependencyItemsHtml(goal) {
+      if (!goal.dependencies?.length) return '<p class="help">No dependencies are declared.</p>';
+      return \`<div class="drawer-list">\${goal.dependencies.map(item => \`
+        <div class="drawer-item">
+          <a href="\${esc(item.url)}" target="_blank" rel="noreferrer">\${esc(item.repository)}#\${esc(item.issueNumber)} · \${esc(item.title)}</a>
+          <small>\${esc(item.phase || item.status || "unknown")}</small>
+        </div>\`).join("")}</div>\`;
+    }
+
+    function pullRequestItemsHtml(goal) {
+      if (!goal.pullRequests?.length) return '<p class="help">No pull request has been correlated yet.</p>';
+      return \`<div class="drawer-list">\${goal.pullRequests.map(item => \`
+        <div class="drawer-item">
+          <a href="\${esc(item.url)}" target="_blank" rel="noreferrer">PR #\${esc(item.number)} · \${esc(item.title)}</a>
+          <small>\${esc(item.state)}\${item.draft ? " · draft" : ""} · review \${esc(item.reviewDecision || "unknown")}\${item.branch ? " · " + esc(item.branch) : ""}</small>
+          \${item.checks?.length ? \`<div class="drawer-list">\${item.checks.map(check => \`
+            <div class="drawer-item">
+              \${check.url ? \`<a href="\${esc(check.url)}" target="_blank" rel="noreferrer">\${esc(check.name)}</a>\` : \`<strong>\${esc(check.name)}</strong>\`}
+              <small>\${esc(check.status)}</small>
+            </div>\`).join("")}</div>\` : '<p class="help">No checks reported.</p>'}
+        </div>\`).join("")}</div>\`;
+    }
+
+    function workflowItemsHtml(goal) {
+      if (!goal.workflowRuns?.length) return '<p class="help">No workflow run has been correlated yet.</p>';
+      return \`<div class="drawer-list">\${goal.workflowRuns.map(item => \`
+        <div class="drawer-item">
+          <a href="\${esc(item.url)}" target="_blank" rel="noreferrer">\${esc(item.workflow)}</a>
+          <small>\${esc(item.conclusion || item.status)}\${item.branch ? " · " + esc(item.branch) : ""} · \${esc(formatTime(item.updatedAt || item.createdAt))}</small>
+        </div>\`).join("")}</div>\`;
+    }
+
+    function goalDrawerHtml() {
+      const goal = goalById(selectedGoalId);
+      if (!goal) return "";
+      return \`
+        <div class="drawer-scrim" data-action="close-goal" aria-hidden="true"></div>
+        <aside class="goal-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-describedby="drawer-description">
+          <div class="drawer-header">
+            <div>
+              <span class="phase \${esc(goal.phase)}">\${esc(goal.phase)}</span>
+              <h2 id="drawer-title" style="margin-top:8px">#\${esc(goal.issue.number)} · \${esc(goal.issue.title)}</h2>
+              <p id="drawer-description">\${esc(goal.repository.nameWithOwner)}</p>
+            </div>
+            <button class="button drawer-close" data-action="close-goal" type="button" aria-label="Close goal details">×</button>
+          </div>
+          <div class="drawer-body">
+            <section class="drawer-section">
+              <h3>Goal</h3>
+              <div class="drawer-facts">
+                <div class="drawer-fact"><small>Owner</small><strong>\${esc(goal.owner?.name || "Unknown")}</strong></div>
+                <div class="drawer-fact"><small>Repository</small><strong>\${esc(goal.repository.nameWithOwner)}</strong></div>
+                <div class="drawer-fact"><small>Issue state</small><strong>\${esc(goal.issue.state)}</strong></div>
+                <div class="drawer-fact"><small>Updated</small><strong>\${esc(formatTime(goal.updatedAt))}</strong></div>
+              </div>
+              <p class="next-step"><strong>Next action</strong><span>\${esc(goal.nextAction || "Unknown — inspect the linked issue.")}</span></p>
+              <p style="margin-bottom:0"><a href="\${esc(goal.issue.url)}" target="_blank" rel="noreferrer">Open source issue ↗</a></p>
+            </section>
+            <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
+            <section class="drawer-section"><h3>Pull requests and checks</h3>\${pullRequestItemsHtml(goal)}</section>
+            <section class="drawer-section"><h3>Workflow runs</h3>\${workflowItemsHtml(goal)}</section>
+            <section class="drawer-section"><h3>Evidence</h3><div style="margin-top:10px">\${timelineHtml(goal)}</div></section>
+          </div>
+        </aside>\`;
+    }
+
     function goalCardHtml(goal) {
       return \`
         <article class="goal-card \${esc(goal.phase)} \${String(goal.repository.nameWithOwner).toLowerCase() === String(state.activity?.currentRepository || "").toLowerCase() ? "current-repository" : ""}">
@@ -1260,30 +1635,44 @@ export function renderHtml() {
     function repositoryControlsHtml() {
       const repositories = (state.activity?.repositories || []).filter(repository => repository.included);
       const owners = [...new Set(repositories.map(repository => repository.owner).filter(Boolean))].sort();
+      const activeFilters = [
+        phaseFilter !== "all" ? phaseFilter : "",
+        ownerFilter !== "all" ? ownerFilter : "",
+        repositoryFilter !== "all" ? repositoryFilter === "current" ? "current repo" : repositoryFilter : "",
+        goalSearch ? \`“\${goalSearch}”\` : "",
+        activeRepositoriesOnly ? "active repos" : "",
+      ].filter(Boolean);
+      const filters = ["active", "queued", "researching", "implementing", "reviewing", "blocked", "failed", "completed", "all"];
       return \`
-        <section class="scope-controls" aria-label="Repository and goal filters">
-          <label><span>Owner or organization</span>
-            <select data-action="owner-filter">
-              <option value="all">All owners</option>
-              \${owners.map(owner => '<option value="' + esc(owner) + '"' + (ownerFilter === owner ? " selected" : "") + ">" + esc(owner) + "</option>").join("")}
-            </select>
-          </label>
-          <label><span>Repository</span>
-            <select data-action="repository-filter">
-              <option value="all">All repositories</option>
-              <option value="current" \${repositoryFilter === "current" ? "selected" : ""}>Current repository</option>
-              \${repositories.map(repository => '<option value="' + esc(repository.nameWithOwner) + '"' + (repositoryFilter === repository.nameWithOwner ? " selected" : "") + ">" + esc(repository.nameWithOwner) + "</option>").join("")}
-            </select>
-          </label>
-          <label><span>Search goals</span>
-            <input data-action="goal-search" value="\${esc(goalSearch)}" placeholder="Issue, goal, owner, or repository">
-          </label>
-          <div class="scope-actions">
-            <button class="button" data-action="manage-repositories" type="button">Manage</button>
-            <button class="button" data-action="refresh-all" type="button" \${refreshingAll ? "disabled" : ""}>\${refreshingAll ? "Refreshing…" : "Refresh all"}</button>
+        <details class="filter-disclosure" \${filtersOpen ? "open" : ""}>
+          <summary>Filter and repository controls <span class="filter-summary">\${esc(activeFilters.length ? activeFilters.join(" · ") : "All visible goals")}</span></summary>
+          <section class="scope-controls" aria-label="Repository and goal filters">
+            <label><span>Owner or organization</span>
+              <select data-action="owner-filter">
+                <option value="all">All owners</option>
+                \${owners.map(owner => '<option value="' + esc(owner) + '"' + (ownerFilter === owner ? " selected" : "") + ">" + esc(owner) + "</option>").join("")}
+              </select>
+            </label>
+            <label><span>Repository</span>
+              <select data-action="repository-filter">
+                <option value="all">All repositories</option>
+                <option value="current" \${repositoryFilter === "current" ? "selected" : ""}>Current repository</option>
+                \${repositories.map(repository => '<option value="' + esc(repository.nameWithOwner) + '"' + (repositoryFilter === repository.nameWithOwner ? " selected" : "") + ">" + esc(repository.nameWithOwner) + "</option>").join("")}
+              </select>
+            </label>
+            <label><span>Search goals</span>
+              <input data-action="goal-search" value="\${esc(goalSearch)}" placeholder="Issue, goal, owner, or repository">
+            </label>
+            <div class="scope-actions">
+              <button class="button" data-action="manage-repositories" type="button">Manage</button>
+              <button class="button" data-action="refresh-all" type="button" \${refreshingAll ? "disabled" : ""}>\${refreshingAll ? "Refreshing…" : "Refresh all"}</button>
+            </div>
+          </section>
+          <div class="filters" aria-label="Filter goals by status">
+            \${filters.map(filter => \`<button class="filter \${phaseFilter === filter ? "selected" : ""}" data-action="phase-filter" data-phase="\${filter}" type="button" aria-pressed="\${phaseFilter === filter}">\${esc(filter)}</button>\`).join("")}
           </div>
-        </section>
-        <label class="toggle"><input data-action="active-repositories" type="checkbox" \${activeRepositoriesOnly ? "checked" : ""}> Only repositories with active work</label>
+          <label class="toggle" style="margin:0;padding:0 14px 14px;background:var(--soft)"><input data-action="active-repositories" type="checkbox" \${activeRepositoriesOnly ? "checked" : ""}> Only repositories with active work</label>
+        </details>
         \${showRepositoryManager ? repositoryManagerHtml() : ""}\`;
     }
 
@@ -1310,13 +1699,13 @@ export function renderHtml() {
       const activity = state.activity || {};
       const summary = activity.summary || {};
       const goals = (activity.goals || []).filter(goalMatchesFilter).filter(goalMatchesScope);
-      const filters = ["active", "blocked", "failed", "reviewing", "completed", "all"];
+      const lifecycle = ["queued", "researching", "implementing", "reviewing", "completed"];
       return \`
         <section>
           <div class="ops-heading">
             <div>
-              <h1>All Squads</h1>
-              <p class="lede">\${esc((activity.repositories || []).filter(repository => repository.included).length)} repositories\${activity.viewer ? " for @" + esc(activity.viewer) : ""} · opened from \${esc(activity.currentRepository || state.repoName)}. Live, read-only visibility from GitHub evidence.</p>
+              <h1>Squad mission control</h1>
+              <p class="lede">\${esc((activity.repositories || []).filter(repository => repository.included).length)} repositories\${activity.viewer ? " for @" + esc(activity.viewer) : ""} · live, read-only visibility from GitHub evidence.</p>
             </div>
             <div class="refresh-status">\${activity.stale ? "Showing last known state" : "Last synced"} · \${esc(formatTime(activity.fetchedAt))}</div>
           </div>
@@ -1325,30 +1714,52 @@ export function renderHtml() {
             \${metricHtml(summary.blocked || 0, "Blocked", summary.blocked ? "danger" : "")}
             \${metricHtml(summary.failed || 0, "Failed", summary.failed ? "danger" : "")}
             \${metricHtml(summary.awaitingReview || 0, "Awaiting review", summary.awaitingReview ? "warning" : "")}
-            \${metricHtml(summary.implementing || 0, "Implementing")}
-            \${metricHtml(summary.researching || 0, "Researching")}
             \${metricHtml(summary.completed || 0, "Completed")}
           </div>
           \${activity.errors?.length ? \`
-            <div class="sync-warning"><strong>Some GitHub data could not be refreshed.</strong>
+            <div class="sync-warning" role="alert"><strong>Some GitHub data could not be refreshed.</strong>
               \${activity.errors.map(error => '<p>' + esc(error.source) + ": " + esc(error.message) + "</p>").join("")}
             </div>\` : ""}
           \${repositoryControlsHtml()}
-          <div class="filters" aria-label="Filter goals by status">
-            \${filters.map(filter => \`<button class="filter \${phaseFilter === filter ? "selected" : ""}" data-action="phase-filter" data-phase="\${filter}" type="button">\${esc(filter)}</button>\`).join("")}
-          </div>
-          <div class="goal-list">
-            \${goals.length ? goals.map(goalCardHtml).join("") : \`
-              <section class="empty">
-                <h2>\${phaseFilter === "all" ? "No goals found." : "No " + esc(phaseFilter) + " goals found."}</h2>
-                <p>Squadcaster recognizes issues carrying <code>squad</code> or <code>squad:*</code> labels, Squad commands, or structured Squad artifacts.</p>
-              </section>\`}
+          <div class="mission-layout">
+            <div>
+              <section class="pipeline-panel" aria-labelledby="pipeline-title">
+                <div class="panel-header">
+                  <div><h2 id="pipeline-title">Goal lifecycle</h2><p>Current evidence-derived stage. Blocked and failed goals remain exception states.</p></div>
+                  <span class="evidence-count">\${goals.length} visible</span>
+                </div>
+                <div class="pipeline-scroll" role="region" aria-label="Squad goal lifecycle stages" tabindex="0">
+                  <div class="pipeline">
+                    \${lifecycle.map(phase => stageHtml(phase, goals.filter(goal => goal.phase === phase))).join("")}
+                  </div>
+                </div>
+                \${stageDetailHtml(goals)}
+              </section>
+              <section class="exceptions" aria-labelledby="exceptions-title">
+                <div class="panel-header">
+                  <div><h2 id="exceptions-title">Needs attention</h2><p>Exceptions are separated from forward lifecycle stages.</p></div>
+                  <span class="evidence-count">\${goals.filter(goal => goal.phase === "blocked" || goal.phase === "failed").length}</span>
+                </div>
+                <div class="exception-grid">
+                  \${exceptionLaneHtml("blocked", goals)}
+                  \${exceptionLaneHtml("failed", goals)}
+                </div>
+              </section>
+              \${goals.length ? "" : \`
+                <section class="empty" style="margin-top:14px">
+                  <h2>\${phaseFilter === "all" ? "No goals found." : "No " + esc(phaseFilter) + " goals found."}</h2>
+                  <p>Squadcaster recognizes issues carrying <code>squad</code> or <code>squad:*</code> labels, Squad commands, or structured Squad artifacts.</p>
+                </section>\`}
+            </div>
+            \${recentActivityHtml(goals)}
           </div>
           \${squadContextHtml()}
+          \${goalDrawerHtml()}
         </section>\`;
     }
 
-    function render() {
+    function render(focusSelector = "") {
+      const drawerWasFocused = Boolean(document.activeElement?.closest?.(".goal-drawer"));
       updateHeader();
       if (!state) {
         app.innerHTML = '<div class="operation"><span class="spinner"></span><div>Loading Squadcaster…</div></div>';
@@ -1364,6 +1775,12 @@ export function renderHtml() {
       }
       if (!selectedMemberId && state.members.length) selectedMemberId = state.members[0].id;
       app.innerHTML = activeHtml();
+      document.body.style.overflow = selectedGoalId ? "hidden" : "";
+      if (focusSelector) {
+        document.querySelector(focusSelector)?.focus({ preventScroll: true });
+      } else if (selectedGoalId && drawerWasFocused) {
+        document.querySelector(".drawer-close")?.focus({ preventScroll: true });
+      }
     }
 
     async function refresh() {
@@ -1383,6 +1800,23 @@ export function renderHtml() {
         } else if (action === "phase-filter") {
           phaseFilter = target.dataset.phase || "active";
           render();
+        } else if (action === "expand-stage") {
+          const phase = target.dataset.phase || "";
+          expandedStage = expandedStage === phase ? "" : phase;
+          render(expandedStage ? "#stage-detail-title" : \`[data-action="expand-stage"][data-phase="\${CSS.escape(phase)}"]\`);
+        } else if (action === "close-stage") {
+          const phase = expandedStage;
+          expandedStage = "";
+          render(\`[data-action="expand-stage"][data-phase="\${CSS.escape(phase)}"]\`);
+        } else if (action === "open-goal") {
+          selectedGoalId = target.dataset.goalId || "";
+          drawerReturnSelector = \`[data-action="open-goal"][data-goal-id="\${CSS.escape(selectedGoalId)}"]\`;
+          render(".drawer-close");
+        } else if (action === "close-goal") {
+          const returnSelector = drawerReturnSelector;
+          selectedGoalId = "";
+          drawerReturnSelector = "";
+          render(returnSelector);
         } else if (action === "manage-repositories") {
           showRepositoryManager = !showRepositoryManager;
           render();
@@ -1391,6 +1825,7 @@ export function renderHtml() {
           render();
           try {
             await post("/api/refresh");
+            announce("Squad activity refresh complete.");
           } finally {
             refreshingAll = false;
             render();
@@ -1431,6 +1866,38 @@ export function renderHtml() {
       } catch (error) {
         state.operation = { status: "error", message: error.message };
         render();
+      }
+    });
+
+    document.addEventListener("toggle", event => {
+      if (!event.target.matches?.(".filter-disclosure")) return;
+      filtersOpen = event.target.open;
+    }, true);
+
+    document.addEventListener("keydown", event => {
+      if (!selectedGoalId) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        const returnSelector = drawerReturnSelector;
+        selectedGoalId = "";
+        drawerReturnSelector = "";
+        render(returnSelector);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const drawer = document.querySelector(".goal-drawer");
+      if (!drawer) return;
+      const focusable = [...drawer.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+        .filter(element => !element.hidden);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     });
 
@@ -1519,6 +1986,7 @@ export function renderHtml() {
       if (state) {
         state.operation = { status: "error", message: "Canvas connection interrupted. Reopen Squadcaster to reconnect." };
         render();
+        announce("Canvas connection interrupted. Reopen Squadcaster to reconnect.");
       }
     };
 

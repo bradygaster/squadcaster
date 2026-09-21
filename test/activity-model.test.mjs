@@ -148,6 +148,7 @@ test("does not correlate an incidental pull request issue mention", () => {
     });
     assert.equal(snapshot.goals[0].pullRequests.length, 0);
     assert.equal(snapshot.goals[0].phase, "queued");
+    assert.equal(snapshot.summary.queued, 1);
 });
 
 test("uses only the latest run outcome for the same workflow branch", () => {

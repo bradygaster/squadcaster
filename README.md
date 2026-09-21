@@ -13,6 +13,9 @@ protection.
 ## What the canvas shows
 
 - Summary counts for active, blocked, failed, awaiting-review, and completed goals
+- A lifecycle pipeline for queued, researching, implementing, reviewing, and completed goals, with blocked and failed work separated as exception states
+- A recent-activity stream built from correlated issue, artifact, pull-request, workflow-run, and check evidence
+- Expandable lifecycle stages and a keyboard-accessible goal details drawer
 - One combined view of every discovered Squad repository the authenticated user can read
 - Owner, repository, current-repository, status, active-work, and text filters
 - Every discoverable issue carrying `squad`/`squad:*` labels, a Squad command, or structured Squad artifact
@@ -63,7 +66,9 @@ view is **All Squads** across every discovered repository. The canvas uses the
 authenticated GitHub CLI to refresh the current repository every 15 seconds,
 active repositories every minute, and inactive repositories every ten minutes.
 Repository discovery refreshes every fifteen minutes. The browser remains bound
-to `127.0.0.1` on an ephemeral port.
+to `127.0.0.1` on an ephemeral port. The canvas follows the operating system's
+light or dark color preference by default and uses the host canvas semantic
+theme tokens when available.
 
 If Squad is not detected, the canvas links to the Squad installation guidance.
 Once installed, the repository-owned roster is shown as secondary operational

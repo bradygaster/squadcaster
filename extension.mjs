@@ -285,7 +285,7 @@ async function loadState(workingDirectory) {
                 fetchedAt: null,
                 repository: {},
                 repositories: [],
-                summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+                summary: { active: 0, queued: 0, blocked: 0, failed: 0, awaitingReview: 0, implementing: 0, researching: 0, completed: 0 },
                 goals: [],
                 errors: [],
             },
@@ -614,7 +614,7 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 state.activity ||= {
                     schemaVersion: 2,
                     repositories: [],
-                    summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+                    summary: { active: 0, queued: 0, blocked: 0, failed: 0, awaitingReview: 0, implementing: 0, researching: 0, completed: 0 },
                     goals: [],
                     errors: [],
                 };
