@@ -503,6 +503,7 @@ test("does not count or render unknown owners as observed", async ({ page }) => 
 });
 
 test("renders read-only handoff readiness and probes availability only after opening", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
     expect(fixture.handoffProbeCount()).toBe(0);
     await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
     await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
@@ -521,6 +522,13 @@ test("renders read-only handoff readiness and probes availability only after ope
     await expect(drawer.getByRole("button", { name: "Copy context" })).toBeVisible();
     await expect(drawer.getByRole("button", { name: "Export context" })).toBeVisible();
     await expect.poll(() => fixture.handoffProbeCount()).toBe(1);
+    const containment = await drawer.evaluate(element => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }));
+    expect(containment.scrollWidth).toBeLessThanOrEqual(containment.clientWidth);
+    expect(containment.documentOverflow).toBeLessThanOrEqual(0);
 
     await expect(drawer.getByRole("button", { name: /Create|Assign|Dispatch|Launch|Post/i })).toHaveCount(0);
 });
