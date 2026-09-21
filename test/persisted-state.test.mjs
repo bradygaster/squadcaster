@@ -114,7 +114,26 @@ test("preserves normalized read-only handoff readiness across cache migration", 
             schemaVersion: 2,
             fetchedAt: "2026-09-21T12:00:00Z",
             goals: [{
+                id: "octodemo/demo#10",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: {
+                    number: 10,
+                    labels: [{ name: "squad" }],
+                },
+            }, {
+                id: "octodemo/demo#11",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: {
+                    number: 11,
+                    labels: [{ name: "squad" }, { name: "squad:kint" }],
+                },
+            }, {
                 id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: {
+                    number: 12,
+                    labels: [{ name: "squad" }, { name: "squad:kint" }],
+                },
                 handoff: {
                     schemaVersion: 1,
                     readiness: {
@@ -131,7 +150,24 @@ test("preserves normalized read-only handoff readiness across cache migration", 
                         },
                         automatedHandoffAvailable: false,
                     },
-                    activation: { issue: "octodemo/demo#12" },
+                    activation: {
+                        schemaVersion: "1",
+                        artifactKind: "activated",
+                        issue: "octodemo/demo#12",
+                        issueNumber: 12,
+                        epicIssue: "octodemo/demo#11",
+                        epicIssueNumber: 11,
+                        rootIssue: "octodemo/demo#10",
+                        rootIssueNumber: 10,
+                        task: "3",
+                        epic: "2.1",
+                        agent: "Kint",
+                        epicAgents: ["kint"],
+                        label: "squad:kint",
+                        epicLabel: "squad:kint",
+                        rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
+                        artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
+                    },
                     acceptanceCriteria: [{ text: "Ship it", sourceUrl: "https://example.test/12" }],
                     acceptanceCriteriaComplete: true,
                     leaf: { subIssues: [], complete: true },
@@ -148,7 +184,8 @@ test("preserves normalized read-only handoff readiness across cache migration", 
         },
     });
 
-    const handoff = normalized.activity.goals[0].handoff;
+    const handoff = normalized.activity.goals.find((goal) =>
+        goal.id === "octodemo/demo#12").handoff;
     assert.equal(handoff.readiness.state, "ready");
     assert.equal(handoff.activation.issue, "octodemo/demo#12");
     assert.equal(handoff.acceptanceCriteria[0].text, "Ship it");
@@ -374,4 +411,438 @@ test("preserves a stale v3 snapshot boundary across persisted-state reload", () 
     assert.equal(normalized.activity.fetchedAt, "2026-09-22T00:05:00.000Z");
     assert.equal(normalized.activity.dayBoundary.snapshotDay, "2026-09-21");
     assert.deepEqual(normalized.activity.snapshotDays, ["2026-09-21"]);
+});
+
+test("adds bootstrap defaults to older schema-v2 activity", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 2,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            summary: {
+                active: 1,
+                queued: 1,
+            },
+            goals: [],
+        },
+    });
+
+    assert.equal(normalized.activity.summary.active, 1);
+    assert.equal(normalized.activity.summary.queued, 1);
+    assert.equal(normalized.activity.summary.bootstrap.total, 0);
+    assert.equal(normalized.activity.summary.bootstrap.unknown, 0);
+    assert.deepEqual(normalized.activity.bootstraps, []);
+});
+
+test("normalizes malformed persisted generated goals to an empty collection", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#6",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 6 },
+                bootstrap: {
+                    status: "complete",
+                    generatedGoals: "corrupt",
+                },
+            }],
+        },
+    });
+
+    assert.deepEqual(normalized.activity.goals[0].bootstrap.generatedGoals, []);
+});
+
+test("downgrades cached ready handoff with malformed activation provenance", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 12 },
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: true,
+                    },
+                    activation: {},
+                    acceptanceCriteria: [{ text: "Works" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [],
+                },
+            }],
+        },
+    });
+    const handoff = normalized.activity.goals[0].handoff;
+
+    assert.equal(handoff.activation, null);
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+});
+
+test("rejects cached activation with foreign repository or contradictory agent", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 12 },
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: true,
+                    },
+                    activation: {
+                        schemaVersion: "1",
+                        artifactKind: "activated",
+                        issue: "evil/repo#12",
+                        issueNumber: 12,
+                        epicIssue: "evil/repo#11",
+                        epicIssueNumber: 11,
+                        rootIssue: "evil/repo#10",
+                        rootIssueNumber: 10,
+                        task: "3",
+                        epic: "2.1",
+                        agent: "missing",
+                        epicAgents: ["other"],
+                        rootIssueUrl: "https://github.com/evil/repo/issues/10",
+                        artifactUrl: "https://github.com/evil/repo/issues/10#issuecomment-100",
+                    },
+                    acceptanceCriteria: [{ text: "Works" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [],
+                },
+            }],
+        },
+    });
+    const handoff = normalized.activity.goals[0].handoff;
+
+    assert.equal(handoff.activation, null);
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+});
+
+test("rejects cached activation with coerced identity fields", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 12 },
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: true,
+                    },
+                    activation: {
+                        schemaVersion: "1",
+                        artifactKind: "activated",
+                        issue: "octodemo/demo#12",
+                        issueNumber: 12,
+                        epicIssue: "octodemo/demo#11",
+                        epicIssueNumber: 11,
+                        rootIssue: "octodemo/demo#10",
+                        rootIssueNumber: 10,
+                        task: { id: "3" },
+                        epic: "2.1",
+                        agent: 7,
+                        epicAgents: [7],
+                        rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
+                        artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
+                    },
+                    acceptanceCriteria: [{ text: "Works" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [],
+                },
+            }],
+        },
+    });
+    const handoff = normalized.activity.goals[0].handoff;
+
+    assert.equal(handoff.activation, null);
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+});
+
+test("rejects cached activation without ownership provenance", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 12 },
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: true,
+                    },
+                    activation: {
+                        schemaVersion: "1",
+                        artifactKind: "activated",
+                        issue: "octodemo/demo#12",
+                        issueNumber: 12,
+                        epicIssue: "octodemo/demo#11",
+                        epicIssueNumber: 11,
+                        rootIssue: "octodemo/demo#10",
+                        rootIssueNumber: 10,
+                        task: "3",
+                        epic: "2.1",
+                        agent: "Kint",
+                        epicAgents: ["kint"],
+                        rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
+                        artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
+                    },
+                    acceptanceCriteria: [{ text: "Works" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [],
+                },
+            }],
+        },
+    });
+    const handoff = normalized.activity.goals[0].handoff;
+
+    assert.equal(handoff.activation, null);
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+});
+
+test("invalidates conflicting cached activations across one envelope", () => {
+    const handoffFor = (issueNumber) => ({
+        schemaVersion: 1,
+        readiness: {
+            state: "ready",
+            reasons: [],
+            sourceStates: {
+                issue: "complete",
+                issueAssignees: "complete",
+                issueComments: "complete",
+                subIssues: "complete",
+                dependencies: "complete",
+                pullRequests: "complete",
+                workflowRuns: "complete",
+            },
+            automatedHandoffAvailable: true,
+        },
+        activation: {
+            schemaVersion: "1",
+            artifactKind: "activated",
+            issue: `octodemo/demo#${issueNumber}`,
+            issueNumber,
+            epicIssue: "octodemo/demo#11",
+            epicIssueNumber: 11,
+            rootIssue: "octodemo/demo#10",
+            rootIssueNumber: 10,
+            task: "3",
+            epic: "2.1",
+            agent: "Kint",
+            epicAgents: ["kint"],
+            label: "squad:kint",
+            epicLabel: "squad:kint",
+            rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
+            artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
+        },
+        acceptanceCriteria: [{ text: "Works" }],
+        acceptanceCriteriaComplete: true,
+        leaf: { subIssues: [], complete: true },
+        existingImplementation: {
+            state: "none",
+            pullRequests: [],
+            workflowRuns: [],
+            sessions: [],
+            links: [],
+        },
+        mechanisms: [],
+    });
+    const activity = {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [
+                {
+                    id: "octodemo/demo#10",
+                    repository: { nameWithOwner: "octodemo/demo" },
+                    issue: { number: 10, labels: [{ name: "squad" }] },
+                },
+                {
+                    id: "octodemo/demo#11",
+                    repository: { nameWithOwner: "octodemo/demo" },
+                    issue: {
+                        number: 11,
+                        labels: [{ name: "squad" }, { name: "squad:kint" }],
+                    },
+                },
+                {
+                    id: "octodemo/demo#12",
+                    repository: { nameWithOwner: "octodemo/demo" },
+                    issue: {
+                        number: 12,
+                        labels: [{ name: "squad" }, { name: "squad:kint" }],
+                    },
+                    handoff: handoffFor(12),
+                },
+                {
+                    id: "octodemo/demo#13",
+                    repository: { nameWithOwner: "octodemo/demo" },
+                    issue: {
+                        number: 13,
+                        labels: [{ name: "squad" }, { name: "squad:kint" }],
+                    },
+                    handoff: handoffFor(13),
+                },
+            ],
+        };
+    const normalized = normalizePersistedState({ activity });
+
+    for (const issueNumber of [12, 13]) {
+        const handoff = normalized.activity.goals.find((goal) =>
+            goal.issue.number === issueNumber).handoff;
+        assert.equal(handoff.activation, null);
+        assert.equal(handoff.readiness.state, "unknown");
+        assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+    }
+
+    activity.goals.find((goal) => goal.issue.number === 13)
+        .handoff.activation.task = "4";
+    activity.goals.find((goal) => goal.issue.number === 12)
+        .issue.labels[1].name = "squad:reed";
+    const ownershipMismatch = normalizePersistedState({ activity });
+    for (const issueNumber of [12, 13]) {
+        const handoff = ownershipMismatch.activity.goals.find((goal) =>
+            goal.issue.number === issueNumber).handoff;
+        assert.equal(handoff.activation, null);
+        assert.equal(handoff.readiness.state, "unknown");
+        assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+    }
+
+    activity.goals.find((goal) => goal.issue.number === 12)
+        .issue.labels[1].name = "squad:kint";
+    activity.goals.find((goal) => goal.issue.number === 13)
+        .handoff.activation.epicAgents = ["kint", "KINT"];
+    const malformedSibling = normalizePersistedState({ activity });
+    for (const issueNumber of [12, 13]) {
+        const handoff = malformedSibling.activity.goals.find((goal) =>
+            goal.issue.number === issueNumber).handoff;
+        assert.equal(handoff.activation, null);
+        assert.equal(handoff.readiness.state, "unknown");
+        assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+    }
 });

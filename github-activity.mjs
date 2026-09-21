@@ -1,4 +1,7 @@
-import { buildActivitySnapshot } from "./activity-model.mjs";
+import {
+    buildActivitySnapshot,
+    integrateAutomaticBootstrapSnapshot,
+} from "./activity-model.mjs";
 import {
     BOOTSTRAP_IDENTIFIERS,
     classifyAutomaticBootstrap,
@@ -109,12 +112,14 @@ function priorIssues(previous) {
     for (const goal of previous?.goals || []) {
         const labels = goal.issue?.labels || [];
         const comments = (goal.artifacts || []).map((artifact) => ({
-            body: `\`\`\`json\n${JSON.stringify({
-                squad_artifact: artifact.kind,
-                schema_version: artifact.schemaVersion,
-                origin_issue: artifact.originIssue,
-                phases: artifact.phases,
-            })}\n\`\`\``,
+            body: `${Array.isArray(artifact.bindings)
+                ? `Activation bindings:\n\`\`\`json\n${JSON.stringify(artifact.bindings)}\n\`\`\`\n`
+                : ""}Structured data:\n\`\`\`json\n${JSON.stringify({
+                    squad_artifact: artifact.kind,
+                    schema_version: artifact.schemaVersion,
+                    origin_issue: artifact.originIssue,
+                    phases: artifact.phases,
+                })}\n\`\`\``,
             createdAt: artifact.createdAt,
             url: artifact.url,
         }));
@@ -661,6 +666,8 @@ export class GitHubSquadActivityAdapter {
                         fetchedAt: attemptedAt,
                         status: "fresh",
                         error: "",
+                        exhaustive: true,
+                        truncated: false,
                     };
                     return;
                 }
@@ -709,6 +716,8 @@ export class GitHubSquadActivityAdapter {
                 fetchedAt: attemptedAt,
                 status: "fresh",
                 error: "",
+                exhaustive: true,
+                truncated: false,
             };
         } else {
             try {
@@ -722,6 +731,8 @@ export class GitHubSquadActivityAdapter {
                     fetchedAt: attemptedAt,
                     status: "fresh",
                     error: "",
+                    exhaustive: true,
+                    truncated: false,
                 };
             } catch (error) {
                 sourceState.comments = sourceFailure(previousSources.comments, errorMessage(error));
@@ -889,6 +900,24 @@ export class GitHubSquadActivityAdapter {
             });
         }
 
+        const defaultBranch = repository?.defaultBranchRef?.name || repository?.defaultBranch;
+        const bootstrap = repository?.nameWithOwner && defaultBranch
+            ? await this.discoverBootstrap({
+                repository,
+                previous,
+                attemptedAt,
+                restBudget,
+            })
+            : null;
+        if (bootstrap) sourceState.bootstrap = bootstrap.sourceState;
+        const bootstrapErrors = bootstrap
+            ? Object.entries(bootstrap.sourceState)
+                .filter(([, state]) => state.error)
+                .map(([source, state]) => ({
+                    source: `bootstrap ${source}`,
+                    message: state.error,
+                }))
+            : [];
         const sourceErrors = [
             ...SOURCES
             .map((source) => {
@@ -901,15 +930,16 @@ export class GitHubSquadActivityAdapter {
             sourceState.workflowJobs.error
                 ? { source: "workflow jobs", message: sourceState.workflowJobs.error }
                 : null,
+            ...bootstrapErrors,
         ].filter(Boolean);
         const snapshot = buildActivitySnapshot({
             repository,
             members,
             sourceState,
             errors: [...repositoryErrors, ...sourceErrors],
+            bootstrap: bootstrap?.bootstrap || null,
             fetchedAt: attemptedAt,
         });
-        const defaultBranch = repository?.defaultBranchRef?.name || repository?.defaultBranch;
         if (!repository?.nameWithOwner || !defaultBranch) {
             return {
                 ...snapshot,
@@ -922,27 +952,14 @@ export class GitHubSquadActivityAdapter {
                 },
             };
         }
-        const bootstrap = await this.discoverBootstrap({
-            repository,
-            previous,
-            attemptedAt,
-            restBudget,
-        });
         snapshot.bootstrap = bootstrap.bootstrap;
         snapshot.sourceState.bootstrap = bootstrap.sourceState;
-        const bootstrapErrors = Object.entries(bootstrap.sourceState)
-            .filter(([, state]) => state.error)
-            .map(([source, state]) => ({
-                source: `bootstrap ${source}`,
-                message: state.error,
-            }));
-        snapshot.errors.push(...bootstrapErrors);
         snapshot.partial = snapshot.partial || bootstrap.bootstrap.stale || bootstrapErrors.length > 0;
         snapshot.stale = snapshot.stale || bootstrap.bootstrap.stale;
         snapshot.staleSources.push(
             ...bootstrap.bootstrap.staleSources.map((source) => `bootstrap.${source}`),
         );
-        return snapshot;
+        return integrateAutomaticBootstrapSnapshot(snapshot);
     }
 }
 

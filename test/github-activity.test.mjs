@@ -952,6 +952,8 @@ test("discovers exhaustive paginated bootstrap evidence with bounded API cost", 
     assert.deepEqual(result.bootstrap.workflowAttempts.map((run) => run.id), [19, 20]);
     assert.equal(result.sourceState.pullRequests.data.length, 2);
     assert.equal(result.sourceState.issues.data.length, 2);
+    assert.equal(result.sourceState.comments.exhaustive, true);
+    assert.equal(result.sourceState.comments.truncated, false);
     assert.equal(calls.length, 5);
     assert.equal(restBudget.remaining, restBudget.reserve);
     assert.equal(calls.filter((args) => args[1].includes("/comments?")).length, 1);
@@ -983,6 +985,8 @@ test("fetches comments only for the unique canonical research issue", async () =
     assert.equal(calls.some((args) => args[1].includes("/comments?")), false);
     assert.equal(result.sourceState.comments.status, "fresh");
     assert.deepEqual(result.sourceState.comments.data, []);
+    assert.equal(result.sourceState.comments.exhaustive, true);
+    assert.equal(result.sourceState.comments.truncated, false);
 });
 
 test("returns unknown when canonical comment discovery has never succeeded", async () => {

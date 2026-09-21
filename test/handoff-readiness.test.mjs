@@ -133,6 +133,76 @@ test("derives ready only from complete activated leaf evidence", () => {
     assert.equal(handoff.readiness.automatedHandoffAvailable, false);
 });
 
+test("uses only the latest activation artifact for handoff authority", () => {
+    const issues = readyIssues();
+    issues[0].comments.push(activationComment([
+        binding({
+            task: "4",
+            issue: "#13",
+        }),
+    ], {
+        url: "https://github.com/octodemo/demo/issues/10#issuecomment-101",
+        createdAt: "2026-09-21T18:45:00Z",
+    }));
+    issues.push(issue(13, {
+        labels: [{ name: "squad" }, { name: "squad:kint" }],
+    }));
+
+    const evidence = parseActivationEvidence({
+        issues,
+        repository: repository.nameWithOwner,
+    });
+
+    assert.equal(evidence.get(12).activation, null);
+    assert.equal(evidence.get(13).activation?.issue, "octodemo/demo#13");
+});
+
+test("invalid latest activation envelopes supersede older handoff authority", () => {
+    const issues = readyIssues();
+    issues[0].comments.push({
+        body: `Activation bindings:
+\`\`\`json
+${JSON.stringify([binding()])}
+\`\`\`
+Structured data:
+\`\`\`json
+{"schema_version":"1","origin_issue":10,"phases":[]}
+\`\`\``,
+        url: "https://github.com/octodemo/demo/issues/10#issuecomment-invalid-latest",
+        createdAt: "2026-09-21T18:45:00Z",
+    });
+
+    const evidence = parseActivationEvidence({
+        issues,
+        repository: repository.nameWithOwner,
+    });
+
+    assert.equal(evidence.get(12).activation, null);
+    assert.match(
+        evidence.get(12).errors.join(" "),
+        /structured data kind is invalid or unsupported/i,
+    );
+});
+
+test("activation handoff authority requires a valid timestamp", () => {
+    const issues = readyIssues({}, {
+        comments: [activationComment(undefined, {
+            createdAt: "not-a-timestamp",
+        })],
+    });
+
+    const evidence = parseActivationEvidence({
+        issues,
+        repository: repository.nameWithOwner,
+    });
+
+    assert.equal(evidence.get(12).activation, null);
+    assert.match(
+        evidence.get(12).errors.join(" "),
+        /timestamp is missing or invalid/i,
+    );
+});
+
 test("keeps task readiness independent from mechanism availability", () => {
     const handoff = taskGoal(snapshot({
         mechanismAvailability: {
@@ -461,9 +531,119 @@ test("requires exact task and epic issue identity and observed binding labels", 
     const missingLabel = readyIssues({
         labels: [{ name: "squad" }],
     });
+
     const handoff = taskGoal(snapshot({ issues: missingLabel })).handoff;
     assert.equal(handoff.readiness.state, "unknown");
-    assert.match(handoff.readiness.reasons.join(" "), /not observed on task issue/i);
+    assert.match(handoff.readiness.reasons.join(" "), /ownership is not validated/i);
+
+    const omittedLabels = readyIssues({
+        labels: [{ name: "squad" }],
+    });
+    omittedLabels.find((candidate) => candidate.number === 11).labels = [{ name: "squad" }];
+    omittedLabels[0].comments = [activationComment([
+        binding({ label: "", epic_label: "" }),
+    ])];
+    const omitted = taskGoal(snapshot({ issues: omittedLabels })).handoff;
+    assert.equal(omitted.readiness.state, "unknown");
+    assert.match(omitted.readiness.reasons.join(" "), /ownership is not validated/i);
+});
+
+test("activation identity collisions fail the whole envelope closed", () => {
+    const issues = readyIssues();
+    issues.push(issue(13, {
+        title: "Second task",
+        body: "## Acceptance Criteria\n- Remains fail closed",
+        labels: [{ name: "squad" }, { name: "squad:kint" }],
+    }));
+    issues[0].comments = [activationComment([
+        binding(),
+        binding({ issue: "#13" }),
+    ])];
+
+    const taskEvidence = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+
+    test("activation identity fields require raw strings", () => {
+        const issues = readyIssues();
+        issues[0].comments = [activationComment([binding({
+            task: { id: "3" },
+            epic: ["2.1"],
+            agent: 7,
+            epic_agents: [7],
+        })])];
+        const evidence = parseActivationEvidence({
+            issues,
+            repository: "octodemo/demo",
+        });
+
+        assert.equal(evidence.get(12).activation, null);
+        assert.match(evidence.get(12).errors.join(" "), /must be strings/i);
+
+        const oversized = "x".repeat(200);
+        issues[0].comments = [activationComment([binding({
+            agent: oversized,
+            epic_agents: [oversized],
+        })])];
+        const oversizedEvidence = parseActivationEvidence({
+            issues,
+            repository: "octodemo/demo",
+        });
+        assert.equal(oversizedEvidence.get(12).activation, null);
+        assert.match(oversizedEvidence.get(12).errors.join(" "), /must be strings/i);
+    });
+
+    assert.equal(taskEvidence.get(12).activation, null);
+    assert.equal(taskEvidence.get(13).activation, null);
+    assert.match(
+        [...taskEvidence.get(12).errors, ...taskEvidence.get(13).errors].join(" "),
+        /task 3 resolves to multiple issues/i,
+    );
+
+    issues[0].comments = [activationComment([
+        binding({ issue: "#11" }),
+    ])];
+    const roleCollision = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+
+    assert.equal(roleCollision.get(11).activation, null);
+    assert.match(
+        roleCollision.get(11).errors.join(" "),
+        /both a task and an epic/i,
+    );
+
+    issues[0].comments = [activationComment([
+        binding({ issue: "#10", label: "", omission_reason: "non-roster" }),
+    ])];
+    const rootCollision = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+    assert.equal(rootCollision.get(10).activation, null);
+    assert.match(rootCollision.get(10).errors.join(" "), /root issue/i);
+
+    issues[0].comments = [activationComment([
+        binding(),
+        binding({
+            task: "4",
+            issue: "#13",
+            epic_agents: ["kint", "other"],
+            agent: "Other",
+        }),
+    ])];
+    const epicAgentCollision = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+    assert.equal(epicAgentCollision.get(12).activation, null);
+    assert.equal(epicAgentCollision.get(13).activation, null);
+    assert.match(
+        [...epicAgentCollision.get(12).errors, ...epicAgentCollision.get(13).errors].join(" "),
+        /conflicting identity or agents/i,
+    );
 });
 
 test("uses native and fallback sub-issue relationships to reject non-leaf tasks", () => {
@@ -574,7 +754,8 @@ test("uses active runs, authoritative Copilot assignment, and enabled session ev
             labels: [{ name: "squad" }, { name: "squad:copilot" }, { name: "squad:kint" }],
         },
     })).handoff;
-    assert.equal(labelOnly.readiness.state, "ready");
+    assert.equal(labelOnly.readiness.state, "unknown");
+    assert.match(labelOnly.readiness.reasons.join(" "), /ownership is not validated/i);
 
     const assigned = taskGoal(snapshot({
         task: {

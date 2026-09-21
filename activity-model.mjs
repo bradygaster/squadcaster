@@ -3,11 +3,41 @@ import {
     parseActivationEvidence,
     reconcileHandoffDependencies,
 } from "./handoff-readiness.mjs";
+import { BOOTSTRAP_IDENTIFIERS, BOOTSTRAP_STATUSES } from "./bootstrap-classifier.mjs";
 
 const ACTIVE_STATES = new Set(["queued", "researching", "implementing", "reviewing", "blocked", "failed"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure", "action_required"]);
 const DAY_BOUNDARY_VERSION = 1;
 const UTC_DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
+const SUPPORTED_ARTIFACT_KINDS = new Set([
+    "research",
+    "triage",
+    "program",
+    "implementation",
+    "validation",
+    "plan",
+    "scope-accepted",
+    "impl-accepted",
+    "impl-phases-accepted",
+    "plan-accepted",
+    "phases-accepted",
+    "activated",
+    "phases-activated",
+    "lifecycle-state",
+]);
+const ACTIVATION_ARTIFACT_KINDS = new Set([
+    "plan-accepted",
+    "phases-accepted",
+    "activated",
+    "phases-activated",
+]);
+const ACCEPTED_ARTIFACT_KINDS = new Set([
+    "scope-accepted",
+    "impl-accepted",
+    "impl-phases-accepted",
+    "plan-accepted",
+    "phases-accepted",
+]);
 const ARTIFACT_PHASES = {
     research: "researching",
     triage: "researching",
@@ -214,29 +244,142 @@ function dependencyReferences(body, currentRepository) {
     return [...found.values()];
 }
 
-function parseArtifacts(comments) {
+function activationBindings(body) {
+    const matches = [...String(body || "").matchAll(
+        /Activation bindings:\s*```json\s*([\s\S]*?)```/gi,
+    )];
+    if (matches.length === 0) {
+        return { bindings: null, error: "missing-activation-bindings" };
+    }
+    if (matches.length > 1) {
+        return { bindings: null, error: "duplicate-activation-bindings" };
+    }
+    try {
+        const bindings = JSON.parse(matches[0][1]);
+        return Array.isArray(bindings) && bindings.length > 0
+            ? { bindings, error: "" }
+            : { bindings, error: "empty-activation-bindings" };
+    } catch {
+        return { bindings: null, error: "malformed-activation-bindings" };
+    }
+}
+
+function parseArtifacts(comments, issueNumber) {
     const artifacts = [];
     for (const comment of Array.isArray(comments) ? comments : []) {
         const body = String(comment?.body || "");
+        const activationCandidate = /Activation bindings\s*:/i.test(body);
         const blocks = body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
+        const commentArtifacts = [];
         for (const block of blocks) {
+            let value;
             try {
-                const value = JSON.parse(block[1]);
-                if (!value?.squad_artifact) continue;
-                artifacts.push({
-                    kind: text(value.squad_artifact, 80),
-                    schemaVersion: text(value.schema_version || "unknown", 20),
-                    originIssue: Number(value.origin_issue) || null,
-                    phases: Array.isArray(value.phases) ? value.phases.slice(0, 100) : [],
+                value = JSON.parse(block[1]);
+            } catch {
+                if (!/squad_artifact/i.test(block[1]) && !/Structured data:/i.test(body)) continue;
+                const activationKind = block[1].match(
+                    /"squad_artifact"\s*:\s*"(activated|phases-activated|plan-accepted|phases-accepted)/i,
+                )?.[1]?.toLowerCase();
+                commentArtifacts.push({
+                    kind: activationKind || "unknown",
+                    schemaVersion: "unknown",
+                    originIssue: null,
+                    phases: [],
                     createdAt: timestamp(comment?.createdAt || comment?.created_at),
                     url: text(comment?.url || comment?.html_url, 500),
+                    validation: "malformed",
+                    validationReason: "invalid-json",
+                    bindings: null,
+                    activationCandidate,
                 });
-            } catch {
-                // A fenced block that is not structured Squad data is ordinary issue content.
+                continue;
+            }
+            if (!value?.squad_artifact) continue;
+            const kind = text(value.squad_artifact, 80);
+            const schemaVersion = typeof value.schema_version === "string"
+                ? text(value.schema_version, 20)
+                : "unknown";
+            const originIssue = Number.isInteger(value.origin_issue)
+                ? value.origin_issue
+                : null;
+            let validation = "supported";
+            let validationReason = "";
+            if (typeof value.schema_version !== "string" ||
+                originIssue === null ||
+                originIssue < 1 ||
+                !Array.isArray(value.phases)) {
+                validation = "malformed";
+                validationReason = "invalid-envelope";
+            } else if (schemaVersion !== "1") {
+                validation = "unsupported";
+                validationReason = "unsupported-schema";
+            } else if (originIssue !== Number(issueNumber)) {
+                validation = "malformed";
+                validationReason = "conflicting-origin";
+            } else if (!SUPPORTED_ARTIFACT_KINDS.has(kind)) {
+                validation = "unsupported";
+                validationReason = "unsupported-kind";
+            }
+            let bindings = null;
+            if (ACTIVATION_ARTIFACT_KINDS.has(kind)) {
+                const parsedBindings = activationBindings(body);
+                bindings = parsedBindings.bindings;
+                if (validation === "supported" && parsedBindings.error) {
+                    validation = "malformed";
+                    validationReason = parsedBindings.error;
+                }
+            }
+            commentArtifacts.push({
+                kind,
+                schemaVersion,
+                originIssue,
+                phases: Array.isArray(value.phases) ? value.phases.slice(0, 100) : [],
+                createdAt: timestamp(comment?.createdAt || comment?.created_at),
+                url: text(comment?.url || comment?.html_url, 500),
+                validation,
+                validationReason,
+                bindings,
+                activationCandidate,
+            });
+        }
+        if (
+            activationCandidate &&
+            !commentArtifacts.some((artifact) =>
+                artifact.activationCandidate)
+        ) {
+            commentArtifacts.push({
+                kind: "unknown",
+                schemaVersion: "unknown",
+                originIssue: null,
+                phases: [],
+                createdAt: timestamp(comment?.createdAt || comment?.created_at),
+                url: text(comment?.url || comment?.html_url, 500),
+                validation: "malformed",
+                validationReason: "invalid-activation-envelope",
+                bindings: null,
+                activationCandidate: true,
+            });
+        }
+        const activationArtifacts = commentArtifacts.filter((artifact) =>
+            ACTIVATION_ARTIFACT_KINDS.has(artifact.kind));
+        if (activationArtifacts.length > 1) {
+            for (const artifact of activationArtifacts) {
+                artifact.validation = "malformed";
+                artifact.validationReason = "duplicate-activation-artifacts";
+                artifact.bindings = null;
             }
         }
+        artifacts.push(...commentArtifacts);
     }
     return artifacts.sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+}
+
+function advancingArtifacts(artifacts) {
+    return artifacts.filter((artifact) =>
+        artifact.advancing !== false &&
+        artifact.validation === "supported" &&
+        artifact.schemaVersion === "1" &&
+        ARTIFACT_PHASES[artifact.kind]);
 }
 
 function isSquadGoal(issue, artifacts) {
@@ -244,6 +387,10 @@ function isSquadGoal(issue, artifacts) {
     const comments = Array.isArray(issue?.comments) ? issue.comments : [];
     return labels.some((label) => label === "squad" || label.startsWith("squad:")) ||
         artifacts.length > 0 ||
+        (
+            text(issue?.title, 240) === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
+            String(issue?.body || "").includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker)
+        ) ||
         /(^|\s)\/squad(?:\s|$)/i.test(`${issue?.body || ""}\n${comments.map((comment) => comment?.body || "").join("\n")}`) ||
         /^squad\b|\[squad\]/i.test(text(issue?.title));
 }
@@ -495,7 +642,7 @@ function phaseFor({ issue, artifacts, pullRequests, workflowRuns, blockers, igno
     }
     if (pullRequests.some((pullRequest) => pullRequest.state === "open" && !pullRequest.draft)) return "reviewing";
     if (pullRequests.some((pullRequest) => pullRequest.state === "open") || currentRuns.length > 0) return "implementing";
-    const latestArtifact = artifacts.at(-1);
+    const latestArtifact = advancingArtifacts(artifacts).at(-1);
     return ARTIFACT_PHASES[latestArtifact?.kind] || "queued";
 }
 
@@ -505,7 +652,7 @@ function nextActionFor(phase, pullRequests, workflowRuns, artifacts) {
     if (phase === "reviewing") return "Review the pull request and required checks.";
     if (phase === "implementing") return "Wait for the active implementation or workflow run.";
     if (phase === "completed") return "No action required.";
-    const latestArtifact = artifacts.at(-1)?.kind;
+    const latestArtifact = advancingArtifacts(artifacts).at(-1)?.kind;
     if (latestArtifact === "research") return "Triage the research findings.";
     if (latestArtifact === "triage") return "Create or approve the program plan.";
     if (["program", "implementation", "validation", "plan"].includes(latestArtifact)) {
@@ -513,6 +660,19 @@ function nextActionFor(phase, pullRequests, workflowRuns, artifacts) {
     }
     if (pullRequests.length === 0 && workflowRuns.length === 0) return "Start the next Squad command from the issue.";
     return "Await the next GitHub event.";
+}
+
+function artifactEvidence(artifact, issue) {
+    return {
+        kind: "artifact",
+        title: `Squad ${artifact.kind} artifact (schema ${artifact.schemaVersion})` +
+            (artifact.validation === "supported" ? "" : ` — ${artifact.validation}`),
+        url: artifact.url || text(issue.url, 500),
+        timestamp: artifact.createdAt,
+        confidence: "observed",
+        classification: artifact.validation,
+        reason: artifact.validationReason,
+    };
 }
 
 function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner, pullRequestLinks = new Map()) {
@@ -533,13 +693,7 @@ function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner, pullRe
         });
     }
     for (const artifact of artifacts) {
-        evidence.push({
-            kind: "artifact",
-            title: `Squad ${artifact.kind} artifact (schema ${artifact.schemaVersion})`,
-            url: artifact.url || text(issue.url, 500),
-            timestamp: artifact.createdAt,
-            confidence: "observed",
-        });
+        evidence.push(artifactEvidence(artifact, issue));
     }
     for (const run of workflowRuns) {
         evidence.push({
@@ -575,6 +729,557 @@ function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner, pullRe
     );
 }
 
+function resolveIssueNumber(value) {
+    if (typeof value !== "string") return null;
+    const match = /^#([1-9][0-9]*)$/.exec(value.trim());
+    return match ? Number(match[1]) : null;
+}
+
+function normalizedAgent(value) {
+    return text(value, 160).toLowerCase();
+}
+
+function labelsForGoal(goal) {
+    return new Set((goal?.issue?.labels || []).map((label) => text(label, 120).toLowerCase()));
+}
+
+function validatesReportedLabel(goal, label, omission) {
+    const labels = labelsForGoal(goal);
+    if (!labels.has("squad")) return false;
+    const agentLabels = [...labels].filter((candidate) => candidate.startsWith("squad:"));
+    const normalizedLabel = text(label, 120).toLowerCase();
+    if (normalizedLabel) {
+        return agentLabels.length === 1 && agentLabels[0] === normalizedLabel;
+    }
+    return ["multi-owner", "non-roster"].includes(text(omission, 80).toLowerCase()) &&
+        agentLabels.length === 0;
+}
+
+function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
+    if (!ACTIVATION_ARTIFACT_KINDS.has(artifact?.kind) ||
+        artifact.validation !== "supported" ||
+        !Array.isArray(artifact.bindings) ||
+        artifact.bindings.length === 0) {
+        return { valid: false, goals: [], reason: artifact?.validationReason || "invalid-activation-artifact" };
+    }
+    const seenTasks = new Set();
+    const issueAssignments = new Map();
+    const tasks = new Map();
+    const epics = new Map();
+    const generated = new Map();
+    const assignIssue = (issueNumber, role, identity) => {
+        const existing = issueAssignments.get(issueNumber);
+        if (!existing) {
+            issueAssignments.set(issueNumber, { role, identity });
+            return true;
+        }
+        return existing.role === role && existing.identity === identity;
+    };
+    for (const binding of artifact.bindings) {
+        if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
+            return { valid: false, goals: [], reason: "invalid-activation-binding" };
+        }
+        if (
+            typeof binding.task !== "string" ||
+            binding.task.trim().length === 0 ||
+            binding.task.trim().length > 80 ||
+            typeof binding.epic !== "string" ||
+            binding.epic.trim().length === 0 ||
+            binding.epic.trim().length > 80 ||
+            typeof binding.agent !== "string" ||
+            binding.agent.trim().length === 0 ||
+            binding.agent.trim().length > 160 ||
+            !Array.isArray(binding.epic_agents) ||
+            !binding.epic_agents.every((value) =>
+                typeof value === "string" &&
+                value.trim().length > 0 &&
+                value.trim().length <= 160) ||
+            !["label", "epic_label", "omission_reason", "epic_omission_reason"]
+                .every((field) =>
+                    binding[field] === undefined ||
+                    binding[field] === null ||
+                    typeof binding[field] === "string")
+        ) {
+            return { valid: false, goals: [], reason: "invalid-activation-binding" };
+        }
+        const issueNumber = resolveIssueNumber(binding.issue);
+        const epicIssueNumber = resolveIssueNumber(binding.epic_issue);
+        const task = text(binding.task, 80);
+        const epic = text(binding.epic, 80);
+        const agent = normalizedAgent(binding.agent);
+        const epicAgents = binding.epic_agents.map(normalizedAgent).filter(Boolean);
+        const uniqueEpicAgents = [...new Set(epicAgents)].sort();
+        if (!issueNumber ||
+            !epicIssueNumber ||
+            issueNumber === rootGoal.issue.number ||
+            epicIssueNumber === rootGoal.issue.number ||
+            !task ||
+            !epic ||
+            !agent ||
+            uniqueEpicAgents.length === 0 ||
+            uniqueEpicAgents.length !== epicAgents.length ||
+            !uniqueEpicAgents.includes(agent) ||
+            seenTasks.has(issueNumber)) {
+            return { valid: false, goals: [], reason: "invalid-activation-binding" };
+        }
+        if (!assignIssue(issueNumber, "task", task) ||
+            !assignIssue(epicIssueNumber, "epic", epic)) {
+            return { valid: false, goals: [], reason: "conflicting-generated-goal" };
+        }
+        const priorTaskIssue = tasks.get(task);
+        if (priorTaskIssue && priorTaskIssue !== issueNumber) {
+            return { valid: false, goals: [], reason: "conflicting-generated-goal" };
+        }
+        tasks.set(task, issueNumber);
+        const taskGoal = goalsByNumber.get(issueNumber);
+        const epicGoal = goalsByNumber.get(epicIssueNumber);
+        if (!taskGoal ||
+            !epicGoal ||
+            !validatesReportedLabel(taskGoal, binding.label, binding.omission_reason)) {
+            return { valid: false, goals: [], reason: "unvalidated-generated-goal" };
+        }
+        seenTasks.add(issueNumber);
+        const priorEpic = epics.get(epic);
+        if (priorEpic && (
+            priorEpic.issueNumber !== epicIssueNumber ||
+            priorEpic.agents.join("\0") !== uniqueEpicAgents.join("\0")
+        )) {
+            return { valid: false, goals: [], reason: "conflicting-epic-binding" };
+        }
+        epics.set(epic, {
+            issueNumber: epicIssueNumber,
+            agents: uniqueEpicAgents,
+            label: binding.epic_label,
+            omission: binding.epic_omission_reason,
+            goal: epicGoal,
+        });
+        generated.set(issueNumber, {
+            id: taskGoal.id,
+            issueNumber,
+            relation: "task",
+            task,
+            epic,
+            title: taskGoal.issue.title,
+            url: taskGoal.issue.url,
+            phase: taskGoal.phase,
+        });
+    }
+    for (const [epic, value] of epics) {
+        if (!validatesReportedLabel(value.goal, value.label, value.omission)) {
+            return { valid: false, goals: [], reason: "unvalidated-generated-goal" };
+        }
+        generated.set(value.issueNumber, {
+            id: value.goal.id,
+            issueNumber: value.issueNumber,
+            relation: "epic",
+            epic,
+            title: value.goal.issue.title,
+            url: value.goal.issue.url,
+            phase: value.goal.phase,
+        });
+    }
+    return {
+        valid: true,
+        goals: [...generated.values()].sort((left, right) =>
+            left.issueNumber - right.issueNumber || left.relation.localeCompare(right.relation)),
+        reason: "",
+    };
+}
+
+function bootstrapEvidence(bootstrap) {
+    const evidence = [];
+    for (const run of bootstrap.workflowAttempts || []) {
+        evidence.push({
+            kind: "bootstrap-workflow",
+            title: `${run.workflow}: ${run.conclusion || run.status}`,
+            url: run.url,
+            timestamp: run.updatedAt || run.createdAt,
+            confidence: "observed",
+        });
+    }
+    if (bootstrap.castPullRequest) {
+        evidence.push({
+            kind: "bootstrap-cast",
+            title: `Cast PR #${bootstrap.castPullRequest.number}: ${bootstrap.castPullRequest.state}` +
+                (bootstrap.castPullRequest.draft ? " (draft)" : ""),
+            url: bootstrap.castPullRequest.url,
+            timestamp: bootstrap.castPullRequest.mergedAt ||
+                bootstrap.castPullRequest.updatedAt ||
+                bootstrap.castPullRequest.createdAt,
+            confidence: "observed",
+        });
+    }
+    if (bootstrap.researchIssue) {
+        evidence.push({
+            kind: "bootstrap-issue",
+            title: `Bootstrap research issue #${bootstrap.researchIssue.number}: ${bootstrap.researchIssue.state}`,
+            url: bootstrap.researchIssue.url,
+            timestamp: bootstrap.researchIssue.updatedAt || bootstrap.researchIssue.createdAt,
+            confidence: "observed",
+        });
+    }
+    if (bootstrap.researchArtifact) {
+        evidence.push({
+            kind: "bootstrap-research",
+            title: `Bootstrap research artifact (schema ${bootstrap.researchArtifact.schemaVersion})`,
+            url: bootstrap.researchArtifact.url || bootstrap.researchIssue?.url,
+            timestamp: bootstrap.researchArtifact.createdAt,
+            confidence: "observed",
+        });
+    }
+    for (const artifact of bootstrap.unsupportedResearchArtifacts || []) {
+        evidence.push({
+            kind: "bootstrap-research",
+            title: `Unsupported bootstrap research artifact (schema ${text(artifact.schemaVersion || "unknown", 20)})`,
+            url: artifact.url || bootstrap.researchIssue?.url,
+            timestamp: artifact.createdAt,
+            confidence: "observed",
+            classification: "unsupported",
+        });
+    }
+    for (const reason of bootstrap.reasons || []) {
+        evidence.push({
+            kind: "bootstrap-diagnostic",
+            title: reason.message || reason.code,
+            url: reason.url ||
+                bootstrap.researchIssue?.url ||
+                bootstrap.castPullRequest?.url ||
+                "",
+            timestamp: null,
+            confidence: "derived",
+            code: reason.code,
+            source: reason.source,
+        });
+    }
+    return evidence;
+}
+
+function bootstrapJourneyPhase({ bootstrap, rootGoal, generatedGoals }) {
+    if (rootGoal.issue.state === "closed") return "done";
+    const generatedPhases = generatedGoals.map((goal) => goal.phase);
+    if (generatedPhases.some((phase) =>
+        ["implementing", "reviewing", "blocked", "failed", "completed"].includes(phase))) {
+        return "delivery";
+    }
+    if (generatedGoals.length > 0) return "activated";
+    const artifacts = advancingArtifacts(rootGoal.artifacts);
+    const latestArtifact = artifacts.at(-1);
+    const activeActivation = rootGoal.workflowRuns.some((run) => run.status !== "completed") &&
+        ACCEPTED_ARTIFACT_KINDS.has(latestArtifact?.kind);
+    if (activeActivation) return "activating";
+    if (["activated", "phases-activated"].includes(latestArtifact?.kind)) return "activated";
+    if (ACCEPTED_ARTIFACT_KINDS.has(latestArtifact?.kind)) return "activation-ready";
+    if (["program", "implementation", "validation", "plan"].includes(latestArtifact?.kind)) return "planning";
+    if (latestArtifact?.kind === "triage") return "triage";
+    if (
+        bootstrap.status === "complete" &&
+        bootstrap.castPullRequest?.state === "open"
+    ) {
+        return "cast-review";
+    }
+    if (latestArtifact?.kind === "research" || bootstrap.researchArtifact) return "research";
+    return null;
+}
+
+function bootstrapSummary(values) {
+    const summary = Object.fromEntries(BOOTSTRAP_STATUSES.map((status) => [status, 0]));
+    summary.total = 0;
+    summary.stale = 0;
+    for (const bootstrap of values.filter(Boolean)) {
+        if (!BOOTSTRAP_STATUSES.includes(bootstrap.status)) continue;
+        summary[bootstrap.status] += 1;
+        if (bootstrap.status !== "unknown") summary.total += 1;
+        if (bootstrap.stale) summary.stale += 1;
+    }
+    return summary;
+}
+
+function lifecycleSummary(goals) {
+    const count = (phases) => goals.filter((goal) => phases.includes(goal.phase)).length;
+    return {
+        active: goals.filter((goal) => ACTIVE_STATES.has(goal.phase)).length,
+        queued: count(["queued"]),
+        blocked: count(["blocked"]),
+        failed: count(["failed"]),
+        awaitingReview: count(["reviewing"]),
+        implementing: count(["implementing"]),
+        researching: count(["researching"]),
+        completed: count(["completed"]),
+    };
+}
+
+function confirmedCanonicalCastPullRequest({ bootstrap, sourceState, repository }) {
+    if (
+        !bootstrap?.castPullRequest ||
+        ["ambiguous", "malformed", "unknown"].includes(bootstrap.status)
+    ) {
+        return null;
+    }
+    const pullRequestSource = sourceState?.bootstrap?.pullRequests;
+    if (
+        pullRequestSource?.status !== "fresh" ||
+        pullRequestSource.exhaustive !== true ||
+        pullRequestSource.truncated !== false
+    ) {
+        return null;
+    }
+    const defaultBranch = text(
+        repository?.defaultBranchRef?.name || repository?.defaultBranch,
+        240,
+    );
+    const candidates = (pullRequestSource.data || []).filter((pullRequest) =>
+        text(pullRequest?.headRefName || pullRequest?.head?.ref, 240) ===
+            BOOTSTRAP_IDENTIFIERS.castBranch &&
+        text(pullRequest?.title, 240) === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
+        text(pullRequest?.baseRefName || pullRequest?.base?.ref, 240) === defaultBranch);
+    if (candidates.length !== 1) return null;
+    const candidate = candidates[0];
+    const canonical = bootstrap.castPullRequest;
+    const sameIdentity = (
+        canonical.number &&
+        Number(candidate?.number) === canonical.number
+    ) || (
+        canonical.url &&
+        text(candidate?.url || candidate?.html_url, 500) === canonical.url
+    );
+    return sameIdentity ? canonical : null;
+}
+
+export function integrateAutomaticBootstrapSnapshot(snapshot) {
+    const bootstrap = snapshot?.bootstrap;
+    if (!bootstrap || !BOOTSTRAP_STATUSES.includes(bootstrap.status)) return snapshot;
+    const repositoryKey = text(snapshot.repository?.nameWithOwner, 300).toLowerCase();
+    const goals = (snapshot.goals || []).map((goal) => ({
+        ...goal,
+        artifacts: [...(goal.artifacts || [])],
+        evidence: [...(goal.evidence || [])],
+    }));
+    const goalsByNumber = new Map(
+        goals
+            .filter((goal) =>
+                text(goal.repository?.nameWithOwner, 300).toLowerCase() === repositoryKey)
+            .map((goal) => [Number(goal.issue?.number), goal]),
+    );
+    const researchIssueNumber = Number(bootstrap.researchIssue?.number);
+    const rootGoal = !["ambiguous", "malformed", "unknown"].includes(bootstrap.status) &&
+        Number.isInteger(researchIssueNumber)
+        ? goalsByNumber.get(researchIssueNumber)
+        : null;
+    if (!rootGoal) {
+        const candidateNumbers = new Set(
+            (snapshot.sourceState?.issues?.data || [])
+                .filter((issue) =>
+                    text(issue?.title, 240) === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
+                    String(issue?.body || "").includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker))
+                .map((issue) => Number(issue?.number))
+                .filter(Number.isInteger),
+        );
+        for (const goal of goals) {
+            if (
+                text(goal.issue?.title, 240) === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
+                String(goal.issue?.body || "").includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker)
+            ) {
+                candidateNumbers.add(Number(goal.issue?.number));
+            }
+        }
+        for (const issueNumber of candidateNumbers) {
+            const candidate = goalsByNumber.get(issueNumber);
+            if (!candidate) continue;
+            candidate.artifacts = candidate.artifacts.map((artifact) => ({
+                ...artifact,
+                advancing: false,
+            }));
+            candidate.phaseWithoutBlockers = phaseFor({
+                issue: candidate.issue,
+                artifacts: candidate.artifacts,
+                pullRequests: candidate.pullRequests,
+                workflowRuns: candidate.workflowRuns,
+                blockers: [],
+                ignoreBlockers: true,
+            });
+            candidate.phase = phaseFor({
+                issue: candidate.issue,
+                artifacts: candidate.artifacts,
+                pullRequests: candidate.pullRequests,
+                workflowRuns: candidate.workflowRuns,
+                blockers: candidate.blockers,
+            });
+            candidate.nextAction = nextActionFor(
+                candidate.phase,
+                candidate.pullRequests,
+                candidate.workflowRuns,
+                candidate.artifacts,
+            );
+        }
+    }
+    if (rootGoal) {
+        const artifactKey = (artifact) => [
+            artifact.kind,
+            artifact.schemaVersion,
+            artifact.originIssue,
+            artifact.createdAt,
+            artifact.url,
+            artifact.validation,
+        ].join("|");
+        const existingArtifactKeys = new Set(rootGoal.artifacts.map(artifactKey));
+        const commentsSource = snapshot.sourceState?.bootstrap?.comments;
+        const commentsAreAuthoritative = commentsSource?.status === "fresh" &&
+            commentsSource.exhaustive === true &&
+            commentsSource.truncated === false;
+        const discoveredArtifacts = parseArtifacts(
+            commentsSource?.data,
+            researchIssueNumber,
+        );
+        const discoveredArtifactKeys = new Set(discoveredArtifacts.map(artifactKey));
+        const retainedResearchArtifact = bootstrap.researchArtifact;
+        const retainedResearchCandidates = rootGoal.artifacts.filter((artifact) =>
+            retainedResearchArtifact &&
+            artifact.kind === BOOTSTRAP_IDENTIFIERS.researchArtifactKind &&
+            artifact.schemaVersion === String(retainedResearchArtifact.schemaVersion) &&
+            artifact.originIssue === Number(retainedResearchArtifact.originIssue) &&
+            artifact.url === retainedResearchArtifact.url &&
+            artifact.validation === "supported");
+        const retainedResearchKey = retainedResearchCandidates.length === 1
+            ? artifactKey(retainedResearchCandidates[0])
+            : "";
+        const addedArtifacts = discoveredArtifacts
+            .filter((artifact) =>
+                commentsAreAuthoritative ||
+                !existingArtifactKeys.has(artifactKey(artifact)));
+        rootGoal.artifacts = [
+            ...rootGoal.artifacts
+                .filter((artifact) =>
+                    !commentsAreAuthoritative ||
+                    !discoveredArtifactKeys.has(artifactKey(artifact)))
+                .map((artifact) => ({
+                    ...artifact,
+                    advancing: Boolean(
+                        retainedResearchKey &&
+                        artifactKey(artifact) === retainedResearchKey
+                    ),
+                })),
+            ...addedArtifacts.map((artifact) => ({
+                ...artifact,
+                advancing: commentsAreAuthoritative,
+            })),
+        ]
+            .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+        rootGoal.phaseWithoutBlockers = phaseFor({
+            issue: rootGoal.issue,
+            artifacts: rootGoal.artifacts,
+            pullRequests: rootGoal.pullRequests,
+            workflowRuns: rootGoal.workflowRuns,
+            blockers: [],
+            ignoreBlockers: true,
+        });
+        rootGoal.phase = phaseFor({
+            issue: rootGoal.issue,
+            artifacts: rootGoal.artifacts,
+            pullRequests: rootGoal.pullRequests,
+            workflowRuns: rootGoal.workflowRuns,
+            blockers: rootGoal.blockers,
+        });
+        rootGoal.nextAction = nextActionFor(
+            rootGoal.phase,
+            rootGoal.pullRequests,
+            rootGoal.workflowRuns,
+            rootGoal.artifacts,
+        );
+        const activationArtifacts = rootGoal.artifacts.filter((artifact) =>
+            artifact.advancing !== false &&
+            (
+                ACTIVATION_ARTIFACT_KINDS.has(artifact.kind) ||
+                artifact.activationCandidate === true
+            ));
+        const invalidTimestampArtifacts = activationArtifacts.filter((artifact) =>
+            !artifact.createdAt);
+        const latestActivationCreatedAt = invalidTimestampArtifacts.length === 0
+            ? activationArtifacts.at(-1)?.createdAt || ""
+            : "";
+        const latestActivationArtifacts = invalidTimestampArtifacts.length > 0
+            ? invalidTimestampArtifacts
+            : activationArtifacts.filter((artifact) =>
+                artifact.createdAt === latestActivationCreatedAt);
+        const activationArtifact = latestActivationArtifacts.length === 1
+            && invalidTimestampArtifacts.length === 0
+            ? latestActivationArtifacts[0]
+            : null;
+        const activationDiagnosticArtifact = latestActivationArtifacts.at(-1);
+        let generated = {
+            valid: false,
+            goals: [],
+            reason: invalidTimestampArtifacts.length > 0
+                ? "invalid-activation-timestamp"
+                : latestActivationArtifacts.length > 1
+                ? "ambiguous-latest-activation"
+                : "",
+        };
+        if (activationArtifact) {
+            generated = validateGeneratedGoals(
+                activationArtifact,
+                rootGoal,
+                goalsByNumber,
+            );
+        }
+        const extraEvidence = [
+            ...addedArtifacts.map((artifact) => artifactEvidence(artifact, rootGoal.issue)),
+            ...bootstrapEvidence(bootstrap),
+        ];
+        if (generated.valid) {
+            for (const goal of generated.goals) {
+                extraEvidence.push({
+                    kind: "generated-goal",
+                    title: `Generated ${goal.relation} goal #${goal.issueNumber}: ${goal.title}`,
+                    url: goal.url,
+                    timestamp: activationArtifact?.createdAt || rootGoal.updatedAt,
+                    confidence: "observed",
+                });
+            }
+        } else if (activationDiagnosticArtifact && generated.reason) {
+            extraEvidence.push({
+                kind: "bootstrap-diagnostic",
+                title: "Activation metadata could not be validated; generated goals were not linked.",
+                url: activationDiagnosticArtifact.url || rootGoal.issue.url,
+                timestamp: activationDiagnosticArtifact.createdAt,
+                confidence: "derived",
+                code: generated.reason,
+                source: "artifacts",
+            });
+        }
+        const generatedGoals = generated.valid ? generated.goals : [];
+        const journeyPhase = bootstrapJourneyPhase({
+            bootstrap,
+            rootGoal,
+            generatedGoals,
+        });
+        rootGoal.bootstrap = {
+            ...bootstrap,
+            journeyPhase,
+            generatedGoals,
+        };
+        rootGoal.evidence = [...rootGoal.evidence, ...extraEvidence]
+            .sort((left, right) => String(right.timestamp || "").localeCompare(String(left.timestamp || "")));
+        rootGoal.updatedAt = latestTimestamp([
+            rootGoal.updatedAt,
+            bootstrap.castPullRequest?.updatedAt,
+            bootstrap.castPullRequest?.mergedAt,
+            bootstrap.researchIssue?.updatedAt,
+            bootstrap.researchArtifact?.createdAt,
+            ...rootGoal.artifacts.map((artifact) => artifact.createdAt),
+            ...(bootstrap.workflowAttempts || []).map((run) => run.updatedAt || run.createdAt),
+        ]);
+    }
+    return {
+        ...snapshot,
+        goals,
+        summary: {
+            ...(snapshot.summary || {}),
+            ...lifecycleSummary(goals),
+            bootstrap: bootstrapSummary([bootstrap]),
+        },
+    };
+}
+
 export function buildActivitySnapshot({
     repository,
     issues = [],
@@ -589,6 +1294,7 @@ export function buildActivitySnapshot({
     copilotTasks = {},
     localSessions = {},
     mechanismAvailability = {},
+    bootstrap = null,
     fetchedAt = new Date().toISOString(),
 } = {}) {
     const normalizedSources = {
@@ -612,10 +1318,68 @@ export function buildActivitySnapshot({
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
     const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
     const repositoryKey = repositoryName.toLowerCase();
+    const canonicalCastPullRequest = confirmedCanonicalCastPullRequest({
+        bootstrap,
+        sourceState,
+        repository,
+    });
+    const matchesCanonicalCast = (pullRequest) => canonicalCastPullRequest && (
+        (
+            canonicalCastPullRequest.number &&
+            Number(pullRequest?.number) === canonicalCastPullRequest.number
+        ) ||
+        (
+            canonicalCastPullRequest.url &&
+            text(pullRequest?.url || pullRequest?.html_url, 500) === canonicalCastPullRequest.url
+        )
+    );
+    const bootstrapResearchIssueNumber = Number(bootstrap?.researchIssue?.number);
+    const bootstrapResearchCandidateNumbers = new Set(issues
+        .filter((issue) =>
+            text(issue?.title, 240) === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
+            String(issue?.body || "").includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker))
+        .map((issue) => Number(issue?.number))
+        .filter(Number.isInteger));
+    const bootstrapCommentsSource = sourceState?.bootstrap?.comments;
+    const bootstrapCommentsAreAuthoritative = bootstrapCommentsSource?.status === "fresh" &&
+        bootstrapCommentsSource.exhaustive === true &&
+        bootstrapCommentsSource.truncated === false;
+    let activationIssues = issues;
+    let activationComments = Array.isArray(issueComments)
+        ? normalizedSources.issueComments.data
+        : null;
+    if (
+        Number.isInteger(bootstrapResearchIssueNumber) &&
+        bootstrapCommentsAreAuthoritative
+    ) {
+        if (activationComments) {
+            const commentIssueNumber = (comment) => Number(
+                comment?.issueNumber ||
+                String(comment?.issue_url || comment?.url || "")
+                    .match(/\/issues\/([1-9][0-9]*)(?:$|#)/)?.[1],
+            );
+            activationComments = [
+                ...activationComments.filter((comment) =>
+                    commentIssueNumber(comment) !== bootstrapResearchIssueNumber),
+                ...(bootstrapCommentsSource.data || []).map((comment) => ({
+                    ...comment,
+                    issueNumber: bootstrapResearchIssueNumber,
+                })),
+            ];
+        } else {
+            activationIssues = issues.map((issue) =>
+                Number(issue?.number) === bootstrapResearchIssueNumber
+                    ? {
+                        ...issue,
+                        comments: bootstrapCommentsSource.data || [],
+                    }
+                    : issue);
+        }
+    }
     const activationEvidence = parseActivationEvidence({
-        issues,
+        issues: activationIssues,
         repository: repositoryKey,
-        comments: Array.isArray(issueComments) ? normalizedSources.issueComments.data : null,
+        comments: activationComments,
         commentsComplete: normalizedSources.issueComments.status === "complete" ||
             (
                 normalizedSources.issueComments.status === "fresh" &&
@@ -623,8 +1387,25 @@ export function buildActivitySnapshot({
                 !normalizedSources.issueComments.truncated
             ),
     });
+    const guardedBootstrapRoots = Number.isInteger(bootstrapResearchIssueNumber)
+        ? new Set([bootstrapResearchIssueNumber])
+        : bootstrapResearchCandidateNumbers;
+    if (bootstrap && !bootstrapCommentsAreAuthoritative && guardedBootstrapRoots.size > 0) {
+        for (const [issueNumber, evidence] of activationEvidence) {
+            if (!guardedBootstrapRoots.has(evidence.activation?.rootIssueNumber)) continue;
+            activationEvidence.set(issueNumber, {
+                activation: null,
+                errors: [
+                    ...(evidence.errors || []),
+                    "Canonical bootstrap activation comments are incomplete.",
+                ],
+            });
+        }
+    }
     const normalizedPullRequests = dedupeSemantic(
-        pullRequests.map((pullRequest) => ({
+        pullRequests
+            .filter((pullRequest) => !matchesCanonicalCast(pullRequest))
+            .map((pullRequest) => ({
             source: pullRequest,
             value: normalizePullRequest(pullRequest),
             issueLinks: linkedIssueLinks(pullRequest, repositoryKey),
@@ -636,7 +1417,18 @@ export function buildActivitySnapshot({
         (pullRequest) => pullRequest.value.number || pullRequest.value.url,
     );
     const normalizedRuns = dedupeSemantic(
-        workflowRuns.map((run) => ({
+        workflowRuns
+            .filter((run) =>
+                (
+                    text(run?.workflowName || run?.name, 160) !== BOOTSTRAP_IDENTIFIERS.workflow ||
+                    text(run?.headBranch, 240) !==
+                        text(repository?.defaultBranchRef?.name || repository?.defaultBranch, 240)
+                ) &&
+                (
+                    !canonicalCastPullRequest ||
+                    text(run?.headBranch, 240) !== canonicalCastPullRequest.branch
+                ))
+            .map((run) => ({
             source: run,
             value: normalizeRun(run),
             issueNumbers: linkedRunNumbers(run),
@@ -661,9 +1453,9 @@ export function buildActivitySnapshot({
     const goals = [];
 
     for (const issue of issues) {
-        const artifacts = parseArtifacts(issue?.comments);
-        if (!isSquadGoal(issue, artifacts)) continue;
         const number = Number(issue?.number);
+        const artifacts = parseArtifacts(issue?.comments, number);
+        if (!isSquadGoal(issue, artifacts)) continue;
         const goalKey = issueKey(repositoryKey, number);
         const relatedPullRequestMatches = normalizedPullRequests
             .map((pullRequest) => ({
@@ -808,7 +1600,6 @@ export function buildActivitySnapshot({
         const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
         return rightActive - leftActive || compareNewestFirst(left, right);
     });
-    const count = (phase) => goals.filter((goal) => phase.includes(goal.phase)).length;
     const normalizedErrors = (Array.isArray(errors) ? errors : []).map((error) => ({
         source: text(error?.source || "GitHub", 80),
         message: text(error?.message || error, 800),
@@ -841,16 +1632,7 @@ export function buildActivitySnapshot({
             url: text(repository?.url, 500),
             defaultBranch: text(repository?.defaultBranchRef?.name || repository?.defaultBranch, 240),
         },
-        summary: {
-            active: goals.filter((goal) => ACTIVE_STATES.has(goal.phase)).length,
-            queued: count(["queued"]),
-            blocked: count(["blocked"]),
-            failed: count(["failed"]),
-            awaitingReview: count(["reviewing"]),
-            implementing: count(["implementing"]),
-            researching: count(["researching"]),
-            completed: count(["completed"]),
-        },
+        summary: lifecycleSummary(goals),
         goals,
         sourceState: normalizedSources,
         partial: incompleteSources ||
@@ -876,6 +1658,19 @@ export function aggregateActivitySnapshots({
                 ...goal,
                 dependencies: [...(goal.dependencies || [])],
                 blockers: [...(goal.blockers || [])],
+                ...(goal.bootstrap
+                    ? {
+                        bootstrap: {
+                            ...goal.bootstrap,
+                            generatedGoals: (
+                                Array.isArray(goal.bootstrap.generatedGoals)
+                                    ? goal.bootstrap.generatedGoals
+                                    : []
+                            )
+                                .map((generatedGoal) => ({ ...generatedGoal })),
+                        },
+                    }
+                    : {}),
             }))),
         (goal) => goal.id,
     );
@@ -952,6 +1747,23 @@ export function aggregateActivitySnapshots({
             ? "blocked"
             : basePhase;
         goal.nextAction = nextActionFor(goal.phase, goal.pullRequests, goal.workflowRuns, goal.artifacts);
+        if (goal.bootstrap) {
+            const generatedGoals = (goal.bootstrap.generatedGoals || []).map((generatedGoal) => {
+                const generated = goalsById.get(String(generatedGoal.id).toLowerCase());
+                return generated
+                    ? { ...generatedGoal, phase: generated.phase }
+                    : generatedGoal;
+            });
+            goal.bootstrap = {
+                ...goal.bootstrap,
+                journeyPhase: bootstrapJourneyPhase({
+                    bootstrap: goal.bootstrap,
+                    rootGoal: goal,
+                    generatedGoals,
+                }),
+                generatedGoals,
+            };
+        }
     }
 
     goals.sort((left, right) => {
@@ -959,7 +1771,12 @@ export function aggregateActivitySnapshots({
         const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
         return rightActive - leftActive || compareNewestFirst(left, right);
     });
-    const count = (phase) => goals.filter((goal) => phase.includes(goal.phase)).length;
+    const bootstraps = snapshots
+        .filter((snapshot) => snapshot?.bootstrap)
+        .map((snapshot) => ({
+            ...snapshot.bootstrap,
+            repository: snapshot.repository?.nameWithOwner || snapshot.bootstrap.repository || "",
+        }));
     const snapshotErrors = snapshots.flatMap((snapshot) =>
         (snapshot?.errors || []).map((error) => ({
             ...error,
@@ -1018,16 +1835,11 @@ export function aggregateActivitySnapshots({
         viewer: text(viewer, 120),
         repositories,
         summary: {
-            active: goals.filter((goal) => ACTIVE_STATES.has(goal.phase)).length,
-            queued: count(["queued"]),
-            blocked: count(["blocked"]),
-            failed: count(["failed"]),
-            awaitingReview: count(["reviewing"]),
-            implementing: count(["implementing"]),
-            researching: count(["researching"]),
-            completed: count(["completed"]),
+            ...lifecycleSummary(goals),
+            bootstrap: bootstrapSummary(bootstraps),
         },
         goals,
+        bootstraps,
         partial: aggregateErrors.length > 0 ||
             snapshots.some((snapshot) => snapshot?.partial) ||
             includedRepositories.some((repository) => repository?.partial),
