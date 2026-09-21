@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    anchoredPagedItems,
     boundedItems,
+    compareFeedItems,
     describeActivityDelta,
     renderHtml,
+    semanticFeedItems,
 } from "../renderer.mjs";
 
 test("renders the read-only mission control prototype surfaces", () => {
@@ -44,6 +47,57 @@ test("bounds dense collections without changing the authoritative total", () => 
         total: 4,
         hidden: 2,
     });
+});
+
+test("paginates and semantically deduplicates dense feeds", () => {
+    const items = [
+        { kind: "issue", title: "Beta", url: "/b", timestamp: "2026-09-20T12:00:00Z" },
+        { kind: "issue", title: "Alpha", url: "/a", timestamp: "2026-09-20T12:00:00Z" },
+        { kind: "issue", title: "Alpha", url: "/a", timestamp: "2026-09-20T12:00:00Z" },
+        { kind: "workflow", title: "Missing", url: "/missing", timestamp: null },
+    ];
+    const deduped = semanticFeedItems(items);
+
+    assert.deepEqual(deduped.map((item) => item.title), ["Alpha", "Beta", "Missing"]);
+    assert.equal(compareFeedItems(deduped[0], deduped[1]), -1);
+    const dense = Array.from({ length: 45 }, (_, index) => ({ id: index + 1 }));
+    const first = anchoredPagedItems(dense, {}, 20, (item) => item.id);
+    const second = anchoredPagedItems(dense, { anchor: first.nextAnchor }, 20, (item) => item.id);
+    assert.deepEqual(second.items.map((item) => item.id), Array.from({ length: 20 }, (_, index) => index + 21));
+
+    const refreshed = [{ id: -1 }, { id: 0 }, ...dense];
+    const stable = anchoredPagedItems(refreshed, second, 20, (item) => item.id);
+    assert.deepEqual(stable.items.map((item) => item.id), second.items.map((item) => item.id));
+
+    const anchorOnlyRemoved = refreshed.filter((item) => item.id !== 21);
+    const anchorRecovered = anchoredPagedItems(anchorOnlyRemoved, second, 20, (item) => item.id);
+    assert.equal(anchorRecovered.items[0].id, 22);
+    assert.equal(anchorRecovered.items.length, 20);
+
+    const removed = refreshed.filter((item) => ![20, 21, 30].includes(item.id));
+    const recovered = anchoredPagedItems(removed, second, 20, (item) => item.id);
+    assert.equal(recovered.items[0].id, 22);
+    assert.equal(recovered.items.includes(30), false);
+    assert.equal(recovered.items.length, 20);
+
+    const pageAndPredecessorRemoved = refreshed.filter((item) =>
+        item.id < 20 || item.id > 40);
+    const nextWindow = anchoredPagedItems(
+        pageAndPredecessorRemoved,
+        second,
+        20,
+        (item) => item.id,
+    );
+    assert.deepEqual(nextWindow.items.map((item) => item.id), [41, 42, 43, 44, 45]);
+
+    const visited = [];
+    let page = anchoredPagedItems(refreshed, {}, 20, (item) => item.id);
+    while (true) {
+        visited.push(...page.items.map((item) => item.id));
+        if (!page.hasOlder) break;
+        page = anchoredPagedItems(refreshed, { anchor: page.nextAnchor }, 20, (item) => item.id);
+    }
+    assert.deepEqual(visited, refreshed.map((item) => item.id));
 });
 
 test("announces only meaningful activity changes", () => {
@@ -99,9 +153,10 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /data-scroll-key="pipeline"/);
     assert.match(html, /data-scroll-key="goal-drawer"/);
     assert.match(html, /data-state-key="goal-filters"/);
-    assert.match(html, /data-state-key="activity-more"/);
     assert.match(html, /min-width: 760px/);
-    assert.match(html, /Showing the newest/);
+    assert.match(html, /Filter activity by evidence kind/);
+    assert.match(html, /Older evidence/);
+    assert.match(html, /Older workflows/);
     assert.match(html, /active workflow runs/);
     assert.doesNotMatch(html, /runs today/);
     assert.match(html, /Some GitHub data is from an earlier sync/);
@@ -121,4 +176,6 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.doesNotMatch(html, /Last successful snapshot/);
     assert.match(html, /goal-drawer, \.runs-panel/);
     assert.match(html, /keyedDisclosure/);
+    assert.match(html, /-webkit-line-clamp: 2/);
+    assert.match(html, /overflow-wrap: anywhere/);
 });

@@ -8,6 +8,111 @@ export function boundedItems(items, limit) {
     };
 }
 
+export function compareFeedItems(left, right) {
+    const valueOf = (item) => {
+        const parsed = Date.parse(
+            item?.timestamp || item?.updatedAt || item?.createdAt || item?.mergedAt || "",
+        );
+        return Number.isFinite(parsed) ? parsed : null;
+    };
+    const leftTimestamp = valueOf(left);
+    const rightTimestamp = valueOf(right);
+    if (leftTimestamp !== null && rightTimestamp !== null && leftTimestamp !== rightTimestamp) {
+        return rightTimestamp - leftTimestamp;
+    }
+    if (leftTimestamp !== rightTimestamp) return leftTimestamp !== null ? -1 : 1;
+    const identity = (item) => [
+        item?.goal?.repository?.nameWithOwner,
+        item?.goal?.id,
+        item?.kind,
+        item?.id,
+        item?.workflow,
+        item?.branch,
+        item?.title,
+        item?.name,
+        item?.url,
+        item?.status,
+        item?.conclusion,
+    ].map((value) => String(value ?? "").toLowerCase()).join("|");
+    return identity(left).localeCompare(identity(right));
+}
+
+export function semanticFeedItems(items, identity) {
+    const values = Array.isArray(items) ? items : [];
+    const keyFor = typeof identity === "function"
+        ? identity
+        : (item) => [
+            item?.kind,
+            item?.title || item?.name || item?.workflow,
+            item?.url,
+            item?.goal?.id,
+        ].map((value) => String(value ?? "").toLowerCase()).join("|");
+    const unique = new Map();
+    for (const item of [...values].sort(compareFeedItems)) {
+        const key = String(keyFor(item) ?? "").toLowerCase();
+        if (!unique.has(key)) unique.set(key, item);
+    }
+    return [...unique.values()].sort(compareFeedItems);
+}
+
+export function anchoredPagedItems(items, state, pageSize, identity) {
+    const values = Array.isArray(items) ? items : [];
+    const size = Number.isInteger(pageSize) && pageSize > 0 ? pageSize : 1;
+    const keyFor = typeof identity === "function"
+        ? identity
+        : (item) => [
+            item?.goal?.repository?.nameWithOwner,
+            item?.goal?.id,
+            item?.kind,
+            item?.id,
+            item?.title || item?.name || item?.workflow,
+            item?.url,
+        ].map((value) => String(value ?? "").toLowerCase()).join("|");
+    const keys = values.map((item) => String(keyFor(item) ?? "").toLowerCase());
+    const requested = state && typeof state === "object" ? state : {};
+    let start = -1;
+    let fixedEnd = null;
+    if (values.length && requested.anchor) {
+        start = keys.indexOf(String(requested.anchor).toLowerCase());
+    }
+    if (start < 0 && values.length && requested.endBefore) {
+        const end = keys.indexOf(String(requested.endBefore).toLowerCase());
+        start = end >= 0 ? Math.max(0, end - size) : -1;
+        fixedEnd = end >= 0 ? end : null;
+    }
+    if (start < 0 && values.length && requested.visibleKeys?.length) {
+        start = requested.visibleKeys
+            .map((key) => keys.indexOf(String(key).toLowerCase()))
+            .find((index) => index >= 0) ?? -1;
+    }
+    if (start < 0 && values.length && requested.beforeKey) {
+        const before = keys.indexOf(String(requested.beforeKey).toLowerCase());
+        start = before >= 0 ? before + 1 : -1;
+    }
+    if (start < 0 && values.length && requested.nextAnchor) {
+        start = keys.indexOf(String(requested.nextAnchor).toLowerCase());
+    }
+    if (start < 0) start = Number.isInteger(requested.startIndex) ? requested.startIndex : 0;
+    if (start >= values.length) {
+        start = values.length ? Math.floor((values.length - 1) / size) * size : 0;
+    }
+    const end = Math.min(fixedEnd ?? start + size, values.length);
+    const visibleKeys = keys.slice(start, end);
+    return {
+        items: values.slice(start, end),
+        total: values.length,
+        start: values.length ? start + 1 : 0,
+        end,
+        startIndex: start,
+        anchor: visibleKeys[0] || "",
+        beforeKey: start > 0 ? keys[start - 1] : "",
+        visibleKeys,
+        nextAnchor: end < values.length ? keys[end] : "",
+        hasNewer: start > 0,
+        hasOlder: end < values.length,
+    };
+}
+
 export function describeActivityDelta(previous, next) {
     if (!previous?.goals || !next?.goals) return "";
     if (!previous.errors?.length && next.errors?.length) {
@@ -519,7 +624,15 @@ export function renderHtml() {
       border-radius: 50%;
     }
     .run-main { min-width: 0; }
-    .run-name { overflow: hidden; font-weight: var(--font-weight-semibold, 600); text-overflow: ellipsis; white-space: nowrap; }
+    .run-name {
+      display: -webkit-box;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      font-weight: var(--font-weight-semibold, 600);
+      line-height: 18px;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
     .run-meta {
       display: flex;
       flex-wrap: wrap;
@@ -528,13 +641,20 @@ export function renderHtml() {
       color: var(--muted);
       font-size: 11px;
     }
-    .run-repository { color: var(--text); font-weight: var(--font-weight-semibold, 600); }
+    .run-repository {
+      min-width: 0;
+      color: var(--text);
+      font-weight: var(--font-weight-semibold, 600);
+      overflow-wrap: anywhere;
+    }
     .run-branch {
+      min-width: 0;
       padding: 0 5px;
       border-radius: 5px;
       background: color-mix(in srgb, var(--focus) 13%, var(--bg));
       color: var(--focus);
       font-family: var(--mono);
+      overflow-wrap: anywhere;
     }
     .run-side { min-width: 112px; color: var(--muted); font-size: 11px; text-align: right; }
     .run-side strong { display: block; color: var(--warning); font-weight: var(--font-weight-semibold, 600); text-transform: capitalize; }
@@ -586,20 +706,51 @@ export function renderHtml() {
     .activity-marker.pull-request, .activity-marker.artifact { background: #8957e5; }
     .activity-marker.issue { background: var(--focus); }
     .activity-marker.owner { background: var(--accent); }
-    .activity-item a { color: var(--text); font-weight: var(--font-weight-semibold, 600); text-decoration: none; }
+    .activity-item a {
+      color: var(--text);
+      font-weight: var(--font-weight-semibold, 600);
+      overflow-wrap: anywhere;
+      text-decoration: none;
+    }
     .activity-item a:hover { color: var(--focus); text-decoration: underline; }
     .activity-item small { display: block; margin-top: 3px; color: var(--muted); }
-    .activity-more {
+    .feed-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 14px;
       border-top: 1px solid var(--border);
     }
-    .activity-more > summary {
-      min-height: 44px;
+    .feed-pagination {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      padding: 0 14px;
-      color: var(--focus);
+      gap: 8px;
+    }
+    .feed-page-status { color: var(--muted); font-size: 11px; }
+    .activity-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .activity-kind {
+      min-height: 30px;
+      padding: 0 9px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
       cursor: pointer;
-      font-weight: var(--font-weight-semibold, 600);
+      font-size: 11px;
+    }
+    .activity-kind[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--text);
     }
     .goal-list { display: grid; gap: 12px; }
     .goal-card {
@@ -855,12 +1006,20 @@ export function renderHtml() {
     let selectedGoalId = "";
     let drawerReturnSelector = "";
     let filtersOpen = false;
+    let activityKindFilter = "all";
+    let activityPageState = {};
+    let workflowPageState = {};
+    let activityPageView = null;
+    let workflowPageView = null;
     let searchAnnouncementTimer = null;
 
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
     const liveStatus = document.getElementById("live-status");
     const boundedItems = ${boundedItems.toString()};
+    const compareFeedItems = ${compareFeedItems.toString()};
+    const semanticFeedItems = ${semanticFeedItems.toString()};
+    const anchoredPagedItems = ${anchoredPagedItems.toString()};
     const describeActivityDelta = ${describeActivityDelta.toString()};
 
     function esc(value) {
@@ -882,6 +1041,11 @@ export function renderHtml() {
 
     function visibleGoals() {
       return (state?.activity?.goals || []).filter(goalMatchesFilter).filter(goalMatchesScope);
+    }
+
+    function resetFeedPages() {
+      activityPageState = {};
+      workflowPageState = {};
     }
 
     function filterAnnouncement() {
@@ -911,6 +1075,7 @@ export function renderHtml() {
           element.dataset.id,
           element.dataset.goalId,
           element.dataset.phase,
+          element.dataset.kind,
           element.dataset.repository,
           element.dataset.taskId,
         ].filter(Boolean).join(":");
@@ -1195,18 +1360,28 @@ export function renderHtml() {
     }
 
     function activeWorkflowRunsHtml(goals) {
-      const runs = [...new Map(goals.flatMap(goal =>
+      const runs = semanticFeedItems(goals.flatMap(goal =>
         (goal.workflowRuns || [])
           .filter(run => run.status !== "completed")
-          .map(run => {
-            const key = run.id || run.url || \`\${run.workflow}:\${run.branch}:\${run.createdAt}\`;
-            return [key, { run, goal }];
-          })
-      )).values()].sort((left, right) =>
-        String(right.run.updatedAt || right.run.createdAt || "").localeCompare(
-          String(left.run.updatedAt || left.run.createdAt || "")
-        ));
-      const visible = boundedItems(runs, 12);
+          .map(run => ({
+            ...run,
+            run,
+            goal,
+            timestamp: run.updatedAt || run.createdAt,
+          }))
+      ), item => \`\${item.goal.repository?.nameWithOwner}|\${item.id || item.url ||
+        \`\${item.workflow}|\${item.branch}|\${item.createdAt}|\${item.status}\`}\`);
+      const runIdentity = item => \`\${item.goal.repository?.nameWithOwner}|\${item.id || item.url ||
+        \`\${item.workflow}|\${item.branch}|\${item.createdAt}|\${item.status}\`}\`;
+      const visible = anchoredPagedItems(runs, workflowPageState, 12, runIdentity);
+      workflowPageState = {
+        anchor: visible.anchor,
+        beforeKey: visible.beforeKey,
+        visibleKeys: visible.visibleKeys,
+        nextAnchor: visible.nextAnchor,
+        startIndex: visible.startIndex,
+      };
+      workflowPageView = visible;
       return \`
         <section class="runs-panel" aria-labelledby="runs-title">
           <div class="panel-header">
@@ -1219,11 +1394,11 @@ export function renderHtml() {
                   <a class="run-row" href="\${esc(run.url || goal.issue.url)}" target="_blank" rel="noreferrer">
                     <span class="run-indicator" aria-hidden="true"></span>
                     <span class="run-main">
-                      <span class="run-name">\${esc(run.name || run.workflow || "Workflow run")}</span>
+                      <span class="run-name" title="\${esc(run.name || run.workflow || "Workflow run")}">\${esc(run.name || run.workflow || "Workflow run")}</span>
                       <span class="run-meta">
-                        <span class="run-repository">\${esc(goal.repository.nameWithOwner)}</span>
+                        <span class="run-repository" title="\${esc(goal.repository.nameWithOwner)}">\${esc(goal.repository.nameWithOwner)}</span>
                         <span>#\${esc(goal.issue.number)}</span>
-                        \${run.branch ? \`<span class="run-branch">\${esc(run.branch)}</span>\` : ""}
+                        \${run.branch ? \`<span class="run-branch" title="\${esc(run.branch)}">\${esc(run.branch)}</span>\` : ""}
                         <span>\${esc(goal.owner?.name || "Unknown owner")}</span>
                       </span>
                     </span>
@@ -1235,7 +1410,14 @@ export function renderHtml() {
                 </li>\`).join("")}
             </ol>\`
             : '<p class="help" style="padding:16px">No workflow runs are currently in progress for the visible goals.</p>'}
-          \${visible.hidden ? \`<p class="collection-note" style="padding:0 14px 14px">Showing the newest \${visible.items.length} of \${visible.total} active workflow runs. Narrow the goal filters to inspect the remainder.</p>\` : ""}
+          \${visible.total > 12 ? \`
+            <nav class="feed-controls" aria-label="Active workflow pages">
+              <span class="feed-page-status">Showing \${visible.start}–\${visible.end} of \${visible.total} active workflow runs.</span>
+              <span class="feed-pagination">
+                <button class="button" data-action="newer-workflows" type="button" \${visible.hasNewer ? "" : "disabled"}>Newer workflows</button>
+                <button class="button" data-action="older-workflows" type="button" \${visible.hasOlder ? "" : "disabled"}>Older workflows</button>
+              </span>
+            </nav>\` : ""}
         </section>\`;
     }
 
@@ -1263,12 +1445,31 @@ export function renderHtml() {
     }
 
     function recentActivityHtml(goals) {
-      const collected = boundedItems(goals.flatMap(goal =>
-        (goal.evidence || []).map(item => ({ ...item, goal })))
-        .sort((left, right) => String(right.timestamp || "").localeCompare(String(left.timestamp || ""))), 100);
-      const activity = collected.items;
-      const visibleActivity = activity.slice(0, 12);
-      const olderActivity = activity.slice(12);
+      const allActivity = semanticFeedItems(goals.flatMap(goal =>
+        (goal.evidence || []).map(item => ({ ...item, goal }))),
+      item => \`\${item.goal.id}|\${item.kind}|\${item.title}|\${item.url}\`);
+      const activity = activityKindFilter === "all"
+        ? allActivity
+        : allActivity.filter(item => item.kind === activityKindFilter);
+      const activityIdentity = item => \`\${item.goal.id}|\${item.kind}|\${item.title}|\${item.url}\`;
+      const visible = anchoredPagedItems(activity, activityPageState, 20, activityIdentity);
+      activityPageState = {
+        anchor: visible.anchor,
+        beforeKey: visible.beforeKey,
+        visibleKeys: visible.visibleKeys,
+        nextAnchor: visible.nextAnchor,
+        startIndex: visible.startIndex,
+      };
+      activityPageView = visible;
+      const kinds = [
+        ["all", "All"],
+        ["issue", "Issues"],
+        ["owner", "Ownership"],
+        ["artifact", "Artifacts"],
+        ["workflow", "Workflows"],
+        ["pull-request", "Pull requests"],
+        ["check", "Checks"],
+      ];
       const itemsHtml = items => items.map(item => \`
         <li class="activity-item">
           \${activityMarkerHtml(item)}
@@ -1281,19 +1482,24 @@ export function renderHtml() {
         <aside class="activity-panel" aria-labelledby="activity-title">
           <div class="panel-header">
             <div><h2 id="activity-title">Activity</h2><p>Newest evidence first.</p></div>
-            <span class="evidence-count">\${collected.total}</span>
+            <span class="evidence-count" aria-label="\${allActivity.length} evidence events">\${allActivity.length}</span>
+          </div>
+          <div class="activity-filters" role="group" aria-label="Filter activity by evidence kind">
+            \${kinds.map(([kind, label]) => \`
+              <button class="activity-kind" data-action="activity-kind" data-kind="\${kind}" type="button"
+                aria-pressed="\${activityKindFilter === kind}">\${label}</button>
+            \`).join("")}
           </div>
           \${activity.length ? \`
-            <ol class="activity-stream">
-              \${itemsHtml(visibleActivity)}
-            </ol>
-            \${olderActivity.length ? \`
-              <details class="activity-more" data-state-key="activity-more">
-                <summary>Show \${olderActivity.length} older events</summary>
-                <ol class="activity-stream">\${itemsHtml(olderActivity)}</ol>
-              </details>\` : ""}
-            \${collected.hidden ? \`<p class="collection-note" style="padding:0 14px 14px">Showing the newest \${activity.length} of \${collected.total} evidence events. Narrow the goal filters to inspect older evidence.</p>\` : ""}
-            \` : '<p class="help" style="padding:14px">No correlated evidence is available for the current filters.</p>'}
+            <ol class="activity-stream">\${itemsHtml(visible.items)}</ol>
+            <nav class="feed-controls" aria-label="Activity pages">
+              <span class="feed-page-status">Showing \${visible.start}–\${visible.end} of \${visible.total} \${activityKindFilter === "all" ? "evidence events" : activityKindFilter + " events"}.</span>
+              <span class="feed-pagination">
+                <button class="button" data-action="newer-activity" type="button" \${visible.hasNewer ? "" : "disabled"}>Newer evidence</button>
+                <button class="button" data-action="older-activity" type="button" \${visible.hasOlder ? "" : "disabled"}>Older evidence</button>
+              </span>
+            </nav>
+            \` : '<p class="help" style="padding:14px">No correlated evidence is available for this evidence-kind filter.</p>'}
         </aside>\`;
     }
 
@@ -1636,8 +1842,30 @@ export function renderHtml() {
       try {
         if (action === "phase-filter") {
           phaseFilter = target.dataset.phase || "active";
+          resetFeedPages();
           render();
           announce(filterAnnouncement());
+        } else if (action === "activity-kind") {
+          activityKindFilter = target.dataset.kind || "all";
+          activityPageState = {};
+          render(\`[data-action="activity-kind"][data-kind="\${CSS.escape(activityKindFilter)}"]\`);
+          announce(\`Activity filtered by \${target.textContent.trim().toLowerCase()}.\`);
+        } else if (action === "older-activity") {
+          activityPageState = { anchor: activityPageView?.nextAnchor || "" };
+          render('[data-action="older-activity"]');
+          announce("Showing older evidence.");
+        } else if (action === "newer-activity") {
+          activityPageState = { endBefore: activityPageView?.anchor || "" };
+          render('[data-action="newer-activity"]');
+          announce("Showing newer evidence.");
+        } else if (action === "older-workflows") {
+          workflowPageState = { anchor: workflowPageView?.nextAnchor || "" };
+          render('[data-action="older-workflows"]');
+          announce("Showing older active workflow runs.");
+        } else if (action === "newer-workflows") {
+          workflowPageState = { endBefore: workflowPageView?.anchor || "" };
+          render('[data-action="newer-workflows"]');
+          announce("Showing newer active workflow runs.");
         } else if (action === "expand-stage") {
           const phase = target.dataset.phase || "";
           expandedStage = expandedStage === phase ? "" : phase;
@@ -1718,18 +1946,21 @@ export function renderHtml() {
       if (action === "owner-filter") {
         ownerFilter = event.target.value;
         repositoryFilter = "all";
+        resetFeedPages();
         render();
         announce(filterAnnouncement());
         return;
       }
       if (action === "repository-filter") {
         repositoryFilter = event.target.value;
+        resetFeedPages();
         render();
         announce(filterAnnouncement());
         return;
       }
       if (action === "active-repositories") {
         activeRepositoriesOnly = event.target.checked;
+        resetFeedPages();
         render();
         announce(filterAnnouncement());
         return;
@@ -1751,6 +1982,7 @@ export function renderHtml() {
       if (event.target.dataset.action !== "goal-search") return;
       filtersOpen = true;
       goalSearch = event.target.value;
+      resetFeedPages();
       const cursor = event.target.selectionStart;
       render();
       const input = document.querySelector('[data-action="goal-search"]');
