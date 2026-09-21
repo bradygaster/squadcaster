@@ -5,14 +5,14 @@ import { renderHtml } from "../renderer.mjs";
 test("renders the read-only mission control prototype surfaces", () => {
     const html = renderHtml();
 
-    assert.match(html, /Squad mission control/);
+    assert.match(html, /Mission control/);
     assert.doesNotMatch(html, />Squadcaster</);
     assert.doesNotMatch(html, />SC</);
     assert.match(html, /Goal lifecycle/);
-    assert.match(html, /Recent activity/);
+    assert.match(html, />Activity</);
     assert.match(html, /Needs attention/);
     assert.match(html, /role="dialog"/);
-    assert.match(html, /Filter and repository controls/);
+    assert.match(html, /Browse goals/);
     assert.doesNotMatch(html, /\b(?:Watch|Fork|Star|Credits)\b|percent complete/i);
 });
 

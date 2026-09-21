@@ -60,20 +60,20 @@ export function renderHtml() {
     }
     .shell { min-height: 100vh; }
     .topbar {
-      min-height: 58px;
+      min-height: 54px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      padding: 10px 18px;
+      padding: 10px 24px;
       border-bottom: 1px solid var(--border);
-      background: var(--surface);
+      background: var(--bg);
     }
     .brand, .repo, .actions, .member-heading, .status-line, .pr-result {
       display: flex;
       align-items: center;
     }
-    .brand { gap: 9px; font-weight: var(--font-weight-semibold, 600); }
+    .brand { gap: 9px; font-size: 18px; font-weight: 400; }
     .mark {
       width: 28px;
       height: 28px;
@@ -98,9 +98,9 @@ export function renderHtml() {
       white-space: nowrap;
     }
     main {
-      width: min(1120px, calc(100% - 32px));
+      width: min(1560px, calc(100% - 32px));
       margin: 0 auto;
-      padding: 28px 0 52px;
+      padding: 20px 0 44px;
     }
     h1 {
       max-width: 760px;
@@ -550,14 +550,14 @@ export function renderHtml() {
     .metrics {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
-      margin-top: 16px;
+      margin-top: 0;
       overflow: hidden;
       border: 1px solid var(--border);
-      border-radius: 11px;
+      border-radius: 7px;
     }
     .metric {
       min-width: 0;
-      padding: 11px 14px;
+      padding: 12px 14px;
       border-right: 1px solid var(--border);
       background: var(--surface);
     }
@@ -594,10 +594,10 @@ export function renderHtml() {
       background: var(--soft);
     }
     .filter-disclosure {
-      margin-top: 14px;
+      margin-top: 12px;
       border: 1px solid var(--border);
-      border-radius: 11px;
-      background: var(--surface);
+      border-radius: 7px;
+      background: var(--bg);
     }
     .filter-disclosure > summary {
       min-height: 44px;
@@ -638,9 +638,9 @@ export function renderHtml() {
     .current-repository { box-shadow: inset 3px 0 0 var(--accent); }
     .mission-layout {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(250px, 300px);
-      gap: 14px;
-      margin-top: 14px;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 24px;
+      margin-top: 16px;
       align-items: start;
     }
     .mission-layout > * { min-width: 0; }
@@ -648,15 +648,15 @@ export function renderHtml() {
       min-width: 0;
       overflow: hidden;
       border: 1px solid var(--border);
-      border-radius: 12px;
-      background: var(--surface);
+      border-radius: 7px;
+      background: var(--bg);
     }
     .panel-header {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
       gap: 16px;
-      padding: 13px 15px;
+      padding: 11px 14px;
       border-bottom: 1px solid var(--border);
       background: var(--soft);
     }
@@ -671,21 +671,31 @@ export function renderHtml() {
       grid-template-columns: repeat(5, minmax(0, 1fr));
       width: 100%;
       min-width: 0;
-      gap: 8px;
-      padding: 12px;
+      gap: 18px;
+      padding: 18px 16px 22px;
     }
     .stage-card {
+      position: relative;
+      z-index: 1;
       min-width: 0;
-      overflow: hidden;
       padding: 0;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 7px;
       background: var(--soft);
+    }
+    .stage-card:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      top: 50%;
+      left: 100%;
+      width: 19px;
+      border-top: 1px solid var(--border);
     }
     .stage-card.selected { border-color: var(--accent); background: var(--accent-soft); }
     .stage-button {
       width: 100%;
-      min-height: 66px;
+      min-height: 72px;
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
@@ -700,7 +710,7 @@ export function renderHtml() {
     .stage-button strong { display: block; text-transform: capitalize; }
     .stage-button small { display: block; margin-top: 4px; color: var(--muted); }
     .stage-count { font-size: 20px; line-height: 1; font-weight: var(--font-weight-semibold, 600); font-variant-numeric: tabular-nums; }
-    .stage-preview { min-width: 0; display: grid; gap: 6px; padding: 0 7px 7px; }
+    .stage-preview { min-width: 0; display: grid; gap: 6px; padding: 0 9px 9px; }
     .goal-trigger {
       width: 100%;
       min-width: 0;
@@ -710,7 +720,7 @@ export function renderHtml() {
       overflow: hidden;
       padding: 7px 8px;
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
       background: var(--surface);
       color: var(--text);
       text-align: left;
@@ -744,7 +754,7 @@ export function renderHtml() {
     .stage-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 9px; margin-top: 12px; }
     .exceptions { margin-top: 14px; }
     .exception-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px; }
-    .exception-lane { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+    .exception-lane { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 7px; }
     .exception-lane.danger { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
     .exception-lane.danger h3 { color: var(--danger); }
     .exception-lane h3 { display: flex; justify-content: space-between; gap: 8px; }
@@ -850,10 +860,10 @@ export function renderHtml() {
     }
     .sync-warning p { margin: 4px 0 0; color: var(--muted); }
     .secondary {
-      margin-top: 30px;
+      margin-top: 20px;
       padding: 17px 18px;
       border: 1px solid var(--border);
-      border-radius: 11px;
+      border-radius: 7px;
       background: var(--soft);
     }
     .secondary summary { cursor: pointer; font-weight: 600; }
@@ -942,13 +952,13 @@ export function renderHtml() {
       .activity-panel { position: static; }
       .exception-grid { grid-template-columns: 1fr; }
     }
-    @media (max-width: 1040px) and (min-width: 801px) {
+    @media (max-width: 1040px) and (min-width: 901px) {
       .pipeline {
-        grid-template-columns: repeat(5, minmax(132px, 1fr));
-        min-width: 700px;
+        grid-template-columns: repeat(5, minmax(122px, 1fr));
+        min-width: 650px;
       }
     }
-    @media (max-width: 1200px) and (min-width: 801px) {
+    @media (max-width: 900px) and (min-width: 801px) {
       .mission-layout { grid-template-columns: 1fr; }
       .activity-panel { position: static; }
       .activity-stream {
@@ -977,7 +987,7 @@ export function renderHtml() {
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><span>All Squads</span></div>
+      <div class="brand"><span>Mission control</span></div>
       <div class="repo" id="repo-header"></div>
     </header>
     <main id="app"></main>
@@ -1112,8 +1122,12 @@ export function renderHtml() {
       }
       const active = state.activity?.summary?.active || 0;
       const repositories = (state.activity?.repositories || []).filter(repository => repository.included).length;
-      const mode = active ? \`\${active} active goal\${active === 1 ? "" : "s"}\` : "Operations";
-      repoHeader.innerHTML = \`<span class="mode">\${repositories} repos · \${mode}</span>\`;
+      const goals = state.activity?.goals?.length || 0;
+      const watching = goals
+        ? \`Watching \${goals} goal\${goals === 1 ? "" : "s"} across \${repositories} repo\${repositories === 1 ? "" : "s"}\`
+        : \`Watching \${repositories} repo\${repositories === 1 ? "" : "s"}\`;
+      const synced = state.activity?.fetchedAt ? \` · synced \${formatTime(state.activity.fetchedAt)}\` : "";
+      repoHeader.innerHTML = \`<span>\${esc(watching)}\${esc(synced)}</span><span class="mode">\${active} active</span>\`;
     }
 
     function memberBadge(member) {
@@ -1557,7 +1571,7 @@ export function renderHtml() {
       return \`
         <aside class="activity-panel" aria-labelledby="activity-title">
           <div class="panel-header">
-            <div><h2 id="activity-title">Recent activity</h2><p>Observed and inferred evidence for visible goals.</p></div>
+            <div><h2 id="activity-title">Activity</h2><p>Newest evidence first.</p></div>
             <span class="evidence-count">\${activity.length}</span>
           </div>
           \${activity.length ? \`
@@ -1702,7 +1716,7 @@ export function renderHtml() {
       const filters = ["active", "queued", "researching", "implementing", "reviewing", "blocked", "failed", "completed", "all"];
       return \`
         <details class="filter-disclosure" \${filtersOpen ? "open" : ""}>
-          <summary>Filter and repository controls <span class="filter-summary">\${esc(activeFilters.length ? activeFilters.join(" · ") : "All visible goals")}</span></summary>
+          <summary>Browse goals <span class="filter-summary">\${esc(activeFilters.length ? activeFilters.join(" · ") : "All visible goals")}</span></summary>
           <section class="scope-controls" aria-label="Repository and goal filters">
             <label><span>Owner or organization</span>
               <select data-action="owner-filter">
@@ -1759,13 +1773,6 @@ export function renderHtml() {
       const lifecycle = ["queued", "researching", "implementing", "reviewing", "completed"];
       return \`
         <section>
-          <div class="ops-heading">
-            <div>
-              <h1>Squad mission control</h1>
-              <p class="lede">\${esc((activity.repositories || []).filter(repository => repository.included).length)} repositories\${activity.viewer ? " for @" + esc(activity.viewer) : ""} · live, read-only visibility from GitHub evidence.</p>
-            </div>
-            <div class="refresh-status">\${activity.stale ? "Showing last known state" : "Last synced"} · \${esc(formatTime(activity.fetchedAt))}</div>
-          </div>
           <div class="metrics">
             \${metricHtml(summary.active || 0, "Active goals")}
             \${metricHtml(summary.blocked || 0, "Blocked", summary.blocked ? "danger" : "")}
@@ -1782,7 +1789,7 @@ export function renderHtml() {
             <div>
               <section class="pipeline-panel" aria-labelledby="pipeline-title">
                 <div class="panel-header">
-                  <div><h2 id="pipeline-title">Goal lifecycle</h2><p>Current evidence-derived stage. Blocked and failed goals remain exception states.</p></div>
+                  <div><h2 id="pipeline-title">Goal lifecycle</h2><p>Select a stage to inspect its goals. Blocked and failed work stays separate.</p></div>
                   <span class="evidence-count">\${goals.length} visible</span>
                 </div>
                 <div class="pipeline-scroll" role="region" aria-label="Squad goal lifecycle stages" tabindex="0">
