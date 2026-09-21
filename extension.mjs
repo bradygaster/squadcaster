@@ -374,7 +374,8 @@ async function handleRequest(entry, req, res) {
         return;
     }
     if (req.method === "GET" && url.pathname === "/api/state") {
-        await refreshRemoteState(entry);
+        const handoffGoalId = cleanText(url.searchParams.get("handoff"), 300);
+        await refreshRemoteState(entry, { force: Boolean(handoffGoalId) });
         sendJson(res, 200, entry.state);
         return;
     }

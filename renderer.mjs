@@ -1106,6 +1106,8 @@ export function renderHtml() {
     let handoffProbeGoalId = "";
     let handoffProbePending = false;
     let handoffProbeComplete = false;
+    let handoffProbeToken = 0;
+    let stateEpoch = 0;
     let filtersOpen = false;
     let activityKindFilter = "all";
     let activityPageState = {};
@@ -1851,6 +1853,14 @@ export function renderHtml() {
       };
     }
 
+    function applyHandoffProbe(nextState, goalId) {
+      const probedGoal = (nextState?.activity?.goals || []).find(goal => goal.id === goalId);
+      const currentGoal = goalById(goalId);
+      if (!probedGoal || !currentGoal) return false;
+      currentGoal.handoff = probedGoal.handoff || null;
+      return true;
+    }
+
     function handoffHtml(goal) {
       const handoff = goal.handoff;
       const readiness = handoff?.readiness || {
@@ -2183,6 +2193,7 @@ export function renderHtml() {
       const nextState = await response.json();
       const message = describeActivityDelta(state?.activity, nextState?.activity);
       state = nextState;
+      stateEpoch += 1;
       render();
       announce(message);
     }
@@ -2237,17 +2248,26 @@ export function renderHtml() {
           handoffProbeGoalId = selectedGoalId;
           handoffProbePending = true;
           handoffProbeComplete = false;
+          const probeGoalId = selectedGoalId;
+          const probeToken = ++handoffProbeToken;
+          const probeEpoch = stateEpoch;
           drawerReturnSelector = \`[data-action="open-goal"][data-goal-id="\${CSS.escape(selectedGoalId)}"]\`;
           render(".drawer-close");
           try {
-            const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(selectedGoalId)}\`, { cache: "no-store" });
+            const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(probeGoalId)}\`, { cache: "no-store" });
             const nextState = await response.json();
             if (!response.ok) throw new Error(nextState.error || "Availability probe failed.");
-            state = nextState;
-            handoffProbeComplete = true;
+            if (probeToken === handoffProbeToken && selectedGoalId === probeGoalId && probeEpoch === stateEpoch) {
+              handoffProbeComplete = applyHandoffProbe(nextState, probeGoalId);
+            }
           } finally {
-            handoffProbePending = false;
-            if (selectedGoalId === handoffProbeGoalId) render();
+            if (probeToken === handoffProbeToken) {
+              handoffProbePending = false;
+              if (selectedGoalId === probeGoalId && probeEpoch !== stateEpoch) {
+                handoffProbeComplete = Boolean(goalById(probeGoalId)?.handoff);
+              }
+              if (selectedGoalId === probeGoalId) render();
+            }
           }
         } else if (action === "close-goal") {
           const returnSelector = drawerReturnSelector;
@@ -2256,20 +2276,30 @@ export function renderHtml() {
           handoffProbeGoalId = "";
           handoffProbePending = false;
           handoffProbeComplete = false;
+          handoffProbeToken += 1;
           render(returnSelector);
         } else if (action === "refresh-handoff") {
+          const probeGoalId = selectedGoalId;
+          const probeToken = ++handoffProbeToken;
+          const probeEpoch = stateEpoch;
           handoffProbePending = true;
           render();
           try {
-            const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(selectedGoalId)}\`, { cache: "no-store" });
+            const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(probeGoalId)}\`, { cache: "no-store" });
             const nextState = await response.json();
             if (!response.ok) throw new Error(nextState.error || "Handoff refresh failed.");
-            state = nextState;
-            handoffProbeComplete = true;
-            announce("Handoff readiness refreshed.");
+            if (probeToken === handoffProbeToken && selectedGoalId === probeGoalId && probeEpoch === stateEpoch) {
+              handoffProbeComplete = applyHandoffProbe(nextState, probeGoalId);
+              announce("Handoff readiness refreshed.");
+            }
           } finally {
-            handoffProbePending = false;
-            render();
+            if (probeToken === handoffProbeToken) {
+              handoffProbePending = false;
+              if (selectedGoalId === probeGoalId && probeEpoch !== stateEpoch) {
+                handoffProbeComplete = Boolean(goalById(probeGoalId)?.handoff);
+              }
+              render();
+            }
           }
         } else if (action === "copy-handoff-context") {
           const goal = goalById(selectedGoalId);
@@ -2322,6 +2352,7 @@ export function renderHtml() {
         handoffProbeGoalId = "";
         handoffProbePending = false;
         handoffProbeComplete = false;
+        handoffProbeToken += 1;
         render(returnSelector);
         return;
       }
@@ -2401,6 +2432,7 @@ export function renderHtml() {
       const nextState = JSON.parse(event.data);
       const message = describeActivityDelta(state?.activity, nextState?.activity);
       state = nextState;
+      stateEpoch += 1;
       render();
       announce(message);
     });

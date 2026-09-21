@@ -572,6 +572,45 @@ test("keeps stale, partial, capped, and unavailable sources unknown with manual 
     await expect(drawer.getByRole("button", { name: /Create|Assign|Dispatch|Launch|Post/i })).toHaveCount(0);
 });
 
+test("does not let a delayed handoff probe overwrite newer SSE state", async ({ page }) => {
+    const staleState = fixture.state();
+    let releaseProbe;
+    let markProbeStarted;
+    const probeStarted = new Promise(resolve => {
+        markProbeStarted = resolve;
+    });
+    const probeGate = new Promise(resolve => {
+        releaseProbe = resolve;
+    });
+    await page.route("**/api/state?handoff=*", async route => {
+        markProbeStarted();
+        await probeGate;
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(staleState),
+        });
+    });
+
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
+    await probeStarted;
+
+    const nextState = fixture.state();
+    const item = nextState.activity.goals.find(goal => goal.id === "octodemo/frontend#1");
+    item.issue.title = "Updated by SSE while probing";
+    item.handoff.readiness.state = "blocked";
+    item.handoff.readiness.reasons = ["A newer dependency observation blocks handoff."];
+    fixture.emit(nextState);
+
+    const drawer = page.getByRole("dialog");
+    await expect(drawer.getByRole("heading", { name: /Updated by SSE while probing/ })).toBeVisible();
+    await expect(drawer.getByLabel("Handoff readiness: blocked")).toBeVisible();
+    releaseProbe();
+    await expect(drawer.getByRole("heading", { name: /Updated by SSE while probing/ })).toBeVisible();
+    await expect(drawer.getByLabel("Handoff readiness: blocked")).toBeVisible();
+});
+
 test("distinguishes every readiness state without color-only semantics", async ({ page }) => {
     const nextState = fixture.state();
     const states = ["ready", "blocked", "already-in-progress", "completed", "ineligible", "unknown"];

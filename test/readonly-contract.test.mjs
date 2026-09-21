@@ -42,6 +42,8 @@ test("extension keeps only supported POST routes and canvas actions", async () =
     const source = await readFile(new URL("../extension.mjs", import.meta.url), "utf8");
     assert.match(source, /url\.pathname === "\/api\/repositories"/);
     assert.match(source, /url\.pathname === "\/api\/refresh"/);
+    assert.match(source, /url\.searchParams\.get\("handoff"\)/);
+    assert.match(source, /force: Boolean\(handoffGoalId\)/);
     assert.match(source, /name: "get_state"/);
     assert.match(source, /name: "refresh"/);
     assert.match(source, /tools: \[\]/);
