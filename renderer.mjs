@@ -676,6 +676,7 @@ export function renderHtml() {
     }
     .stage-card {
       min-width: 0;
+      overflow: hidden;
       padding: 0;
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -699,10 +700,14 @@ export function renderHtml() {
     .stage-button strong { display: block; text-transform: capitalize; }
     .stage-button small { display: block; margin-top: 4px; color: var(--muted); }
     .stage-count { font-size: 20px; line-height: 1; font-weight: var(--font-weight-semibold, 600); font-variant-numeric: tabular-nums; }
-    .stage-preview { display: grid; gap: 6px; padding: 0 7px 7px; }
+    .stage-preview { min-width: 0; display: grid; gap: 6px; padding: 0 7px 7px; }
     .goal-trigger {
       width: 100%;
-      min-height: 44px;
+      min-width: 0;
+      max-width: 100%;
+      min-height: 76px;
+      display: block;
+      overflow: hidden;
       padding: 7px 8px;
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -712,8 +717,24 @@ export function renderHtml() {
       cursor: pointer;
     }
     .goal-trigger:hover { border-color: var(--border-strong); }
-    .goal-trigger strong, .goal-trigger small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .goal-trigger small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .goal-trigger strong {
+      display: -webkit-box;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      line-height: 1.35;
+    }
+    .goal-trigger small {
+      display: block;
+      overflow: hidden;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
     .stage-detail {
       padding: 14px;
       border-top: 1px solid var(--border);
