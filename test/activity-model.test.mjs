@@ -98,6 +98,42 @@ test("correlates durable worker provenance, checks, and workflow runs", () => {
     assert.ok(goal.evidence.some((item) => item.kind === "workflow" && item.confidence === "inferred"));
 });
 
+test("normalizes authoritative pull request review participants and requests", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        pullRequests: [{
+            number: 44,
+            title: "Implement #12",
+            body: "Closes #12",
+            state: "OPEN",
+            url: "https://github.com/octodemo/demo/pull/44",
+            reviewDecision: "CHANGES_REQUESTED",
+            latestReviews: [{
+                author: { login: "reviewer" },
+                state: "CHANGES_REQUESTED",
+                submittedAt: "2026-09-20T12:30:00Z",
+            }],
+            reviewRequests: [{
+                __typename: "Team",
+                name: "maintainers",
+            }],
+        }],
+    });
+
+    const pullRequest = snapshot.goals[0].pullRequests[0];
+    assert.equal(snapshot.schemaVersion, 2);
+    assert.equal(pullRequest.reviewDecision, "changes_requested");
+    assert.deepEqual(pullRequest.reviews, [{
+        actor: { login: "reviewer", type: "unknown" },
+        state: "changes_requested",
+        submittedAt: "2026-09-20T12:30:00.000Z",
+    }]);
+    assert.deepEqual(pullRequest.reviewRequests, [{
+        actor: { login: "maintainers", type: "team" },
+    }]);
+});
+
 test("surfaces failed automation before review state", () => {
     const snapshot = buildActivitySnapshot({
         repository,

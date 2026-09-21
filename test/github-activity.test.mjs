@@ -33,6 +33,16 @@ function pullRequest(overrides = {}) {
         headRefName: "squad/implement-12-dashboard",
         isDraft: false,
         updatedAt: "2026-09-20T12:00:00Z",
+        reviewDecision: "REVIEW_REQUIRED",
+        latestReviews: [{
+            author: { login: "reviewer" },
+            state: "COMMENTED",
+            submittedAt: "2026-09-20T12:00:00Z",
+        }],
+        reviewRequests: [{
+            __typename: "User",
+            login: "maintainer",
+        }],
         ...overrides,
     };
 }
@@ -94,6 +104,8 @@ test("preserves successful sources when another GitHub source fails", async () =
     assert.equal(result.goals[0].phase, "reviewing");
     assert.equal(result.goals[0].issue.title, "Updated dashboard");
     assert.equal(result.goals[0].pullRequests[0].number, 44);
+    assert.equal(result.goals[0].pullRequests[0].reviews[0].actor.login, "reviewer");
+    assert.equal(result.goals[0].pullRequests[0].reviewRequests[0].actor.login, "maintainer");
     assert.equal(result.partial, true);
     assert.equal(result.stale, true);
     assert.deepEqual(result.staleSources, ["pullRequests"]);

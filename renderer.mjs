@@ -1310,6 +1310,8 @@ export function renderHtml() {
         <div class="drawer-item">
           <a href="\${esc(item.url)}" target="_blank" rel="noreferrer">PR #\${esc(item.number)} · \${esc(item.title)}</a>
           <small>\${esc(item.state)}\${item.draft ? " · draft" : ""} · review \${esc(item.reviewDecision || "unknown")}\${item.branch ? " · " + esc(item.branch) : ""}</small>
+          \${item.reviews?.length ? \`<small>Latest reviews: \${item.reviews.map(review => \`\${esc(review.actor?.login || "Unknown reviewer")} (\${esc(review.state)})\`).join(", ")}</small>\` : ""}
+          \${item.reviewRequests?.length ? \`<small>Requested reviewers: \${item.reviewRequests.map(request => esc(request.actor?.login || "Unknown reviewer")).join(", ")}</small>\` : ""}
           \${item.checks?.length ? \`<div class="drawer-list">\${item.checks.map(check => \`
             <div class="drawer-item">
               \${check.url ? \`<a href="\${esc(check.url)}" target="_blank" rel="noreferrer">\${esc(check.name)}</a>\` : \`<strong>\${esc(check.name)}</strong>\`}
