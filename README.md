@@ -116,6 +116,10 @@ while the current repository continues refreshing.
 
 See [the operations architecture](docs/operations-architecture.md) for the
 normalized model, correlation rules, adapter boundary, and compatibility notes.
+See [the optional implementation handoff design](docs/optional-handoff-design.md)
+for the recommended gated path from activated Squad tasks to local Copilot
+sessions, Copilot cloud agent, or `/squad implement`. The current product
+remains read-only; that document does not enable mutation.
 
 ## Development
 

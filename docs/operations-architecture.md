@@ -103,6 +103,14 @@ supports state/events, refresh, and local repository inclusion preferences.
 Legacy persisted state is normalized on load so obsolete onboarding or mission
 fields are ignored rather than restored.
 
+The proposed optional transition from activated work to an implementation
+mechanism is documented in
+[the handoff design](optional-handoff-design.md). The design keeps this
+read-only architecture as the baseline: mutation is deferred until activation
+provenance, acceptance criteria, readiness, existing-work reconciliation,
+permissions, confirmation, and idempotency are implemented as separately
+approved slices.
+
 ## Security and failure behavior
 
 - Discovery is read-only.
