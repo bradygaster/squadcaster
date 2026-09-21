@@ -884,21 +884,66 @@ export function aggregateActivitySnapshots({
         String(snapshot?.repository?.nameWithOwner || "").toLowerCase(),
         snapshot,
     ]));
+    const includedByRepository = new Map(repositories.map((repository) => [
+        String(repository?.nameWithOwner || "").toLowerCase(),
+        repository?.included !== false,
+    ]));
+    const observedIssuesById = new Map();
+    for (const snapshot of snapshots) {
+        const repositoryKey = String(snapshot?.repository?.nameWithOwner || "").toLowerCase();
+        for (const issue of snapshot?.sourceState?.issues?.data || []) {
+            const key = issueKey(repositoryKey, issue?.number);
+            if (!key) continue;
+            const observed = observedIssuesById.get(key) || [];
+            observed.push(issue);
+            observedIssuesById.set(key, observed);
+        }
+    }
 
     for (const goal of goals) {
         goal.dependencies = (goal.dependencies || []).map((dependency) => {
+            const dependencyRepository = String(dependency.repository || "").toLowerCase();
+            const goalRepository = String(goal.repository?.nameWithOwner || "").toLowerCase();
+            if (dependencyRepository === goalRepository) return dependency;
             const target = goalsById.get(String(dependency.id).toLowerCase());
-            const targetSnapshot = snapshotByRepository.get(String(dependency.repository || "").toLowerCase());
-            return target
-                ? {
+            const targetSnapshot = snapshotByRepository.get(dependencyRepository);
+            const observedIssues = observedIssuesById.get(String(dependency.id).toLowerCase()) || [];
+            const issueSourceState = targetSnapshot?.sourceState?.issues;
+            const issueSourceError = (targetSnapshot?.errors || []).some((error) =>
+                /^(?:issues?|repository)$/i.test(String(error?.source || "")));
+            let evidenceState = sourceEvidenceState(issueSourceState);
+            if (includedByRepository.get(dependencyRepository) === false) evidenceState = "excluded";
+            else if (!targetSnapshot) evidenceState = "unavailable";
+            else if (issueSourceError) evidenceState = "unavailable";
+            else if (evidenceState === "complete" && observedIssues.length === 0) evidenceState = "missing";
+            else if (evidenceState === "complete" && observedIssues.length > 1) evidenceState = "ambiguous";
+
+            if (target) {
+                return {
                     ...dependency,
                     title: target.issue.title,
                     url: target.issue.url,
                     status: target.issue.state,
                     phase: target.phaseWithoutBlockers || target.phase,
-                    evidenceState: sourceEvidenceState(targetSnapshot?.sourceState?.issues),
-                }
-                : dependency;
+                    evidenceState,
+                };
+            }
+            if (observedIssues.length === 1) {
+                const observed = observedIssues[0];
+                const closed = String(observed?.state || "").toUpperCase() === "CLOSED";
+                return {
+                    ...dependency,
+                    title: text(observed?.title || dependency.title, 240),
+                    url: text(observed?.url || dependency.url, 500),
+                    status: text(observed?.state || "unknown", 40).toLowerCase(),
+                    phase: closed ? "completed" : "unknown",
+                    evidenceState,
+                };
+            }
+            return {
+                ...dependency,
+                evidenceState,
+            };
         });
         goal.blockers = goal.dependencies.filter((dependency) => dependency.phase !== "completed");
         goal.handoff = reconcileHandoffDependencies(goal.handoff, goal.dependencies);

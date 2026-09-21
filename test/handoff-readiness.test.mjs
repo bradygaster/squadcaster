@@ -170,7 +170,7 @@ test("blocks when every declared dependency is not observed complete", () => {
     assert.match(handoff.readiness.reasons.join(" "), /dependency is open or unresolved/i);
 });
 
-test("cross-repository aggregation re-evaluates dependency readiness", () => {
+test("cross-repository aggregation resolves a fresh closed non-Squad dependency", () => {
     const frontendIssues = readyIssues({
         body: "Depends on: octodemo/backend#9\n\n## Acceptance Criteria\n- Shows readiness",
     });
@@ -189,7 +189,7 @@ test("cross-repository aggregation re-evaluates dependency readiness", () => {
         issues: [issue(9, {
             title: "Dependency",
             state: "CLOSED",
-            labels: [{ name: "squad" }],
+            labels: [],
             url: "https://github.com/octodemo/backend/issues/9",
         })],
         fetchedAt: "2026-09-21T20:00:00Z",
@@ -212,7 +212,7 @@ test("cross-repository aggregation never completes a dependency from stale evide
     const backendIssue = issue(9, {
         title: "Dependency",
         state: "CLOSED",
-        labels: [{ name: "squad" }],
+        labels: [],
         url: "https://github.com/octodemo/backend/issues/9",
     });
     const backend = buildActivitySnapshot({
@@ -234,6 +234,167 @@ test("cross-repository aggregation never completes a dependency from stale evide
     const handoff = taskGoal(aggregate).handoff;
     assert.equal(handoff.readiness.state, "unknown");
     assert.match(handoff.readiness.reasons.join(" "), /dependency octodemo\/backend#9 evidence is stale/i);
+});
+
+test("cross-repository aggregation keeps a fresh open non-Squad dependency blocked", () => {
+    const frontend = buildActivitySnapshot({
+        repository,
+        issues: readyIssues({
+            body: "Depends on: octodemo/backend#9\n\n## Acceptance Criteria\n- Shows readiness",
+        }),
+    });
+    const backendIssue = issue(9, {
+        title: "Open dependency",
+        state: "OPEN",
+        labels: [],
+        url: "https://github.com/octodemo/backend/issues/9",
+    });
+    const backend = buildActivitySnapshot({
+        repository: {
+            name: "backend",
+            nameWithOwner: "octodemo/backend",
+            url: "https://github.com/octodemo/backend",
+        },
+        issues: [backendIssue],
+    });
+
+    const handoff = taskGoal(aggregateActivitySnapshots({ snapshots: [frontend, backend] })).handoff;
+    assert.equal(handoff.readiness.state, "blocked");
+});
+
+test("cross-repository aggregation fails closed for missing, excluded, and errored target evidence", () => {
+    const frontend = buildActivitySnapshot({
+        repository,
+        issues: readyIssues({
+            body: "Depends on: octodemo/backend#9\n\n## Acceptance Criteria\n- Shows readiness",
+        }),
+    });
+    const backendRepository = {
+        name: "backend",
+        nameWithOwner: "octodemo/backend",
+        url: "https://github.com/octodemo/backend",
+    };
+    const cases = [
+        {
+            name: "missing",
+            snapshot: buildActivitySnapshot({
+                repository: backendRepository,
+                issues: [issue(8, { labels: [] })],
+            }),
+            repositories: [],
+            reason: /evidence is missing/i,
+        },
+        {
+            name: "excluded",
+            snapshot: buildActivitySnapshot({
+                repository: backendRepository,
+                issues: [issue(9, { state: "CLOSED", labels: [] })],
+            }),
+            repositories: [{ nameWithOwner: "octodemo/backend", included: false }],
+            reason: /evidence is excluded/i,
+        },
+        {
+            name: "source error",
+            snapshot: buildActivitySnapshot({
+                repository: backendRepository,
+                sourceState: {
+                    issues: {
+                        data: [issue(9, { state: "CLOSED", labels: [] })],
+                        status: "unavailable",
+                        error: "issue access denied",
+                    },
+                    pullRequests: { data: [], status: "fresh" },
+                    workflowRuns: { data: [], status: "fresh" },
+                },
+                errors: [{ source: "issues", message: "issue access denied" }],
+            }),
+            repositories: [],
+            reason: /evidence is unavailable/i,
+        },
+        {
+            name: "truncated",
+            snapshot: buildActivitySnapshot({
+                repository: backendRepository,
+                sourceState: {
+                    issues: {
+                        data: [issue(9, { state: "CLOSED", labels: [] })],
+                        status: "incomplete",
+                        exhaustive: false,
+                        truncated: true,
+                    },
+                    pullRequests: { data: [], status: "fresh" },
+                    workflowRuns: { data: [], status: "fresh" },
+                },
+            }),
+            repositories: [],
+            reason: /evidence is incomplete/i,
+        },
+    ];
+
+    for (const candidate of cases) {
+        const aggregate = aggregateActivitySnapshots({
+            snapshots: [frontend, candidate.snapshot],
+            repositories: candidate.repositories,
+        });
+        const handoff = taskGoal(aggregate).handoff;
+        assert.equal(handoff.readiness.state, "unknown", candidate.name);
+        assert.match(handoff.readiness.reasons.join(" "), candidate.reason, candidate.name);
+    }
+});
+
+test("cross-repository dependency identity cannot collide with the same issue number elsewhere", () => {
+    const frontend = buildActivitySnapshot({
+        repository,
+        issues: readyIssues({
+            body: "Depends on: octodemo/backend#9\n\n## Acceptance Criteria\n- Shows readiness",
+        }),
+    });
+    const other = buildActivitySnapshot({
+        repository: {
+            name: "backend",
+            nameWithOwner: "otherdemo/backend",
+            url: "https://github.com/otherdemo/backend",
+        },
+        issues: [issue(9, {
+            state: "CLOSED",
+            labels: [],
+            url: "https://github.com/otherdemo/backend/issues/9",
+        })],
+    });
+
+    const handoff = taskGoal(aggregateActivitySnapshots({ snapshots: [frontend, other] })).handoff;
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.match(handoff.readiness.reasons.join(" "), /evidence is unavailable/i);
+});
+
+test("cross-repository aggregation rejects ambiguous duplicate target issues", () => {
+    const frontend = buildActivitySnapshot({
+        repository,
+        issues: readyIssues({
+            body: "Depends on: octodemo/backend#9\n\n## Acceptance Criteria\n- Shows readiness",
+        }),
+    });
+    const duplicate = issue(9, {
+        state: "CLOSED",
+        labels: [],
+        url: "https://github.com/octodemo/backend/issues/9",
+    });
+    const backend = buildActivitySnapshot({
+        repository: {
+            name: "backend",
+            nameWithOwner: "octodemo/backend",
+            url: "https://github.com/octodemo/backend",
+        },
+        sourceState: {
+            issues: { data: [duplicate, { ...duplicate }], status: "fresh" },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+
+    const handoff = taskGoal(aggregateActivitySnapshots({ snapshots: [frontend, backend] })).handoff;
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.match(handoff.readiness.reasons.join(" "), /evidence is ambiguous/i);
 });
 
 test("is ineligible when acceptance criteria are absent or empty", () => {
