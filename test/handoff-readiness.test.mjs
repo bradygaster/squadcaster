@@ -461,9 +461,49 @@ test("requires exact task and epic issue identity and observed binding labels", 
     const missingLabel = readyIssues({
         labels: [{ name: "squad" }],
     });
+
     const handoff = taskGoal(snapshot({ issues: missingLabel })).handoff;
     assert.equal(handoff.readiness.state, "unknown");
     assert.match(handoff.readiness.reasons.join(" "), /not observed on task issue/i);
+});
+
+test("activation identity collisions fail the whole envelope closed", () => {
+    const issues = readyIssues();
+    issues.push(issue(13, {
+        title: "Second task",
+        body: "## Acceptance Criteria\n- Remains fail closed",
+        labels: [{ name: "squad" }, { name: "squad:kint" }],
+    }));
+    issues[0].comments = [activationComment([
+        binding(),
+        binding({ issue: "#13" }),
+    ])];
+
+    const taskEvidence = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+
+    assert.equal(taskEvidence.get(12).activation, null);
+    assert.equal(taskEvidence.get(13).activation, null);
+    assert.match(
+        [...taskEvidence.get(12).errors, ...taskEvidence.get(13).errors].join(" "),
+        /task 3 resolves to multiple issues/i,
+    );
+
+    issues[0].comments = [activationComment([
+        binding({ issue: "#11" }),
+    ])];
+    const roleCollision = parseActivationEvidence({
+        issues,
+        repository: "octodemo/demo",
+    });
+
+    assert.equal(roleCollision.get(11).activation, null);
+    assert.match(
+        roleCollision.get(11).errors.join(" "),
+        /both a task and an epic/i,
+    );
 });
 
 test("uses native and fallback sub-issue relationships to reject non-leaf tasks", () => {

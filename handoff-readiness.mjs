@@ -85,20 +85,27 @@ function parseStructuredArtifact(body) {
     const pattern = /Structured data:\s*```json\s*([\s\S]*?)```/gi;
     const blocks = [...String(body || "").matchAll(pattern)];
     if (blocks.length === 0) return { artifact: null, error: "" };
-    let value;
-    try {
-        value = JSON.parse(blocks.at(-1)[1]);
-    } catch (error) {
-        const activationMentioned = /"(?:squad_artifact)"\s*:\s*"?(?:activated|phases-activated|plan-accepted|phases-accepted)/i
-            .test(String(body || ""));
-        return {
-            artifact: null,
-            error: activationMentioned
-                ? `Activation structured data is malformed: ${error.message}`
-                : "",
-        };
+    const values = [];
+    for (const block of blocks) {
+        try {
+            values.push(JSON.parse(block[1]));
+        } catch (error) {
+            const activationMentioned = /"(?:squad_artifact)"\s*:\s*"?(?:activated|phases-activated|plan-accepted|phases-accepted)/i
+                .test(block[1]);
+            if (activationMentioned) {
+                return {
+                    artifact: null,
+                    error: `Activation structured data is malformed: ${error.message}`,
+                };
+            }
+        }
     }
-    return { artifact: value, error: "" };
+    const activationArtifacts = values.filter((value) =>
+        ACTIVATION_KINDS.has(value?.squad_artifact));
+    if (activationArtifacts.length > 1) {
+        return { artifact: null, error: "Activation structured data is duplicated." };
+    }
+    return { artifact: activationArtifacts[0] || values.at(-1) || null, error: "" };
 }
 
 function validateBinding(raw, repository, issueByNumber) {
@@ -229,7 +236,7 @@ export function parseActivationEvidence({
                 globalErrors.push(reason);
                 continue;
             }
-            if (Number(artifact.origin_issue) !== rootNumber) {
+            if (!Number.isInteger(artifact.origin_issue) || artifact.origin_issue !== rootNumber) {
                 const reason = "Activation artifact origin issue does not match its comment issue.";
                 addError(rootNumber, reason);
                 globalErrors.push(reason);
@@ -254,22 +261,89 @@ export function parseActivationEvidence({
                 globalErrors.push(reason);
                 continue;
             }
-            const seen = new Set();
+            const validatedBindings = [];
+            const envelopeErrors = [];
             for (const rawBinding of parsedBindings.value) {
                 const validated = validateBinding(rawBinding, repository, issueByNumber);
                 if (validated.error) {
-                    addError(rootNumber, validated.error);
                     const target = issueNumber(rawBinding?.issue);
-                    if (target) addError(target, validated.error);
-                    globalErrors.push(validated.error);
+                    envelopeErrors.push({ reason: validated.error, target });
                     continue;
                 }
-                const binding = validated.binding;
-                if (seen.has(binding.issueNumber)) {
-                    addError(binding.issueNumber, `Activation binding for #${binding.issueNumber} is duplicated.`);
-                    continue;
+                validatedBindings.push(validated.binding);
+            }
+            const issueAssignments = new Map();
+            const taskIssues = new Map();
+            const epicIssues = new Map();
+            const seenTaskIssues = new Set();
+            for (const binding of validatedBindings) {
+                if (binding.issueNumber === binding.epicIssueNumber) {
+                    envelopeErrors.push({
+                        reason: `Activation binding issue #${binding.issueNumber} cannot be both a task and an epic.`,
+                        target: binding.issueNumber,
+                    });
                 }
-                seen.add(binding.issueNumber);
+                if (seenTaskIssues.has(binding.issueNumber)) {
+                    envelopeErrors.push({
+                        reason: `Activation binding for #${binding.issueNumber} is duplicated.`,
+                        target: binding.issueNumber,
+                    });
+                }
+                seenTaskIssues.add(binding.issueNumber);
+                const taskAssignment = issueAssignments.get(binding.issueNumber);
+                const epicAssignment = issueAssignments.get(binding.epicIssueNumber);
+                if (
+                    taskAssignment &&
+                    (taskAssignment.role !== "task" || taskAssignment.identity !== binding.task)
+                ) {
+                    envelopeErrors.push({
+                        reason: `Activation binding issue #${binding.issueNumber} has conflicting identities.`,
+                        target: binding.issueNumber,
+                    });
+                }
+                if (
+                    epicAssignment &&
+                    (epicAssignment.role !== "epic" || epicAssignment.identity !== binding.epic)
+                ) {
+                    envelopeErrors.push({
+                        reason: `Activation binding issue #${binding.epicIssueNumber} has conflicting identities.`,
+                        target: binding.epicIssueNumber,
+                    });
+                }
+                issueAssignments.set(binding.issueNumber, {
+                    role: "task",
+                    identity: binding.task,
+                });
+                issueAssignments.set(binding.epicIssueNumber, {
+                    role: "epic",
+                    identity: binding.epic,
+                });
+                const priorTaskIssue = taskIssues.get(binding.task);
+                if (priorTaskIssue && priorTaskIssue !== binding.issueNumber) {
+                    envelopeErrors.push({
+                        reason: `Activation task ${binding.task} resolves to multiple issues.`,
+                        target: binding.issueNumber,
+                    });
+                }
+                taskIssues.set(binding.task, binding.issueNumber);
+                const priorEpicIssue = epicIssues.get(binding.epic);
+                if (priorEpicIssue && priorEpicIssue !== binding.epicIssueNumber) {
+                    envelopeErrors.push({
+                        reason: `Activation epic ${binding.epic} resolves to multiple issues.`,
+                        target: binding.epicIssueNumber,
+                    });
+                }
+                epicIssues.set(binding.epic, binding.epicIssueNumber);
+            }
+            if (envelopeErrors.length > 0) {
+                for (const { reason, target } of envelopeErrors) {
+                    addError(rootNumber, reason);
+                    if (target) addError(target, reason);
+                    globalErrors.push(reason);
+                }
+                continue;
+            }
+            for (const binding of validatedBindings) {
                 const candidate = {
                     ...binding,
                     rootIssue: `${repository}#${rootNumber}`,
