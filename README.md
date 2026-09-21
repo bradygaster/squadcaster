@@ -80,8 +80,9 @@ included repository; Actions runs are refreshed for the current repository and
 repositories with active work.
 
 Independent GitHub sources are fetched separately, so a permissions or
-rate-limit failure in one source does not discard data from the others. If issue
-discovery fails, the canvas keeps and labels the last known snapshot as stale.
+rate-limit failure in one source does not discard data from the others. Failed
+sources retain their last-known evidence while successful sources continue to
+update, and the canvas labels the combined result as partial or stale.
 When the GraphQL rate-limit budget is low, background refresh pauses until reset
 while the current repository continues refreshing.
 

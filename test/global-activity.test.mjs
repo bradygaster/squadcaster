@@ -90,6 +90,27 @@ test("aggregation does not mutate cached repository snapshots", () => {
     assert.deepEqual(snapshot, original);
 });
 
+test("aggregation exposes partial and stale repository snapshots", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        errors: [{ source: "pull requests", message: "temporary failure" }],
+        sourceState: {
+            issues: { data: [issue("octodemo/frontend", 57)], status: "fresh" },
+            pullRequests: { data: [], status: "stale", error: "temporary failure" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const aggregate = aggregateActivitySnapshots({ snapshots: [snapshot] });
+    assert.equal(aggregate.partial, true);
+    assert.equal(aggregate.stale, true);
+    assert.deepEqual(aggregate.staleSources, [{
+        repository: "octodemo/frontend",
+        source: "pullRequests",
+    }]);
+    assert.equal(aggregate.errors[0].repository, "octodemo/frontend");
+});
+
 test("dependency resolution does not depend on snapshot order", () => {
     const dependent = buildActivitySnapshot({
         repository: repository("octodemo/frontend"),
@@ -189,4 +210,101 @@ test("aggregate refresh skips excluded repositories and reuses the current snaps
     assert.equal(aggregate.repositories.length, 2);
     assert.equal(aggregate.goals.length, 1);
     assert.equal(calls.length, 0);
+});
+
+test("partial refresh retains the last fully successful timestamp and later recovers", async () => {
+    const previous = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        pullRequests: [{
+            number: 44,
+            title: "Implement #57",
+            body: "Closes #57",
+            state: "OPEN",
+            url: "https://github.com/octodemo/frontend/pull/44",
+            headRefName: "squad/implement-57-dashboard",
+        }],
+    });
+    const successfulAt = "2026-09-20T12:00:00Z";
+    let failPullRequests = true;
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/frontend"),
+                owner: "octodemo",
+                included: true,
+                lastSuccessfulRefresh: successfulAt,
+            }],
+            snapshots: { "octodemo/frontend": previous },
+        },
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository("octodemo/frontend");
+            if (args[0] === "issue") return [issue("octodemo/frontend", 57)];
+            if (args[0] === "pr" && failPullRequests) throw new Error("temporary PR failure");
+            return [];
+        },
+    });
+
+    const partial = await global.refresh({ forceAll: true });
+    assert.equal(partial.goals[0].phase, "reviewing");
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.match(global.registry.repositories[0].error, /pull requests: temporary PR failure/);
+
+    failPullRequests = false;
+    const recovered = await global.refresh({ forceAll: true });
+    assert.equal(recovered.goals[0].phase, "queued");
+    assert.notEqual(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.equal(global.registry.repositories[0].error, "");
+    assert.equal(recovered.partial, false);
+    assert.equal(recovered.stale, false);
+});
+
+test("background refresh retries stale workflow sources for inactive repositories", async () => {
+    const previous = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57, "", "CLOSED")],
+        workflowRuns: [{
+            databaseId: 78,
+            workflowName: "Squad Implement Worker",
+            displayTitle: "Implement #57",
+            status: "completed",
+            conclusion: "success",
+            headBranch: "squad/implement-57-dashboard",
+        }],
+    });
+    previous.sourceState.workflowRuns.status = "stale";
+    previous.sourceState.workflowRuns.error = "workflow service unavailable";
+    previous.partial = true;
+    previous.stale = true;
+    previous.staleSources = ["workflowRuns"];
+    previous.errors = [{ source: "workflow runs", message: "workflow service unavailable" }];
+    const successfulAt = "2026-09-20T12:00:00Z";
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/frontend"),
+                owner: "octodemo",
+                included: true,
+                lastSuccessfulRefresh: successfulAt,
+            }],
+            snapshots: { "octodemo/frontend": previous },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository("octodemo/frontend");
+            if (args[0] === "issue") return [issue("octodemo/frontend", 57, "", "CLOSED")];
+            return [];
+        },
+    });
+
+    const recovered = await global.refresh({ forceAll: true });
+    assert.ok(calls.some((args) => args[0] === "run"));
+    assert.equal(recovered.partial, false);
+    assert.equal(recovered.stale, false);
+    assert.notEqual(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
 });

@@ -25,6 +25,18 @@ function timestamp(value) {
     return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
+function normalizedSourceState(value, data, fetchedAt) {
+    const status = ["fresh", "stale", "unavailable", "skipped"].includes(value?.status)
+        ? value.status
+        : "fresh";
+    return {
+        data: Array.isArray(value?.data) ? value.data : data,
+        fetchedAt: timestamp(value?.fetchedAt || fetchedAt),
+        status,
+        error: text(value?.error, 800),
+    };
+}
+
 function labelsOf(item) {
     return (Array.isArray(item?.labels) ? item.labels : [])
         .map((label) => text(typeof label === "string" ? label : label?.name, 120))
@@ -285,8 +297,17 @@ export function buildActivitySnapshot({
     workflowRuns = [],
     members = [],
     errors = [],
+    sourceState = null,
     fetchedAt = new Date().toISOString(),
 } = {}) {
+    const normalizedSources = {
+        issues: normalizedSourceState(sourceState?.issues, issues, fetchedAt),
+        pullRequests: normalizedSourceState(sourceState?.pullRequests, pullRequests, fetchedAt),
+        workflowRuns: normalizedSourceState(sourceState?.workflowRuns, workflowRuns, fetchedAt),
+    };
+    issues = normalizedSources.issues.data;
+    pullRequests = normalizedSources.pullRequests.data;
+    workflowRuns = normalizedSources.workflowRuns.data;
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
     const normalizedPullRequests = pullRequests.map((pullRequest) => ({
         source: pullRequest,
@@ -398,6 +419,13 @@ export function buildActivitySnapshot({
         return rightActive - leftActive || String(right.updatedAt).localeCompare(String(left.updatedAt));
     });
     const count = (phase) => goals.filter((goal) => phase.includes(goal.phase)).length;
+    const normalizedErrors = (Array.isArray(errors) ? errors : []).map((error) => ({
+        source: text(error?.source || "GitHub", 80),
+        message: text(error?.message || error, 800),
+    }));
+    const staleSources = Object.entries(normalizedSources)
+        .filter(([, state]) => state.status === "stale")
+        .map(([source]) => source);
     return {
         schemaVersion: 1,
         fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
@@ -417,10 +445,12 @@ export function buildActivitySnapshot({
             completed: count(["completed"]),
         },
         goals,
-        errors: (Array.isArray(errors) ? errors : []).map((error) => ({
-            source: text(error?.source || "GitHub", 80),
-            message: text(error?.message || error, 800),
-        })),
+        sourceState: normalizedSources,
+        partial: normalizedErrors.length > 0 ||
+            Object.values(normalizedSources).some((state) => Boolean(state.error)),
+        stale: staleSources.length > 0,
+        staleSources,
+        errors: normalizedErrors,
     };
 }
 
@@ -472,6 +502,16 @@ export function aggregateActivitySnapshots({
             ...error,
             repository: snapshot?.repository?.nameWithOwner || "",
         })));
+    const aggregateErrors = [...snapshotErrors, ...errors].map((error) => ({
+        source: text(error?.source || "GitHub", 80),
+        repository: text(error?.repository || "", 300),
+        message: text(error?.message || error, 800),
+    }));
+    const staleSources = snapshots.flatMap((snapshot) =>
+        (snapshot?.staleSources || []).map((source) => ({
+            repository: snapshot?.repository?.nameWithOwner || "",
+            source,
+        })));
     return {
         schemaVersion: 2,
         scope: "user",
@@ -489,11 +529,10 @@ export function aggregateActivitySnapshots({
             completed: count(["completed"]),
         },
         goals,
-        errors: [...snapshotErrors, ...errors].map((error) => ({
-            source: text(error?.source || "GitHub", 80),
-            repository: text(error?.repository || "", 300),
-            message: text(error?.message || error, 800),
-        })),
+        partial: aggregateErrors.length > 0 || snapshots.some((snapshot) => snapshot?.partial),
+        stale: snapshots.some((snapshot) => snapshot?.stale),
+        staleSources,
+        errors: aggregateErrors,
     };
 }
 

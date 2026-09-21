@@ -232,10 +232,12 @@ export class GitHubGlobalActivity {
                 this.registry.repositories.unshift(current);
             }
             if (current) {
-                current.lastSuccessfulRefresh = currentSnapshot.fetchedAt;
                 current.lastAttemptedRefresh = currentSnapshot.fetchedAt;
+                if (!currentSnapshot.partial) current.lastSuccessfulRefresh = currentSnapshot.fetchedAt;
                 current.lastActivityAt = currentSnapshot.goals?.[0]?.updatedAt || null;
-                current.error = "";
+                current.error = currentSnapshot.errors?.length
+                    ? currentSnapshot.errors.map((error) => `${error.source}: ${error.message}`).join("; ").slice(0, 800)
+                    : "";
             }
         }
 
@@ -267,10 +269,13 @@ export class GitHubGlobalActivity {
                 const snapshot = await adapter.discover({
                     members: key === currentKey ? currentMembers : [],
                     previous,
-                    includeWorkflowRuns: key === currentKey || Number(previous?.summary?.active || 0) > 0,
+                    includeWorkflowRuns: key === currentKey ||
+                        Number(previous?.summary?.active || 0) > 0 ||
+                        Boolean(previous?.sourceState?.workflowRuns?.error) ||
+                        ["stale", "unavailable"].includes(previous?.sourceState?.workflowRuns?.status),
                 });
                 this.registry.snapshots[key] = snapshot;
-                repository.lastSuccessfulRefresh = snapshot.fetchedAt;
+                if (!snapshot.partial) repository.lastSuccessfulRefresh = snapshot.fetchedAt;
                 repository.lastActivityAt = snapshot.goals?.[0]?.updatedAt || repository.lastActivityAt;
                 repository.error = snapshot.errors?.length
                     ? snapshot.errors.map((error) => `${error.source}: ${error.message}`).join("; ").slice(0, 800)
