@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    anchoredPagedItems,
     boundedItems,
     compareFeedItems,
     describeActivityDelta,
-    pagedItems,
     renderHtml,
     semanticFeedItems,
 } from "../renderer.mjs";
@@ -60,16 +60,29 @@ test("paginates and semantically deduplicates dense feeds", () => {
 
     assert.deepEqual(deduped.map((item) => item.title), ["Alpha", "Beta", "Missing"]);
     assert.equal(compareFeedItems(deduped[0], deduped[1]), -1);
-    assert.deepEqual(pagedItems(deduped, 1, 2), {
-        items: [deduped[2]],
-        total: 3,
-        page: 1,
-        pages: 2,
-        start: 3,
-        end: 3,
-        hasNewer: true,
-        hasOlder: false,
-    });
+    const dense = Array.from({ length: 45 }, (_, index) => ({ id: index + 1 }));
+    const first = anchoredPagedItems(dense, {}, 20, (item) => item.id);
+    const second = anchoredPagedItems(dense, { anchor: first.nextAnchor }, 20, (item) => item.id);
+    assert.deepEqual(second.items.map((item) => item.id), Array.from({ length: 20 }, (_, index) => index + 21));
+
+    const refreshed = [{ id: -1 }, { id: 0 }, ...dense];
+    const stable = anchoredPagedItems(refreshed, second, 20, (item) => item.id);
+    assert.deepEqual(stable.items.map((item) => item.id), second.items.map((item) => item.id));
+
+    const removed = refreshed.filter((item) => ![21, 30].includes(item.id));
+    const recovered = anchoredPagedItems(removed, second, 20, (item) => item.id);
+    assert.equal(recovered.items[0].id, 22);
+    assert.equal(recovered.items.includes(30), false);
+    assert.equal(recovered.items.length, 20);
+
+    const visited = [];
+    let page = anchoredPagedItems(refreshed, {}, 20, (item) => item.id);
+    while (true) {
+        visited.push(...page.items.map((item) => item.id));
+        if (!page.hasOlder) break;
+        page = anchoredPagedItems(refreshed, { anchor: page.nextAnchor }, 20, (item) => item.id);
+    }
+    assert.deepEqual(visited, refreshed.map((item) => item.id));
 });
 
 test("announces only meaningful activity changes", () => {

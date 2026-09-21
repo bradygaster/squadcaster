@@ -609,28 +609,138 @@ test("preserves keyed scroll state while bounding production-scale collections",
 });
 
 test("filters evidence kinds and preserves bounded pages across repeated refreshes", async ({ page }) => {
-    const stressState = createStressCanvasState();
-    fixture.emit(stressState);
+    const pagedState = fixture.state();
+    const target = pagedState.activity.goals[0];
+    for (const item of pagedState.activity.goals) {
+        item.evidence = [];
+        item.workflowRuns = [];
+    }
+    target.evidence = Array.from({ length: 45 }, (_, index) => ({
+        kind: "check",
+        title: `Check evidence ${index + 1}`,
+        timestamp: new Date(Date.UTC(2026, 8, 21, 18, 0) - index * 60_000).toISOString(),
+        url: `https://example.test/check-page/${index + 1}`,
+    }));
+    target.workflowRuns = Array.from({ length: 45 }, (_, index) => ({
+        id: index + 1,
+        name: `Active workflow ${index + 1}`,
+        workflow: "Dense workflow",
+        status: "in_progress",
+        conclusion: "",
+        url: `https://example.test/workflow-page/${index + 1}`,
+        branch: `dense/page-${index + 1}`,
+        createdAt: new Date(Date.UTC(2026, 8, 21, 18, 0) - index * 60_000).toISOString(),
+        updatedAt: new Date(Date.UTC(2026, 8, 21, 18, 0) - index * 60_000).toISOString(),
+    }));
+    fixture.emit(pagedState);
 
     const activity = page.locator(".activity-panel");
     await activity.getByRole("button", { name: "Checks" }).click();
     const checksFilter = activity.getByRole("button", { name: "Checks" });
     await expect(checksFilter).toHaveAttribute("aria-pressed", "true");
     await expect(activity.locator(".activity-item")).toHaveCount(20);
-    await expect(activity.getByText(/of 700 check events/)).toBeVisible();
-
-    await checksFilter.focus();
-    fixture.emit(structuredClone(stressState));
-    await expect(checksFilter).toBeFocused();
+    await expect(activity.getByText("Showing 1–20 of 45 check events.")).toBeVisible();
 
     await activity.getByRole("button", { name: "Older evidence" }).click();
-    await expect(activity.getByText("Showing 21–40 of 700 check events.")).toBeVisible();
+    await page.getByRole("button", { name: "Older workflows" }).click();
+    const activityWindow = await activity.locator(".activity-item a").evaluateAll(
+        (links) => links.map((link) => link.href),
+    );
+    const workflowWindow = await page.locator(".run-row").evaluateAll(
+        (links) => links.map((link) => link.href),
+    );
 
-    fixture.emit(structuredClone(stressState));
-    fixture.emit(structuredClone(stressState));
+    const refreshed = structuredClone(pagedState);
+    const refreshedTarget = refreshed.activity.goals[0];
+    refreshedTarget.evidence.unshift(
+        {
+            kind: "check",
+            title: "New check evidence A",
+            timestamp: "2026-09-21T20:00:00Z",
+            url: "https://example.test/check-page/new-a",
+        },
+        {
+            kind: "check",
+            title: "New check evidence B",
+            timestamp: "2026-09-21T19:00:00Z",
+            url: "https://example.test/check-page/new-b",
+        },
+    );
+    refreshedTarget.workflowRuns.unshift(
+        {
+            id: 1001,
+            name: "New active workflow A",
+            workflow: "Dense workflow",
+            status: "in_progress",
+            conclusion: "",
+            url: "https://example.test/workflow-page/new-a",
+            branch: "dense/new-a",
+            createdAt: "2026-09-21T20:00:00Z",
+            updatedAt: "2026-09-21T20:00:00Z",
+        },
+        {
+            id: 1002,
+            name: "New active workflow B",
+            workflow: "Dense workflow",
+            status: "in_progress",
+            conclusion: "",
+            url: "https://example.test/workflow-page/new-b",
+            branch: "dense/new-b",
+            createdAt: "2026-09-21T19:00:00Z",
+            updatedAt: "2026-09-21T19:00:00Z",
+        },
+    );
+    const newerEvidence = activity.getByRole("button", { name: "Newer evidence" });
+    await newerEvidence.focus();
+    fixture.emit(refreshed);
 
-    await expect(activity.getByText("Showing 21–40 of 700 check events.")).toBeVisible();
+    await expect(newerEvidence).toBeFocused();
+    expect(await activity.locator(".activity-item a").evaluateAll(
+        (links) => links.map((link) => link.href),
+    )).toEqual(activityWindow);
+    expect(await page.locator(".run-row").evaluateAll(
+        (links) => links.map((link) => link.href),
+    )).toEqual(workflowWindow);
+
+    const removed = structuredClone(refreshed);
+    removed.activity.goals[0].evidence = removed.activity.goals[0].evidence
+        .filter((item) => item.url !== activityWindow[0]);
+    removed.activity.goals[0].workflowRuns = removed.activity.goals[0].workflowRuns
+        .filter((item) => item.url !== workflowWindow[0]);
+    fixture.emit(removed);
+
+    await expect(activity.locator(".activity-item a").first()).toHaveAttribute("href", activityWindow[1]);
+    await expect(page.locator(".run-row").first()).toHaveAttribute("href", workflowWindow[1]);
     await expect(activity.locator(".activity-item")).toHaveCount(20);
+    await expect(page.locator(".run-row")).toHaveCount(12);
+
+    await page.locator(".filter-disclosure > summary").click();
+    await page.locator('[data-action="phase-filter"][data-phase="all"]').click();
+    await activity.getByRole("button", { name: "Checks" }).click();
+    const visitedEvidence = [];
+    while (true) {
+        visitedEvidence.push(...await activity.locator(".activity-item a").evaluateAll(
+            (links) => links.map((link) => link.href),
+        ));
+        const older = activity.getByRole("button", { name: "Older evidence" });
+        if (await older.isDisabled()) break;
+        await older.click();
+    }
+    expect(new Set(visitedEvidence).size).toBe(46);
+    expect(visitedEvidence).toHaveLength(46);
+
+    await page.locator('[data-action="phase-filter"][data-phase="all"]').click();
+    const visitedWorkflows = [];
+    while (true) {
+        visitedWorkflows.push(...await page.locator(".run-row").evaluateAll(
+            (links) => links.map((link) => link.href),
+        ));
+        const older = page.getByRole("button", { name: "Older workflows" });
+        if (await older.isDisabled()) break;
+        await older.click();
+    }
+    expect(new Set(visitedWorkflows).size).toBe(46);
+    expect(visitedWorkflows).toHaveLength(46);
 });
 
 test("deduplicates refresh evidence and deterministically orders equal or missing timestamps", async ({ page }) => {

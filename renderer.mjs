@@ -55,21 +55,56 @@ export function semanticFeedItems(items, identity) {
     return [...unique.values()].sort(compareFeedItems);
 }
 
-export function pagedItems(items, page, pageSize) {
+export function anchoredPagedItems(items, state, pageSize, identity) {
     const values = Array.isArray(items) ? items : [];
     const size = Number.isInteger(pageSize) && pageSize > 0 ? pageSize : 1;
-    const pages = Math.max(1, Math.ceil(values.length / size));
-    const currentPage = Math.min(Math.max(Number.isInteger(page) ? page : 0, 0), pages - 1);
-    const start = currentPage * size;
+    const keyFor = typeof identity === "function"
+        ? identity
+        : (item) => [
+            item?.goal?.repository?.nameWithOwner,
+            item?.goal?.id,
+            item?.kind,
+            item?.id,
+            item?.title || item?.name || item?.workflow,
+            item?.url,
+        ].map((value) => String(value ?? "").toLowerCase()).join("|");
+    const keys = values.map((item) => String(keyFor(item) ?? "").toLowerCase());
+    const requested = state && typeof state === "object" ? state : {};
+    let start = 0;
+    let fixedEnd = null;
+    if (values.length && requested.anchor) {
+        start = keys.indexOf(String(requested.anchor).toLowerCase());
+    } else if (values.length && requested.endBefore) {
+        const end = keys.indexOf(String(requested.endBefore).toLowerCase());
+        start = end >= 0 ? Math.max(0, end - size) : -1;
+        fixedEnd = end >= 0 ? end : null;
+    } else if (values.length && requested.visibleKeys?.length) {
+        start = requested.visibleKeys
+            .map((key) => keys.indexOf(String(key).toLowerCase()))
+            .find((index) => index >= 0) ?? -1;
+    }
+    if (start < 0 && values.length && requested.beforeKey) {
+        const before = keys.indexOf(String(requested.beforeKey).toLowerCase());
+        start = before >= 0 ? before + 1 : -1;
+    }
+    if (start < 0) start = Number.isInteger(requested.startIndex) ? requested.startIndex : 0;
+    if (start >= values.length) {
+        start = values.length ? Math.floor((values.length - 1) / size) * size : 0;
+    }
+    const end = Math.min(fixedEnd ?? start + size, values.length);
+    const visibleKeys = keys.slice(start, end);
     return {
-        items: values.slice(start, start + size),
+        items: values.slice(start, end),
         total: values.length,
-        page: currentPage,
-        pages,
         start: values.length ? start + 1 : 0,
-        end: Math.min(start + size, values.length),
-        hasNewer: currentPage > 0,
-        hasOlder: currentPage < pages - 1,
+        end,
+        startIndex: start,
+        anchor: visibleKeys[0] || "",
+        beforeKey: start > 0 ? keys[start - 1] : "",
+        visibleKeys,
+        nextAnchor: end < values.length ? keys[end] : "",
+        hasNewer: start > 0,
+        hasOlder: end < values.length,
     };
 }
 
@@ -966,8 +1001,10 @@ export function renderHtml() {
     let drawerReturnSelector = "";
     let filtersOpen = false;
     let activityKindFilter = "all";
-    let activityPage = 0;
-    let workflowPage = 0;
+    let activityPageState = {};
+    let workflowPageState = {};
+    let activityPageView = null;
+    let workflowPageView = null;
     let searchAnnouncementTimer = null;
 
     const app = document.getElementById("app");
@@ -976,7 +1013,7 @@ export function renderHtml() {
     const boundedItems = ${boundedItems.toString()};
     const compareFeedItems = ${compareFeedItems.toString()};
     const semanticFeedItems = ${semanticFeedItems.toString()};
-    const pagedItems = ${pagedItems.toString()};
+    const anchoredPagedItems = ${anchoredPagedItems.toString()};
     const describeActivityDelta = ${describeActivityDelta.toString()};
 
     function esc(value) {
@@ -1001,8 +1038,8 @@ export function renderHtml() {
     }
 
     function resetFeedPages() {
-      activityPage = 0;
-      workflowPage = 0;
+      activityPageState = {};
+      workflowPageState = {};
     }
 
     function filterAnnouncement() {
@@ -1328,8 +1365,16 @@ export function renderHtml() {
           }))
       ), item => \`\${item.goal.repository?.nameWithOwner}|\${item.id || item.url ||
         \`\${item.workflow}|\${item.branch}|\${item.createdAt}|\${item.status}\`}\`);
-      const visible = pagedItems(runs, workflowPage, 12);
-      workflowPage = visible.page;
+      const runIdentity = item => \`\${item.goal.repository?.nameWithOwner}|\${item.id || item.url ||
+        \`\${item.workflow}|\${item.branch}|\${item.createdAt}|\${item.status}\`}\`;
+      const visible = anchoredPagedItems(runs, workflowPageState, 12, runIdentity);
+      workflowPageState = {
+        anchor: visible.anchor,
+        beforeKey: visible.beforeKey,
+        visibleKeys: visible.visibleKeys,
+        startIndex: visible.startIndex,
+      };
+      workflowPageView = visible;
       return \`
         <section class="runs-panel" aria-labelledby="runs-title">
           <div class="panel-header">
@@ -1399,8 +1444,15 @@ export function renderHtml() {
       const activity = activityKindFilter === "all"
         ? allActivity
         : allActivity.filter(item => item.kind === activityKindFilter);
-      const visible = pagedItems(activity, activityPage, 20);
-      activityPage = visible.page;
+      const activityIdentity = item => \`\${item.goal.id}|\${item.kind}|\${item.title}|\${item.url}\`;
+      const visible = anchoredPagedItems(activity, activityPageState, 20, activityIdentity);
+      activityPageState = {
+        anchor: visible.anchor,
+        beforeKey: visible.beforeKey,
+        visibleKeys: visible.visibleKeys,
+        startIndex: visible.startIndex,
+      };
+      activityPageView = visible;
       const kinds = [
         ["all", "All"],
         ["issue", "Issues"],
@@ -1787,23 +1839,23 @@ export function renderHtml() {
           announce(filterAnnouncement());
         } else if (action === "activity-kind") {
           activityKindFilter = target.dataset.kind || "all";
-          activityPage = 0;
+          activityPageState = {};
           render(\`[data-action="activity-kind"][data-kind="\${CSS.escape(activityKindFilter)}"]\`);
           announce(\`Activity filtered by \${target.textContent.trim().toLowerCase()}.\`);
         } else if (action === "older-activity") {
-          activityPage += 1;
+          activityPageState = { anchor: activityPageView?.nextAnchor || "" };
           render('[data-action="older-activity"]');
           announce("Showing older evidence.");
         } else if (action === "newer-activity") {
-          activityPage = Math.max(0, activityPage - 1);
+          activityPageState = { endBefore: activityPageView?.anchor || "" };
           render('[data-action="newer-activity"]');
           announce("Showing newer evidence.");
         } else if (action === "older-workflows") {
-          workflowPage += 1;
+          workflowPageState = { anchor: workflowPageView?.nextAnchor || "" };
           render('[data-action="older-workflows"]');
           announce("Showing older active workflow runs.");
         } else if (action === "newer-workflows") {
-          workflowPage = Math.max(0, workflowPage - 1);
+          workflowPageState = { endBefore: workflowPageView?.anchor || "" };
           render('[data-action="newer-workflows"]');
           announce("Showing newer active workflow runs.");
         } else if (action === "expand-stage") {
