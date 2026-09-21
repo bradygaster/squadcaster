@@ -696,3 +696,127 @@ test("legacy issue failure preserves closed non-goal dependency state", async ()
     assert.equal(result.goals[0].blockers.length, 0);
     assert.equal(result.goals[0].dependencies[0].phase, "completed");
 });
+
+test("requests native parent and sub-issue fields for handoff leaf evidence", async () => {
+    let issueArgs = [];
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") {
+                issueArgs = args;
+                return [issue()];
+            }
+            return [];
+        },
+    });
+
+    await adapter.discover();
+    const fields = issueArgs[issueArgs.indexOf("--json") + 1];
+    assert.match(fields, /\bparent\b/);
+    assert.match(fields, /\bsubIssues\b/);
+    assert.match(fields, /\bsubIssuesSummary\b/);
+});
+
+test("marks capped issue and pull request discovery incomplete", async () => {
+    const manyIssues = Array.from({ length: 1000 }, (_, index) => issue({
+        number: index + 1,
+        title: `Issue ${index + 1}`,
+        labels: index === 0 ? [{ name: "squad" }] : [],
+        url: `https://github.com/octodemo/demo/issues/${index + 1}`,
+    }));
+    const manyPullRequests = Array.from({ length: 1000 }, (_, index) => pullRequest({
+        number: index + 1,
+        body: "",
+        headRefName: `branch-${index + 1}`,
+        url: `https://github.com/octodemo/demo/pull/${index + 1}`,
+    }));
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return manyIssues;
+            if (args[0] === "pr") return manyPullRequests;
+            return [];
+        },
+    });
+
+    const result = await adapter.discover();
+    assert.equal(result.sourceState.issues.status, "incomplete");
+    assert.equal(result.sourceState.issues.truncated, true);
+    assert.equal(result.sourceState.pullRequests.status, "incomplete");
+    assert.equal(result.goals[0].handoff.readiness.state, "unknown");
+});
+
+test("marks nested comment and sub-issue caps incomplete", async () => {
+    const comments = Array.from({ length: 100 }, (_, index) => ({
+        body: `Comment ${index + 1}`,
+        url: `https://github.com/octodemo/demo/issues/12#issuecomment-${index + 1}`,
+    }));
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") {
+                return [issue({
+                    comments,
+                    subIssues: [{ number: 13, state: "CLOSED" }],
+                    subIssuesSummary: { total: 2 },
+                })];
+            }
+            return [];
+        },
+    });
+
+    const result = await adapter.discover();
+    assert.equal(result.sourceState.issueComments.status, "incomplete");
+    assert.equal(result.sourceState.subIssues.status, "incomplete");
+    assert.equal(result.goals[0].handoff.readiness.state, "unknown");
+});
+
+test("an intentionally skipped workflow refresh cannot produce ready handoff state", async () => {
+    const issues = [
+        issue({
+            number: 10,
+            title: "Root",
+            url: "https://github.com/octodemo/demo/issues/10",
+            comments: [{
+                body: `Activation bindings:
+\`\`\`json
+[{"task":"3","issue":"#12","epic":"2.1","epic_issue":"#11","agent":"Kint","epic_agents":["kint"],"label":"squad:kint","epic_label":"squad:kint"}]
+\`\`\`
+Structured data:
+\`\`\`json
+{"squad_artifact":"activated","schema_version":"1","origin_issue":10,"phases":[]}
+\`\`\``,
+                url: "https://github.com/octodemo/demo/issues/10#issuecomment-1",
+            }],
+        }),
+        issue({
+            number: 11,
+            title: "Epic",
+            url: "https://github.com/octodemo/demo/issues/11",
+            labels: [{ name: "squad" }, { name: "squad:kint" }],
+        }),
+        issue({
+            number: 12,
+            body: "## Acceptance Criteria\n- Ready",
+            labels: [{ name: "squad" }, { name: "squad:kint" }],
+        }),
+    ];
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return issues;
+            if (args[0] === "pr") return [];
+            throw new Error("workflow runs must not be queried");
+        },
+    });
+
+    const result = await adapter.discover({ includeWorkflowRuns: false });
+    const handoff = result.goals.find((goal) => goal.issue.number === 12).handoff;
+    assert.equal(result.sourceState.workflowRuns.status, "skipped");
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.match(handoff.readiness.reasons.join(" "), /workflow runs evidence was not refreshed/i);
+});

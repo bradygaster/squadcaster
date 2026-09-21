@@ -1,3 +1,9 @@
+import {
+    deriveHandoff,
+    parseActivationEvidence,
+    reconcileHandoffDependencies,
+} from "./handoff-readiness.mjs";
+
 const ACTIVE_STATES = new Set(["queued", "researching", "implementing", "reviewing", "blocked", "failed"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure", "action_required"]);
 const DAY_BOUNDARY_VERSION = 1;
@@ -110,7 +116,16 @@ export function normalizeActivityContract(snapshot) {
 }
 
 function normalizedSourceState(value, data, fetchedAt) {
-    const status = ["fresh", "partial", "stale", "unavailable", "skipped"].includes(value?.status)
+    const status = [
+        "fresh",
+        "complete",
+        "partial",
+        "incomplete",
+        "stale",
+        "unavailable",
+        "unauthorized",
+        "skipped",
+    ].includes(value?.status)
         ? value.status
         : "fresh";
     return {
@@ -118,7 +133,27 @@ function normalizedSourceState(value, data, fetchedAt) {
         fetchedAt: timestamp(value?.fetchedAt || fetchedAt),
         status,
         error: text(value?.error, 800),
+        exhaustive: value?.exhaustive !== false,
+        truncated: Boolean(value?.truncated),
+        enabled: value?.enabled === true,
     };
+}
+
+function sourceEvidenceState(state) {
+    if (!state) return "unknown";
+    if (state.status === "stale") return "stale";
+    if (state.status === "unauthorized") return "unauthorized";
+    if (state.status === "unavailable") return "unavailable";
+    if (
+        state.status === "partial" ||
+        state.status === "incomplete" ||
+        state.exhaustive === false ||
+        state.truncated
+    ) {
+        return "incomplete";
+    }
+    if (state.status === "fresh" || state.status === "complete") return "complete";
+    return "unknown";
 }
 
 function latestTimestamp(values) {
@@ -286,6 +321,18 @@ function linkedRunNumbers(run) {
     const numbers = new Set(issueReferences(`${run?.displayTitle || ""}\n${run?.name || ""}`));
     const branch = String(run?.headBranch || "").match(/^squad\/implement-([1-9][0-9]*)-/i);
     if (branch) numbers.add(Number(branch[1]));
+    return [...numbers];
+}
+
+function authoritativeRunNumbers(run) {
+    const numbers = new Set();
+    const branch = String(run?.headBranch || "").match(/^squad\/implement-([1-9][0-9]*)-/i);
+    if (branch) numbers.add(Number(branch[1]));
+    if (/squad.*implement|implement.*squad/i.test(`${run?.workflowName || ""}\n${run?.name || ""}`)) {
+        for (const number of issueReferences(`${run?.displayTitle || ""}\n${run?.name || ""}`)) {
+            numbers.add(number);
+        }
+    }
     return [...numbers];
 }
 
@@ -537,6 +584,11 @@ export function buildActivitySnapshot({
     members = [],
     errors = [],
     sourceState = null,
+    issueComments = null,
+    nativeSubIssues = {},
+    copilotTasks = {},
+    localSessions = {},
+    mechanismAvailability = {},
     fetchedAt = new Date().toISOString(),
 } = {}) {
     const normalizedSources = {
@@ -544,6 +596,14 @@ export function buildActivitySnapshot({
         pullRequests: normalizedSourceState(sourceState?.pullRequests, pullRequests, fetchedAt),
         workflowRuns: normalizedSourceState(sourceState?.workflowRuns, workflowRuns, fetchedAt),
         workflowJobs: normalizedSourceState(sourceState?.workflowJobs, workflowJobs, fetchedAt),
+        issueComments: normalizedSourceState(
+            sourceState?.issueComments,
+            Array.isArray(issueComments) ? issueComments : [],
+            fetchedAt,
+        ),
+        subIssues: normalizedSourceState(sourceState?.subIssues, [], fetchedAt),
+        copilotTasks: normalizedSourceState(sourceState?.copilotTasks, [], fetchedAt),
+        localSessions: normalizedSourceState(sourceState?.localSessions, [], fetchedAt),
     };
     issues = normalizedSources.issues.data;
     pullRequests = normalizedSources.pullRequests.data;
@@ -552,6 +612,17 @@ export function buildActivitySnapshot({
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
     const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
     const repositoryKey = repositoryName.toLowerCase();
+    const activationEvidence = parseActivationEvidence({
+        issues,
+        repository: repositoryKey,
+        comments: Array.isArray(issueComments) ? normalizedSources.issueComments.data : null,
+        commentsComplete: normalizedSources.issueComments.status === "complete" ||
+            (
+                normalizedSources.issueComments.status === "fresh" &&
+                normalizedSources.issueComments.exhaustive &&
+                !normalizedSources.issueComments.truncated
+            ),
+    });
     const normalizedPullRequests = dedupeSemantic(
         pullRequests.map((pullRequest) => ({
             source: pullRequest,
@@ -569,6 +640,7 @@ export function buildActivitySnapshot({
             source: run,
             value: normalizeRun(run),
             issueNumbers: linkedRunNumbers(run),
+            authoritativeIssueNumbers: authoritativeRunNumbers(run),
             id: Number(run?.databaseId || run?.id) || null,
             url: text(run?.url || run?.html_url, 500),
             workflow: text(run?.workflowName || run?.name, 160),
@@ -604,9 +676,18 @@ export function buildActivitySnapshot({
             pullRequest.value.number,
             pullRequest.link,
         ]));
+        const authoritativePullRequests = relatedPullRequestMatches
+            .filter((pullRequest) =>
+                ["closing-reference", "closing-keyword"].includes(pullRequest.link.method))
+            .map((pullRequest) => pullRequest.value);
         const relatedRuns = normalizedRuns
             .filter((run) => run.issueNumbers.includes(number) ||
                 relatedPullRequests.some((pullRequest) => pullRequest.branch && pullRequest.branch === run.value.branch))
+            .map((run) => run.value);
+        const authoritativeRuns = normalizedRuns
+            .filter((run) => run.authoritativeIssueNumbers.includes(number) ||
+                authoritativePullRequests.some((pullRequest) =>
+                    pullRequest.branch && pullRequest.branch === run.value.branch))
             .map((run) => run.value);
         const dependencies = dependencyReferences(issue?.body, repositoryKey)
             .map((dependency) => {
@@ -625,6 +706,7 @@ export function buildActivitySnapshot({
                     ),
                     status: blocker ? text(blocker.state || "unknown", 40).toLowerCase() : "unknown",
                     phase: blocker && String(blocker.state).toUpperCase() === "CLOSED" ? "completed" : "unknown",
+                    ...(blocker ? { evidenceState: sourceEvidenceState(normalizedSources.issues) } : {}),
                 };
             });
         const blockers = dependencies.filter((dependency) => dependency.phase !== "completed");
@@ -644,7 +726,7 @@ export function buildActivitySnapshot({
             workflowRuns: relatedRuns,
             blockers,
         });
-        goals.push({
+        const goal = {
             id: `${repositoryName}#${number}`,
             repository: {
                 name: text(repository?.name || String(repository?.nameWithOwner || "").split("/").at(-1), 160),
@@ -691,7 +773,34 @@ export function buildActivitySnapshot({
                 ...relatedPullRequests.map((pullRequest) => pullRequest.updatedAt),
                 ...relatedRuns.map((run) => run.updatedAt),
             ].filter(Boolean).sort().at(-1) || null,
+        };
+        goal.handoff = deriveHandoff({
+            goalId: goal.id,
+            repository: repositoryKey,
+            issue,
+            issues,
+            activationEvidence: activationEvidence.get(number),
+            dependencies,
+            pullRequests: authoritativePullRequests,
+            workflowRuns: authoritativeRuns,
+            sourceState: {
+                issues: normalizedSources.issues,
+                issueAssignees: normalizedSources.issues,
+                issueComments: normalizedSources.issueComments,
+                subIssues: normalizedSources.subIssues,
+                dependencies: normalizedSources.issues,
+                pullRequests: normalizedSources.pullRequests,
+                workflowRuns: normalizedSources.workflowRuns,
+                copilotTasks: normalizedSources.copilotTasks,
+                localSessions: normalizedSources.localSessions,
+            },
+            nativeSubIssues: nativeSubIssues?.[number] || null,
+            copilotTasks: copilotTasks?.[number] || [],
+            localSessions: localSessions?.[goal.id.toLowerCase()] || [],
+            mechanismAvailability,
+            evaluatedAt: fetchedAt,
         });
+        goals.push(goal);
     }
 
     goals.sort((left, right) => {
@@ -704,11 +813,18 @@ export function buildActivitySnapshot({
         source: text(error?.source || "GitHub", 80),
         message: text(error?.message || error, 800),
     }));
-    const staleSources = Object.entries(normalizedSources)
+    const staleSources = ["issues", "pullRequests", "workflowRuns", "workflowJobs"]
+        .map((source) => [source, normalizedSources[source]])
         .filter(([, state]) => state.status === "stale")
         .map(([source]) => source);
     const incompleteSources = Object.values(normalizedSources)
-        .some((state) => ["partial", "stale", "unavailable"].includes(state.status));
+        .some((state) => [
+            "partial",
+            "incomplete",
+            "stale",
+            "unavailable",
+            "unauthorized",
+        ].includes(state.status) || state.truncated || state.exhaustive === false);
     const normalizedFetchedAt = timestamp(fetchedAt) || new Date().toISOString();
     const retainedStaleFetchedAt = earliestTimestamp(
         Object.values(normalizedSources)
@@ -764,21 +880,73 @@ export function aggregateActivitySnapshots({
         (goal) => goal.id,
     );
     const goalsById = new Map(goals.map((goal) => [String(goal.id).toLowerCase(), goal]));
+    const snapshotByRepository = new Map(snapshots.map((snapshot) => [
+        String(snapshot?.repository?.nameWithOwner || "").toLowerCase(),
+        snapshot,
+    ]));
+    const includedByRepository = new Map(repositories.map((repository) => [
+        String(repository?.nameWithOwner || "").toLowerCase(),
+        repository?.included !== false,
+    ]));
+    const observedIssuesById = new Map();
+    for (const snapshot of snapshots) {
+        const repositoryKey = String(snapshot?.repository?.nameWithOwner || "").toLowerCase();
+        for (const issue of snapshot?.sourceState?.issues?.data || []) {
+            const key = issueKey(repositoryKey, issue?.number);
+            if (!key) continue;
+            const observed = observedIssuesById.get(key) || [];
+            observed.push(issue);
+            observedIssuesById.set(key, observed);
+        }
+    }
 
     for (const goal of goals) {
         goal.dependencies = (goal.dependencies || []).map((dependency) => {
+            const dependencyRepository = String(dependency.repository || "").toLowerCase();
+            const goalRepository = String(goal.repository?.nameWithOwner || "").toLowerCase();
+            if (dependencyRepository === goalRepository) return dependency;
             const target = goalsById.get(String(dependency.id).toLowerCase());
-            return target
-                ? {
+            const targetSnapshot = snapshotByRepository.get(dependencyRepository);
+            const observedIssues = observedIssuesById.get(String(dependency.id).toLowerCase()) || [];
+            const issueSourceState = targetSnapshot?.sourceState?.issues;
+            const issueSourceError = (targetSnapshot?.errors || []).some((error) =>
+                /^(?:issues?|repository)$/i.test(String(error?.source || "")));
+            let evidenceState = sourceEvidenceState(issueSourceState);
+            if (includedByRepository.get(dependencyRepository) === false) evidenceState = "excluded";
+            else if (!targetSnapshot) evidenceState = "unavailable";
+            else if (issueSourceError) evidenceState = "unavailable";
+            else if (evidenceState === "complete" && observedIssues.length === 0) evidenceState = "missing";
+            else if (evidenceState === "complete" && observedIssues.length > 1) evidenceState = "ambiguous";
+
+            if (target) {
+                return {
                     ...dependency,
                     title: target.issue.title,
                     url: target.issue.url,
                     status: target.issue.state,
                     phase: target.phaseWithoutBlockers || target.phase,
-                }
-                : dependency;
+                    evidenceState,
+                };
+            }
+            if (observedIssues.length === 1) {
+                const observed = observedIssues[0];
+                const closed = String(observed?.state || "").toUpperCase() === "CLOSED";
+                return {
+                    ...dependency,
+                    title: text(observed?.title || dependency.title, 240),
+                    url: text(observed?.url || dependency.url, 500),
+                    status: text(observed?.state || "unknown", 40).toLowerCase(),
+                    phase: closed ? "completed" : "unknown",
+                    evidenceState,
+                };
+            }
+            return {
+                ...dependency,
+                evidenceState,
+            };
         });
         goal.blockers = goal.dependencies.filter((dependency) => dependency.phase !== "completed");
+        goal.handoff = reconcileHandoffDependencies(goal.handoff, goal.dependencies);
         const basePhase = goal.phaseWithoutBlockers || goal.phase;
         goal.phase = goal.blockers.length && !["completed", "failed"].includes(basePhase)
             ? "blocked"
@@ -798,10 +966,6 @@ export function aggregateActivitySnapshots({
             repository: snapshot?.repository?.nameWithOwner || "",
         })));
     const includedRepositories = repositories.filter((repository) => repository?.included !== false);
-    const snapshotByRepository = new Map(snapshots.map((snapshot) => [
-        String(snapshot?.repository?.nameWithOwner || "").toLowerCase(),
-        snapshot,
-    ]));
     const repositoryErrors = includedRepositories.flatMap((repository) => {
         const snapshot = snapshotByRepository.get(String(repository?.nameWithOwner || "").toLowerCase());
         if (!repository?.error) return [];
@@ -880,7 +1044,13 @@ export function isCompleteActivitySnapshot(snapshot) {
         !snapshot.stale &&
         !(snapshot.errors?.length) &&
         !Object.values(snapshot.sourceState || {})
-            .some((state) => ["partial", "stale", "unavailable"].includes(state?.status));
+            .some((state) => [
+                "partial",
+                "incomplete",
+                "stale",
+                "unavailable",
+                "unauthorized",
+            ].includes(state?.status) || state?.truncated || state?.exhaustive === false);
 }
 
 export const activityModel = {

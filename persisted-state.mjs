@@ -57,6 +57,116 @@ function withoutUnvalidatedProvenance(value) {
     );
 }
 
+function safeUnknownHandoff(reason) {
+    return {
+        schemaVersion: 1,
+        readiness: {
+            state: "unknown",
+            reasons: reason ? [reason] : [],
+            sourceStates: {},
+            automatedHandoffAvailable: false,
+        },
+        activation: null,
+        acceptanceCriteria: [],
+        acceptanceCriteriaComplete: false,
+        leaf: { parentIssueNumber: null, subIssues: [], complete: false },
+        existingImplementation: {
+            state: "none",
+            pullRequests: [],
+            workflowRuns: [],
+            sessions: [],
+            links: [],
+        },
+        mechanisms: [],
+    };
+}
+
+function normalizeHandoff(handoff) {
+    if (!isRecord(handoff)) return null;
+    if (Number(handoff.schemaVersion) !== 1) {
+        return safeUnknownHandoff("Cached handoff readiness uses an unsupported schema.");
+    }
+    const readiness = isRecord(handoff.readiness) ? handoff.readiness : {};
+    const allowedStates = new Set([
+        "ready",
+        "blocked",
+        "already-in-progress",
+        "completed",
+        "ineligible",
+        "unknown",
+    ]);
+    const normalized = {
+        ...handoff,
+        schemaVersion: 1,
+        readiness: {
+            ...readiness,
+            state: allowedStates.has(readiness.state) ? readiness.state : "unknown",
+            reasons: Array.isArray(readiness.reasons)
+                ? readiness.reasons.map((reason) => String(reason)).filter(Boolean)
+                : [],
+            sourceStates: isRecord(readiness.sourceStates) ? readiness.sourceStates : {},
+            automatedHandoffAvailable: Boolean(readiness.automatedHandoffAvailable),
+        },
+        activation: isRecord(handoff.activation) ? handoff.activation : null,
+        acceptanceCriteria: recordArray(handoff.acceptanceCriteria),
+        acceptanceCriteriaComplete: Boolean(handoff.acceptanceCriteriaComplete),
+        leaf: isRecord(handoff.leaf)
+            ? {
+                ...handoff.leaf,
+                subIssues: recordArray(handoff.leaf.subIssues),
+                complete: Boolean(handoff.leaf.complete),
+            }
+            : { parentIssueNumber: null, subIssues: [], complete: false },
+        existingImplementation: isRecord(handoff.existingImplementation)
+            ? {
+                ...handoff.existingImplementation,
+                pullRequests: recordArray(handoff.existingImplementation.pullRequests),
+                workflowRuns: recordArray(handoff.existingImplementation.workflowRuns),
+                sessions: recordArray(handoff.existingImplementation.sessions),
+                links: recordArray(handoff.existingImplementation.links),
+            }
+            : {
+                state: "none",
+                pullRequests: [],
+                workflowRuns: [],
+                sessions: [],
+                links: [],
+            },
+        mechanisms: recordArray(handoff.mechanisms),
+    };
+    const requiredSources = [
+            "issue",
+            "issueAssignees",
+            "issueComments",
+            "subIssues",
+            "dependencies",
+            "pullRequests",
+            "workflowRuns",
+    ];
+    const readyIsConsistent = normalized.readiness.state !== "ready" || (
+            normalized.activation &&
+            normalized.acceptanceCriteriaComplete &&
+            normalized.acceptanceCriteria.length > 0 &&
+            normalized.leaf.complete &&
+            normalized.leaf.subIssues.every((child) => String(child.state).toLowerCase() === "closed") &&
+            normalized.existingImplementation.state === "none" &&
+            requiredSources.every((source) => normalized.readiness.sourceStates[source] === "complete")
+    );
+    if (!readyIsConsistent) {
+            normalized.readiness.state = "unknown";
+            normalized.readiness.reasons = [
+                ...normalized.readiness.reasons,
+                "Cached ready state was incomplete and must be refreshed.",
+            ];
+            normalized.readiness.automatedHandoffAvailable = false;
+    } else {
+            normalized.readiness.automatedHandoffAvailable =
+                normalized.readiness.state === "ready" &&
+                Boolean(readiness.automatedHandoffAvailable);
+    }
+    return normalized;
+}
+
 function normalizeGoal(goal) {
     return {
         ...goal,
@@ -82,6 +192,7 @@ function normalizeGoal(goal) {
                 lastObservedAt: null,
                 transitions: [],
             },
+        handoff: normalizeHandoff(goal.handoff),
     };
 }
 

@@ -34,3 +34,11 @@ test("extension keeps only supported POST routes and canvas actions", async () =
     assert.match(source, /tools: \[\]/);
     for (const term of removedMutationTerms) assert.equal(source.includes(term), false, term);
 });
+
+test("handoff normalization remains a read-only model with no launch adapter", async () => {
+    const source = await readFile(new URL("../handoff-readiness.mjs", import.meta.url), "utf8");
+    assert.match(source, /deriveHandoff/);
+    assert.match(source, /automatedHandoffAvailable/);
+    assert.doesNotMatch(source, /\b(?:spawn|execFile|fetch)\s*\(/);
+    assert.doesNotMatch(source, /workflow_dispatch|create_session|\/api\//i);
+});
