@@ -52,6 +52,31 @@ function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isPositiveInteger(value) {
+    return Number.isInteger(value) && value > 0;
+}
+
+function compareIdentity(left, right) {
+    const leftNumber = isPositiveInteger(left?.number) ? left.number : Number.MAX_SAFE_INTEGER;
+    const rightNumber = isPositiveInteger(right?.number) ? right.number : Number.MAX_SAFE_INTEGER;
+    return leftNumber - rightNumber ||
+        String(left?.commentId || left?.id || "").localeCompare(String(right?.commentId || right?.id || "")) ||
+        String(left?.url || "").localeCompare(String(right?.url || "")) ||
+        String(left?.title || "").localeCompare(String(right?.title || "")) ||
+        String(left?.branch || "").localeCompare(String(right?.branch || ""));
+}
+
+function compareReason(left, right) {
+    return String(left?.source || "").localeCompare(String(right?.source || "")) ||
+        String(left?.code || "").localeCompare(String(right?.code || "")) ||
+        compareIdentity(left, right) ||
+        String(left?.message || "").localeCompare(String(right?.message || ""));
+}
+
+function sortReasons(reasons) {
+    return [...reasons].sort(compareReason);
+}
+
 function authorLogin(comment) {
     return text(comment?.author?.login || comment?.user?.login, 160);
 }
@@ -69,11 +94,12 @@ function objectUrl(value) {
 }
 
 function reason(code, source, message, value = {}) {
+    const number = Number(value?.number);
     return {
         code,
         source,
         message,
-        number: Number.isInteger(Number(value?.number)) ? Number(value.number) : null,
+        number: isPositiveInteger(number) ? number : null,
         commentId: text(value?.commentId || value?.id || value?.databaseId, 120) || null,
         url: objectUrl(value),
     };
@@ -125,8 +151,9 @@ function normalizePullRequest(pullRequest) {
 }
 
 function normalizeIssue(issue) {
+    const number = Number(issue?.number);
     return {
-        number: Number(issue?.number) || null,
+        number: isPositiveInteger(number) ? number : null,
         title: text(issue?.title, 240),
         body: String(issue?.body ?? ""),
         url: objectUrl(issue),
@@ -170,6 +197,19 @@ function structuredBlocks(comment) {
     )].map((match) => match[1]);
 }
 
+function observedResearchEnvelope(comment, envelope) {
+    return {
+        commentId: text(comment?.id || comment?.databaseId, 120) || null,
+        url: objectUrl(comment),
+        author: authorLogin(comment),
+        createdAt: timestamp(comment?.createdAt || comment?.created_at),
+        schemaVersion: envelope.schema_version ?? null,
+        originIssue: envelope.origin_issue ?? null,
+        phases: envelope.phases,
+        envelope,
+    };
+}
+
 function inspectResearchComments(comments, issueNumber) {
     const valid = [];
     const unsupported = [];
@@ -177,7 +217,7 @@ function inspectResearchComments(comments, issueNumber) {
     const malformedReasons = [];
     const ambiguousReasons = [];
 
-    for (const comment of comments) {
+    for (const comment of [...comments].sort(compareIdentity)) {
         const blocks = structuredBlocks(comment);
         const researchEnvelopes = [];
         let researchParseFailure = false;
@@ -194,6 +234,13 @@ function inspectResearchComments(comments, issueNumber) {
             }
         }
 
+        if (authorLogin(comment) !== BOOTSTRAP_IDENTIFIERS.researchAuthor) {
+            ignored.push(...researchEnvelopes.map((envelope) => ({
+                ...observedResearchEnvelope(comment, envelope),
+                reason: "non-canonical-author",
+            })));
+            continue;
+        }
         if (researchParseFailure) {
             malformedReasons.push(reason(
                 "malformed-research-envelope",
@@ -212,20 +259,7 @@ function inspectResearchComments(comments, issueNumber) {
         }
 
         for (const envelope of researchEnvelopes) {
-            const observed = {
-                commentId: text(comment?.id || comment?.databaseId, 120) || null,
-                url: objectUrl(comment),
-                author: authorLogin(comment),
-                createdAt: timestamp(comment?.createdAt || comment?.created_at),
-                schemaVersion: envelope.schema_version ?? null,
-                originIssue: envelope.origin_issue ?? null,
-                phases: envelope.phases,
-                envelope,
-            };
-            if (observed.author !== BOOTSTRAP_IDENTIFIERS.researchAuthor) {
-                ignored.push({ ...observed, reason: "non-canonical-author" });
-                continue;
-            }
+            const observed = observedResearchEnvelope(comment, envelope);
             if (typeof envelope.schema_version !== "string") {
                 malformedReasons.push(reason(
                     "malformed-research-envelope",
@@ -242,7 +276,9 @@ function inspectResearchComments(comments, issueNumber) {
             const keys = Object.keys(envelope).sort();
             const exactKeys = JSON.stringify(keys) === JSON.stringify(RESEARCH_KEYS);
             const canonical = exactKeys &&
+                isPositiveInteger(issueNumber) &&
                 envelope.squad_artifact === BOOTSTRAP_IDENTIFIERS.researchArtifactKind &&
+                isPositiveInteger(envelope.origin_issue) &&
                 envelope.origin_issue === issueNumber &&
                 Array.isArray(envelope.phases) &&
                 envelope.phases.length === 0;
@@ -273,7 +309,13 @@ function inspectResearchComments(comments, issueNumber) {
             });
         }
     }
-    return { valid, unsupported, ignored, malformedReasons, ambiguousReasons };
+    return {
+        valid: valid.sort(compareIdentity),
+        unsupported: unsupported.sort(compareIdentity),
+        ignored: ignored.sort(compareIdentity),
+        malformedReasons: sortReasons(malformedReasons),
+        ambiguousReasons: sortReasons(ambiguousReasons),
+    };
 }
 
 function candidateSets({ pullRequests, issues, comments, repository }) {
@@ -281,12 +323,14 @@ function candidateSets({ pullRequests, issues, comments, repository }) {
         .map(normalizePullRequest)
         .filter((pullRequest) =>
             pullRequest.branch === BOOTSTRAP_IDENTIFIERS.castBranch ||
-            pullRequest.title === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle);
+            pullRequest.title === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle)
+        .sort(compareIdentity);
     const issueCandidates = issues
         .map(normalizeIssue)
         .filter((issue) =>
             issue.title === BOOTSTRAP_IDENTIFIERS.researchIssueTitle ||
-            issue.body.includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker));
+            issue.body.includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker))
+        .sort(compareIdentity);
     const ambiguousReasons = [];
     const malformedReasons = [];
 
@@ -327,6 +371,7 @@ function candidateSets({ pullRequests, issues, comments, repository }) {
     }
     for (const issue of issueCandidates) {
         if (
+            !isPositiveInteger(issue.number) ||
             issue.title !== BOOTSTRAP_IDENTIFIERS.researchIssueTitle ||
             occurrenceCount(issue.body, BOOTSTRAP_IDENTIFIERS.researchIssueMarker) !== 1
         ) {
@@ -350,12 +395,12 @@ function candidateSets({ pullRequests, issues, comments, repository }) {
         ].map((match) => Number(match[1]));
         if (
             linkedPullRequestNumbers.length > 0 &&
-            !linkedPullRequestNumbers.includes(uniquePullRequest.number)
+            linkedPullRequestNumbers.some((number) => number !== uniquePullRequest.number)
         ) {
             ambiguousReasons.push(reason(
                 "conflicting-cast-link",
                 "issues",
-                "The canonical research issue links repository pull requests but not the canonical Cast pull request.",
+                "The canonical research issue links a repository pull request other than the canonical Cast pull request.",
                 uniqueIssue,
             ));
         }
@@ -370,8 +415,8 @@ function candidateSets({ pullRequests, issues, comments, repository }) {
         castCandidates,
         issueCandidates,
         research,
-        ambiguousReasons,
-        malformedReasons,
+        ambiguousReasons: sortReasons(ambiguousReasons),
+        malformedReasons: sortReasons(malformedReasons),
     };
 }
 
@@ -397,6 +442,7 @@ export function selectAutomaticBootstrapCandidates({
         ? candidates.castCandidates[0]
         : null;
     const canonicalResearchIssue = candidates.issueCandidates.length === 1 &&
+        isPositiveInteger(candidates.issueCandidates[0].number) &&
         candidates.issueCandidates[0].title === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
         occurrenceCount(
             candidates.issueCandidates[0].body,
@@ -410,7 +456,7 @@ export function selectAutomaticBootstrapCandidates({
         researchIssues: candidates.issueCandidates,
         canonicalCastPullRequest,
         canonicalResearchIssue,
-        reasons: [...candidates.ambiguousReasons, ...candidates.malformedReasons],
+        reasons: sortReasons([...candidates.ambiguousReasons, ...candidates.malformedReasons]),
     };
 }
 
@@ -493,7 +539,7 @@ function resultBase({
         status,
         stale: false,
         staleSources: [],
-        reasons,
+        reasons: sortReasons(reasons),
         castPullRequest,
         researchIssue,
         researchArtifact,
@@ -544,10 +590,19 @@ export function classifyAutomaticBootstrap({
         comments,
         repository: normalizedRepository,
     });
-    const guard = sourceGuard({ sourceState, candidates, previous, workflowRuns });
+    const previousCandidates = [previous?.lastClassified, previous];
+    const priorClassification = previousCandidates.find((candidate) =>
+        candidate?.schemaVersion === 1 &&
+        candidate?.repository === normalizedRepository.nameWithOwner &&
+        BOOTSTRAP_STATUSES.includes(candidate?.status));
+    const guard = sourceGuard({
+        sourceState,
+        candidates,
+        previous: priorClassification,
+        workflowRuns,
+    });
     if (guard.guarded.length > 0) {
-        const priorClassification = previous?.lastClassified || previous;
-        const retained = priorClassification && BOOTSTRAP_STATUSES.includes(priorClassification.status)
+        const retained = priorClassification
             ? {
                 ...priorClassification,
                 stale: false,
@@ -573,7 +628,7 @@ export function classifyAutomaticBootstrap({
             repository: normalizedRepository.nameWithOwner,
             stale: true,
             staleSources: guard.staleSources,
-            reasons: [...(retained.reasons || []), ...guard.reasons],
+            reasons: sortReasons([...(retained.reasons || []), ...guard.reasons]),
             sources: guard.sources,
             lastClassified: retained.status === "unknown" ? null : retained,
         };

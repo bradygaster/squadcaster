@@ -319,6 +319,34 @@ test("ignores non-bot research envelopes without advancing state", () => {
     assert.equal(result.ignoredResearchArtifacts[0].reason, "non-canonical-author");
 });
 
+test("non-bot malformed and duplicate envelopes cannot poison canonical bot evidence", () => {
+    const foreignEnvelope = JSON.stringify({
+        squad_artifact: "research",
+        schema_version: "1",
+        origin_issue: 6,
+        phases: [],
+    });
+    const result = classifyAutomaticBootstrap(classifyInput({
+        pullRequests: [castPullRequest()],
+        issues: [researchIssue()],
+        comments: [
+            researchComment(),
+            researchComment({
+                id: 10,
+                author: { login: "octocat" },
+                body: [
+                    `Structured data:\n\`\`\`json\n${foreignEnvelope}\n\`\`\``,
+                    `Structured data:\n\`\`\`json\n${foreignEnvelope}\n\`\`\``,
+                    'Structured data:\n```json\n{"squad_artifact":"research",\n```',
+                ].join("\n\n"),
+            }),
+        ],
+    }));
+    assert.equal(result.status, "complete");
+    assert.equal(result.ignoredResearchArtifacts.length, 2);
+    assert.deepEqual(result.reasons, []);
+});
+
 test("fails closed for duplicate artifacts and multiple envelopes in one comment", () => {
     const duplicate = classifyAutomaticBootstrap(classifyInput({
         pullRequests: [castPullRequest()],
@@ -366,6 +394,40 @@ test("fails closed when the research issue links a different repository pull req
     }));
     assert.equal(result.status, "ambiguous");
     assert.equal(result.reasons[0].code, "conflicting-cast-link");
+});
+
+test("fails closed when the canonical issue mixes canonical and foreign Cast links", () => {
+    const result = classifyAutomaticBootstrap(classifyInput({
+        pullRequests: [castPullRequest()],
+        issues: [researchIssue({
+            body: [
+                BOOTSTRAP_IDENTIFIERS.researchIssueMarker,
+                "https://github.com/octodemo/demo/pull/3",
+                "https://github.com/octodemo/demo/pull/44",
+            ].join("\n"),
+        })],
+        comments: [researchComment()],
+    }));
+    assert.equal(result.status, "ambiguous");
+    assert.equal(result.reasons[0].code, "conflicting-cast-link");
+});
+
+test("requires a positive research issue number and non-null origin identity", () => {
+    const result = classifyAutomaticBootstrap(classifyInput({
+        pullRequests: [castPullRequest()],
+        issues: [researchIssue({ number: null })],
+        comments: [researchComment({
+            envelope: {
+                squad_artifact: "research",
+                schema_version: "1",
+                origin_issue: null,
+                phases: [],
+            },
+        })],
+    }));
+    assert.equal(result.status, "malformed");
+    assert.ok(result.reasons.some((item) => item.code === "malformed-research-issue"));
+    assert.equal(result.researchArtifact, null);
 });
 
 test("reports malformed JSON research candidates without swallowing the reason", () => {
@@ -468,6 +530,28 @@ test("replaces stale-source diagnostics across repeated guarded refreshes", () =
     );
 });
 
+test("rejects stale prior classifications from another repository", () => {
+    const foreignPrevious = {
+        ...classifyAutomaticBootstrap(classifyInput({
+            pullRequests: [castPullRequest()],
+            issues: [researchIssue()],
+            comments: [researchComment()],
+        })),
+        repository: "octodemo/other",
+    };
+    const result = classifyAutomaticBootstrap(classifyInput({
+        previous: foreignPrevious,
+        sourceState: {
+            pullRequests: { status: "unavailable" },
+            issues: { status: "fresh" },
+            workflowRuns: { status: "fresh" },
+        },
+    }));
+    assert.equal(result.status, "unknown");
+    assert.equal(result.castPullRequest, null);
+    assert.equal(result.lastClassified, null);
+});
+
 test("returns unknown when source guarding has no prior classification", () => {
     const result = classifyAutomaticBootstrap(classifyInput({
         sourceState: {
@@ -501,6 +585,46 @@ test("does not claim pending when no bootstrap workflow, run, or artifact is obs
     assert.equal(result.status, "unknown");
     assert.equal(result.stale, false);
     assert.equal(result.reasons[0].code, "bootstrap-not-observed");
+});
+
+test("candidate and diagnostic output is stable across input permutations", () => {
+    const pullRequests = [
+        castPullRequest({ number: 9, baseRefName: "release" }),
+        castPullRequest({ number: 3 }),
+    ];
+    const issues = [
+        researchIssue({ number: 8, body: "missing marker" }),
+        researchIssue({ number: 6 }),
+    ];
+    const comments = [
+        researchComment({ id: 12 }),
+        researchComment({ id: 9 }),
+    ];
+    const forward = classifyAutomaticBootstrap(classifyInput({
+        pullRequests,
+        issues,
+        comments,
+    }));
+    const reversed = classifyAutomaticBootstrap(classifyInput({
+        pullRequests: [...pullRequests].reverse(),
+        issues: [...issues].reverse(),
+        comments: [...comments].reverse(),
+    }));
+    assert.deepEqual(forward.castPullRequest, reversed.castPullRequest);
+    assert.deepEqual(forward.researchIssue, reversed.researchIssue);
+    assert.deepEqual(forward.reasons, reversed.reasons);
+    assert.deepEqual(
+        selectAutomaticBootstrapCandidates({
+            repository: classifyInput().repository,
+            pullRequests,
+            issues,
+        }),
+        selectAutomaticBootstrapCandidates({
+            repository: classifyInput().repository,
+            pullRequests: [...pullRequests].reverse(),
+            issues: [...issues].reverse(),
+        }),
+    );
 });
 
 test("rejects malformed classifier inputs instead of guessing", () => {
