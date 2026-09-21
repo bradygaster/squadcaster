@@ -158,34 +158,45 @@ export class GitHubGlobalActivity {
                 cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
             } while (cursor);
 
-            const searches = await Promise.allSettled([
-                this.runJson(
-                    ["search", "issues", "--label", "squad", "--state", "open", "--limit", "1000", "--json", "repository"],
-                    this.cwd,
-                ),
-                this.runJson(
-                    ["search", "issues", "squad_artifact", "--match", "comments", "--state", "open", "--limit", "1000", "--json", "repository"],
-                    this.cwd,
-                ),
-            ]);
-            const byName = new Map(repositories.map((repository) => [repository.nameWithOwner.toLowerCase(), repository]));
-            for (const result of searches) {
-                if (result.status !== "fulfilled") continue;
-                for (const item of Array.isArray(result.value) ? result.value : []) {
-                    const nameWithOwner = repositoryNameFromSearch(item);
-                    const key = nameWithOwner.toLowerCase();
-                    const repository = affiliated.get(key);
-                    if (!repository || byName.has(key)) continue;
-                    const normalized = registryRepository(
-                        {
-                            ...repository,
-                            issues: { totalCount: 1 },
-                        },
-                        previous.get(key),
-                    );
-                    repositories.push(normalized);
-                    byName.set(key, normalized);
-                }
+            const fallbackCandidates = [...affiliated.values()].filter((repository) => !hasSquadSignal(repository));
+            const artifactRepositories = await mapConcurrent(
+                fallbackCandidates,
+                MAX_CONCURRENCY,
+                async (repository) => {
+                    const key = String(repository.nameWithOwner).toLowerCase();
+                    try {
+                        const results = await this.runJson(
+                            [
+                                "search", "issues", "squad_artifact",
+                                "--match", "comments",
+                                "--state", "open",
+                                "--limit", "1",
+                                "--repo", repository.nameWithOwner,
+                                "--json", "repository",
+                            ],
+                            this.cwd,
+                        );
+                        return Array.isArray(results) && results.some(
+                            (item) => repositoryNameFromSearch(item).toLowerCase() === key,
+                        )
+                            ? repository
+                            : null;
+                    } catch {
+                        return null;
+                    }
+                },
+            );
+            for (const repository of artifactRepositories) {
+                if (!repository) continue;
+                const key = repository.nameWithOwner.toLowerCase();
+                const normalized = registryRepository(
+                    {
+                        ...repository,
+                        issues: { totalCount: 1 },
+                    },
+                    previous.get(key),
+                );
+                repositories.push(normalized);
             }
 
             this.registry.viewer = viewer;

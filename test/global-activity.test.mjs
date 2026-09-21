@@ -156,7 +156,7 @@ test("repository discovery preserves exclusions and ignores non-Squad repositori
     assert.equal(global.registry.rateLimit.remaining, 4999);
 });
 
-test("fallback discovery accepts affiliated repositories and rejects unrelated public repositories", async () => {
+test("fallback discovery searches each affiliated repository and rejects unrelated results", async () => {
     const calls = [];
     const global = new GitHubGlobalActivity({
         cwd: "/repo",
@@ -175,6 +175,12 @@ test("fallback discovery accepts affiliated repositories and rejects unrelated p
                                         issues: { totalCount: 0 },
                                         pullRequests: { totalCount: 0 },
                                     },
+                                    {
+                                        ...repository("octodemo/ordinary"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
                                 ],
                                 pageInfo: { hasNextPage: false, endCursor: null },
                             },
@@ -182,13 +188,13 @@ test("fallback discovery accepts affiliated repositories and rejects unrelated p
                     },
                 };
             }
-            if (args.includes("squad_artifact")) {
+            if (args.includes("octodemo/artifacts")) {
                 return [
                     { repository: { nameWithOwner: "octodemo/artifacts" } },
                     { repository: { nameWithOwner: "unrelated/public" } },
                 ];
             }
-            return [];
+            return [{ repository: { nameWithOwner: "unrelated/public" } }];
         },
     });
 
@@ -200,13 +206,16 @@ test("fallback discovery accepts affiliated repositories and rejects unrelated p
     );
     assert.equal(global.registry.repositories[0].squadDetected, true);
     assert.equal(calls.filter((args) => args[0] === "search").length, 2);
+    assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("--repo")));
+    assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("1")));
     const discoveryQuery = calls.find((args) => args[0] === "api").find(
         (argument) => argument.startsWith("query="),
     );
     assert.match(discoveryQuery, /affiliations: \[OWNER, COLLABORATOR, ORGANIZATION_MEMBER\]/);
 });
 
-test("fallback discovery uses all affiliated pages and deduplicates search results", async () => {
+test("fallback discovery keeps every paginated affiliated repository eligible", async () => {
+    const searchCalls = [];
     const global = new GitHubGlobalActivity({
         cwd: "/repo",
         runJson: async (args) => {
@@ -245,6 +254,12 @@ test("fallback discovery uses all affiliated pages and deduplicates search resul
                                         issues: { totalCount: 0 },
                                         pullRequests: { totalCount: 0 },
                                     },
+                                    {
+                                        ...repository("octodemo/first-page"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
                                 ],
                                 pageInfo: { hasNextPage: true, endCursor: "page-2" },
                             },
@@ -252,11 +267,13 @@ test("fallback discovery uses all affiliated pages and deduplicates search resul
                     },
                 };
             }
-            return [
-                { repository: { nameWithOwner: "octodemo/already-detected" } },
-                { repository: { nameWithOwner: "octodemo/second-page" } },
-                { repository: { nameWithOwner: "OCTODEMO/SECOND-PAGE" } },
-            ];
+            searchCalls.push(args);
+            assert.ok(args.includes("--repo"), "fallback searches must never use a global result window");
+            return args.includes("octodemo/second-page")
+                ? [{ repository: { nameWithOwner: "OCTODEMO/SECOND-PAGE" } }]
+                : Array.from({ length: 1001 }, () => ({
+                    repository: { nameWithOwner: "unrelated/public" },
+                }));
         },
     });
 
@@ -267,6 +284,11 @@ test("fallback discovery uses all affiliated pages and deduplicates search resul
         ["octodemo/already-detected", "octodemo/second-page"],
     );
     assert.equal(global.registry.repositories[1].permission, "write");
+    assert.equal(searchCalls.length, 2);
+    assert.deepEqual(
+        new Set(searchCalls.map((args) => args[args.indexOf("--repo") + 1])),
+        new Set(["octodemo/first-page", "octodemo/second-page"]),
+    );
 });
 
 test("refresh policy gives active repositories a shorter interval", () => {
