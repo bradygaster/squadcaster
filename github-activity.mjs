@@ -31,10 +31,10 @@ function errorMessage(error) {
 }
 
 function priorIssues(previous) {
-    return (previous?.goals || []).map((goal) => ({
-        ...goal.issue,
-        labels: goal.issue?.labels || [],
-        comments: (goal.artifacts || []).map((artifact) => ({
+    const byNumber = new Map();
+    for (const goal of previous?.goals || []) {
+        const labels = goal.issue?.labels || [];
+        const comments = (goal.artifacts || []).map((artifact) => ({
             body: `\`\`\`json\n${JSON.stringify({
                 squad_artifact: artifact.kind,
                 schema_version: artifact.schemaVersion,
@@ -43,8 +43,39 @@ function priorIssues(previous) {
             })}\n\`\`\``,
             createdAt: artifact.createdAt,
             url: artifact.url,
-        })),
-    }));
+        }));
+        if (
+            !labels.some((label) => label === "squad" || label.startsWith("squad:")) &&
+            comments.length === 0 &&
+            !/(^|\s)\/squad(?:\s|$)/i.test(goal.issue?.body || "") &&
+            !/^squad\b|\[squad\]/i.test(goal.issue?.title || "")
+        ) {
+            comments.push({ body: "/squad" });
+        }
+        byNumber.set(Number(goal.issue?.number), {
+            ...goal.issue,
+            labels,
+            comments,
+        });
+        for (const dependency of goal.dependencies || []) {
+            if (
+                dependency.repository !== String(previous?.repository?.nameWithOwner || "").toLowerCase() ||
+                byNumber.has(Number(dependency.issueNumber))
+            ) {
+                continue;
+            }
+            byNumber.set(Number(dependency.issueNumber), {
+                number: dependency.issueNumber,
+                title: dependency.title,
+                body: "",
+                state: dependency.phase === "completed" || dependency.status === "closed" ? "CLOSED" : "OPEN",
+                url: dependency.url,
+                labels: [],
+                comments: [],
+            });
+        }
+    }
+    return [...byNumber.values()];
 }
 
 function priorPullRequests(previous) {

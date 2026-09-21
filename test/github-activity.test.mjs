@@ -209,3 +209,62 @@ test("legacy snapshot recovery preserves pull requests linked to multiple goals"
     assert.equal(result.goals.find((goal) => goal.issue.number === 12).phase, "reviewing");
     assert.equal(result.goals.find((goal) => goal.issue.number === 13).phase, "reviewing");
 });
+
+test("legacy issue failure preserves a command-comment-only goal", async () => {
+    const previous = buildActivitySnapshot({
+        repository,
+        issues: [issue({
+            labels: [],
+            comments: [{ body: "/squad investigate the dashboard" }],
+        })],
+    });
+    delete previous.sourceState;
+    assert.equal(previous.goals.length, 1);
+
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") throw new Error("temporary issue failure");
+            return [];
+        },
+    });
+    const result = await adapter.discover({ previous });
+    assert.equal(result.goals.length, 1);
+    assert.equal(result.goals[0].id, "octodemo/demo#12");
+    assert.equal(result.stale, true);
+    assert.deepEqual(result.staleSources, ["issues"]);
+});
+
+test("legacy issue failure preserves closed non-goal dependency state", async () => {
+    const dependency = issue({
+        number: 9,
+        title: "Choose an API",
+        state: "CLOSED",
+        labels: [],
+        url: "https://github.com/octodemo/demo/issues/9",
+    });
+    const previous = buildActivitySnapshot({
+        repository,
+        issues: [
+            issue({ body: "Depends on: #9" }),
+            dependency,
+        ],
+    });
+    delete previous.sourceState;
+    assert.equal(previous.goals[0].phase, "queued");
+    assert.equal(previous.goals[0].dependencies[0].phase, "completed");
+
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") throw new Error("temporary issue failure");
+            return [];
+        },
+    });
+    const result = await adapter.discover({ previous });
+    assert.equal(result.goals[0].phase, "queued");
+    assert.equal(result.goals[0].blockers.length, 0);
+    assert.equal(result.goals[0].dependencies[0].phase, "completed");
+});
