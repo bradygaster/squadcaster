@@ -91,3 +91,26 @@ test("coerces malformed schema-v2 activity into renderer-safe shapes", () => {
     assert.deepEqual(normalized.activity.goals[0].pullRequests, []);
     assert.deepEqual(normalized.activity.goals[0].workflowRuns, [{ workflow: "Squad" }]);
 });
+
+test("drops unvalidated stable agent identity from persisted activity", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            ...emptyActivity(),
+            goals: [{
+                id: "octodemo/demo#12",
+                owner: { id: "octocat", name: "octocat", source: "assignee" },
+                agentIdentity: {
+                    status: "resolved",
+                    record: {
+                        schemaVersion: 1,
+                        id: "candidate-agent",
+                        displayName: "Candidate",
+                    },
+                },
+            }],
+        },
+    });
+
+    assert.equal("agentIdentity" in normalized.activity.goals[0], false);
+    assert.equal(normalized.activity.goals[0].owner.name, "octocat");
+});

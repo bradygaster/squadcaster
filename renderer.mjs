@@ -1133,7 +1133,7 @@ export function renderHtml() {
               <strong>\${esc(phase)}</strong>
             </span>
             <span class="stage-load"><b>\${goals.length}</b><span>\${goals.length === 1 ? "goal" : "goals"}</span></span>
-            <span class="stage-agents" aria-label="\${owners.length ? "Agents: " + esc(owners.join(", ")) : "No assigned agents"}">
+            <span class="stage-agents" aria-label="\${owners.length ? "Owners: " + esc(owners.join(", ")) : "No observed owners"}">
               \${visibleOwners.map((owner, index) => \`
                 <span class="agent-chip tone-\${index % 4}" title="\${esc(owner)}" aria-hidden="true">\${esc(initials(owner))}</span>
               \`).join("")}

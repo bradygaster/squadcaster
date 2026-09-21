@@ -35,8 +35,9 @@ function normalizeRepository(repository) {
 }
 
 function normalizeGoal(goal) {
+    const { agentIdentity: _unvalidatedAgentIdentity, ...supportedGoal } = goal;
     return {
-        ...goal,
+        ...supportedGoal,
         repository: isRecord(goal.repository) ? normalizeRepository(goal.repository) : {},
         issue: isRecord(goal.issue) ? goal.issue : {},
         owner: isRecord(goal.owner) ? goal.owner : null,
