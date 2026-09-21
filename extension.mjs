@@ -268,7 +268,7 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 const registry = sharedRegistry || entry.registry;
                 const currentPrevious = registry.snapshots?.[currentRepository.toLowerCase()] ||
                     (entry.state.activity?.scope === "user" ? null : entry.state.activity);
-                const currentSnapshot = await discoverCurrentRepositoryActivity({
+                const currentActivity = await discoverCurrentRepositoryActivity({
                     runJson: runGhJson,
                     cwd: entry.state.repoRoot,
                     members: entry.state.members,
@@ -276,6 +276,7 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                     registry,
                     currentRepository,
                 });
+                const currentSnapshot = currentActivity.snapshot;
                 const nameWithOwner = currentSnapshot?.repository?.nameWithOwner || currentRepository;
                 const global = new GitHubGlobalActivity({
                     runJson: runGhJson,
@@ -285,6 +286,7 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 const aggregated = await global.refresh({
                     currentRepository: nameWithOwner,
                     currentSnapshot,
+                    currentSnapshotRefreshed: currentActivity.refreshed,
                     currentMembers: entry.state.members,
                     currentSquadDetected: entry.state.squad?.installed,
                     forceDiscovery: force,

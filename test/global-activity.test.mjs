@@ -837,19 +837,26 @@ test("aggregate refresh skips excluded repositories and reuses the current snaps
     assert.equal(calls.length, 0);
 });
 
-test("current repository activity stays cached while excluded and resumes after re-enabling", async () => {
+test("excluded cached activity preserves refresh timestamps and resumes after re-enabling", async () => {
     const nameWithOwner = "octodemo/frontend";
     const cached = buildActivitySnapshot({
         repository: repository(nameWithOwner),
         issues: [issue(nameWithOwner, 57)],
     });
+    cached.fetchedAt = "2026-09-21T12:00:00Z";
     const calls = [];
     const global = new GitHubGlobalActivity({
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
             repositories: [
-                { ...repository(nameWithOwner), owner: "octodemo", included: false },
+                {
+                    ...repository(nameWithOwner),
+                    owner: "octodemo",
+                    included: false,
+                    lastAttemptedRefresh: "2026-09-21T14:00:00Z",
+                    lastSuccessfulRefresh: "2026-09-21T13:00:00Z",
+                },
             ],
             snapshots: { [nameWithOwner]: cached },
         },
@@ -861,7 +868,7 @@ test("current repository activity stays cached while excluded and resumes after 
         },
     });
 
-    const excludedSnapshot = await discoverCurrentRepositoryActivity({
+    const excludedActivity = await discoverCurrentRepositoryActivity({
         runJson: global.runJson,
         cwd: global.cwd,
         registry: global.registry,
@@ -870,18 +877,22 @@ test("current repository activity stays cached while excluded and resumes after 
     });
     const excluded = await global.refresh({
         currentRepository: nameWithOwner,
-        currentSnapshot: excludedSnapshot,
+        currentSnapshot: excludedActivity.snapshot,
+        currentSnapshotRefreshed: excludedActivity.refreshed,
     });
 
-    assert.equal(excludedSnapshot, cached);
+    assert.equal(excludedActivity.snapshot, cached);
+    assert.equal(excludedActivity.refreshed, false);
     assert.equal(calls.length, 0);
     assert.equal(excluded.goals.length, 0);
     assert.equal(excluded.repositories.length, 1);
     assert.equal(excluded.repositories[0].included, false);
     assert.equal(global.registry.snapshots[nameWithOwner], cached);
+    assert.equal(global.registry.repositories[0].lastAttemptedRefresh, "2026-09-21T14:00:00Z");
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, "2026-09-21T13:00:00Z");
 
     assert.equal(global.setIncluded(nameWithOwner, true), true);
-    const refreshedSnapshot = await discoverCurrentRepositoryActivity({
+    const refreshedActivity = await discoverCurrentRepositoryActivity({
         runJson: global.runJson,
         cwd: global.cwd,
         registry: global.registry,
@@ -890,9 +901,11 @@ test("current repository activity stays cached while excluded and resumes after 
     });
     const refreshed = await global.refresh({
         currentRepository: nameWithOwner,
-        currentSnapshot: refreshedSnapshot,
+        currentSnapshot: refreshedActivity.snapshot,
+        currentSnapshotRefreshed: refreshedActivity.refreshed,
     });
 
+    assert.equal(refreshedActivity.refreshed, true);
     assert.deepEqual(calls.map((args) => args[0]), ["repo", "issue", "pr", "run"]);
     assert.equal(refreshed.goals.length, 1);
     assert.equal(refreshed.goals[0].id, `${nameWithOwner}#58`);
@@ -906,7 +919,7 @@ test("current repository identity is resolved before excluded activity is refres
         issues: [issue(nameWithOwner, 57)],
     });
     const calls = [];
-    const snapshot = await discoverCurrentRepositoryActivity({
+    const activity = await discoverCurrentRepositoryActivity({
         cwd: "/repo",
         registry: {
             repositories: [
@@ -922,7 +935,8 @@ test("current repository identity is resolved before excluded activity is refres
         },
     });
 
-    assert.equal(snapshot, cached);
+    assert.equal(activity.snapshot, cached);
+    assert.equal(activity.refreshed, false);
     assert.deepEqual(calls.map((args) => args[0]), ["repo"]);
 });
 
@@ -965,7 +979,7 @@ test("forced discovery omission preserves the current repository exclusion", asy
         forceDiscovery: true,
         forceAll: true,
     });
-    const excludedSnapshot = await discoverCurrentRepositoryActivity({
+    const excludedActivity = await discoverCurrentRepositoryActivity({
         runJson: global.runJson,
         cwd: global.cwd,
         registry: global.registry,
@@ -977,7 +991,8 @@ test("forced discovery omission preserves the current repository exclusion", asy
     assert.equal(global.registry.repositories.length, 1);
     assert.equal(global.registry.repositories[0].included, false);
     assert.equal(global.registry.snapshots[nameWithOwner], cached);
-    assert.equal(excludedSnapshot, cached);
+    assert.equal(excludedActivity.snapshot, cached);
+    assert.equal(excludedActivity.refreshed, false);
     assert.equal(aggregate.goals.length, 0);
 });
 

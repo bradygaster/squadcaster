@@ -287,10 +287,15 @@ export async function discoverCurrentRepositoryActivity({
     const registered = normalized.repositories.find(
         (repository) => repository.nameWithOwner.toLowerCase() === currentKey,
     );
-    if (registered?.included === false) return resolvedPrevious;
+    if (registered?.included === false) {
+        return { snapshot: resolvedPrevious, refreshed: false };
+    }
 
     const adapter = new GitHubSquadActivityAdapter({ runJson, cwd });
-    return adapter.discover({ members, previous: resolvedPrevious });
+    return {
+        snapshot: await adapter.discover({ members, previous: resolvedPrevious }),
+        refreshed: true,
+    };
 }
 
 export class GitHubGlobalActivity {
@@ -502,6 +507,7 @@ export class GitHubGlobalActivity {
     async refresh({
         currentRepository,
         currentSnapshot = null,
+        currentSnapshotRefreshed = true,
         currentMembers = [],
         currentSquadDetected = false,
         forceDiscovery = false,
@@ -525,7 +531,7 @@ export class GitHubGlobalActivity {
                 }, previousCurrent);
                 this.registry.repositories.unshift(current);
             }
-            if (current) {
+            if (current && currentSnapshotRefreshed) {
                 current.lastAttemptedRefresh = currentSnapshot.fetchedAt;
                 if (isCompleteActivitySnapshot(currentSnapshot)) {
                     current.lastSuccessfulRefresh = currentSnapshot.fetchedAt;
