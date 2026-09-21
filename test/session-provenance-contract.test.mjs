@@ -4,13 +4,15 @@ import test from "node:test";
 
 const contractUrl = new URL("../docs/session-provenance-consumer-contract.md", import.meta.url);
 
-test("keeps implementation session support blocked on producer validation", async () => {
+test("documents the authoritative producer contract and fail-closed source", async () => {
     const contract = await readFile(contractUrl, "utf8");
 
-    assert.match(contract, /parsing, normalization, caching, and rendering are\s+\*\*blocked\*\*/i);
-    assert.match(contract, /No parser, cache entry, normalized session field, or renderer surface/i);
-    assert.match(contract, /producer-owned schema version and fixtures/i);
-    assert.match(contract, /identifier lifetime across retries, workflow reruns/i);
+    assert.match(contract, /Squad commit `fa739bd6`/);
+    assert.match(contract, /exactly one pull-request\s+conversation comment/is);
+    assert.match(contract, /github-actions\[bot\]/);
+    assert.match(contract, /three pages of 100\s+conversation comments/);
+    assert.match(contract, /invalid replacement hides cached fields/i);
+    assert.match(contract, /aggregate by producer plus opaque session ID/i);
 });
 
 test("forbids deriving an absent implementation session identifier", async () => {

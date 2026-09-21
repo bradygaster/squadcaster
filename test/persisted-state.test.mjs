@@ -26,7 +26,7 @@ test("normalizes legacy state without restoring mutation fields", () => {
         onboarding: { cast: { command: "/squad cast" } },
     });
 
-    assert.equal(normalized.version, 4);
+    assert.equal(normalized.version, 5);
     assert.equal(normalized.activity.schemaVersion, 3);
     assert.equal(normalized.activity.dayBoundary.snapshotDay, "2026-09-21");
     assert.equal(normalized.activity.fetchedAt, "2026-09-21T12:00:00.000Z");
@@ -50,7 +50,7 @@ test("normalizes legacy state without restoring mutation fields", () => {
 test("defaults malformed and unsupported persisted values safely", () => {
     for (const value of [null, undefined, "legacy", 42, [], { activity: { schemaVersion: 1 } }]) {
         const normalized = normalizePersistedState(value);
-        assert.equal(normalized.version, 4);
+        assert.equal(normalized.version, 5);
         assert.deepEqual(normalized.activity, emptyActivity());
     }
 });
@@ -387,6 +387,203 @@ test("recursively drops unvalidated implementation session provenance from persi
     assert.equal(goal.evidence[0].title, "Observed");
     assert.equal(goal.pullRequests[0].number, 44);
     assert.equal(goal.workflowRuns[0].id, 77);
+});
+
+test("persists only validated normalized implementation provenance paths", () => {
+    const record = {
+        schemaVersion: 1,
+        producer: "squad",
+        repository: "octodemo/demo",
+        originIssue: 12,
+        implementationSessionId: "squad-implementation-session/v1/123/456",
+        sessionOrigin: {
+            repository: "octodemo/demo",
+            workflow: ".github/workflows/squad.lock.yml",
+            runId: 456,
+            runAttempt: 1,
+        },
+        workflowRun: {
+            repository: "octodemo/demo",
+            workflow: ".github/workflows/squad-implement-worker.lock.yml",
+            runId: 789,
+            runAttempt: 2,
+            event: "workflow_dispatch",
+        },
+        pullRequest: {
+            repository: "octodemo/demo",
+            number: 44,
+            headRef: "squad/implement-12-demo",
+        },
+        goals: [{
+            repository: "octodemo/demo",
+            issue: 12,
+            relationship: "closes",
+        }],
+        replaces: [],
+    };
+    const normalized = normalizePersistedState({
+        activity: {
+            ...emptyActivity(),
+            sourceState: {
+                implementationProvenance: {
+                    revision: 1,
+                    data: [{
+                        pullRequestNumber: 44,
+                        status: "valid",
+                        error: "",
+                        record,
+                        arbitrary: "removed",
+                    }],
+                    fetchedAt: "2026-09-21T12:00:00.000Z",
+                    status: "fresh",
+                    error: "",
+                    arbitrary: "removed",
+                },
+            },
+            goals: [{
+                id: "octodemo/demo#12",
+                issue: { number: 12 },
+                pullRequests: [{
+                    number: 44,
+                    implementationProvenance: {
+                        revision: 1,
+                        status: "valid",
+                        sourceStatus: "fresh",
+                        fetchedAt: "2026-09-21T12:00:00.000Z",
+                        error: "",
+                        record,
+                        arbitrary: "removed",
+                    },
+                }],
+                implementationProvenance: {
+                    revision: 1,
+                    status: "valid",
+                    sourceStatus: "fresh",
+                    fetchedAt: "2026-09-21T12:00:00.000Z",
+                    error: "",
+                    sessions: [{
+                        producer: "squad",
+                        implementationSessionId: record.implementationSessionId,
+                        origin: {
+                            repository: record.repository,
+                            issue: record.originIssue,
+                        },
+                        dispatcher: record.sessionOrigin,
+                        pullRequests: [record.pullRequest],
+                        workflowRuns: [record.workflowRun],
+                        goals: record.goals,
+                        replaces: record.replaces,
+                        arbitrary: "removed",
+                    }],
+                    arbitrary: "removed",
+                },
+                nested: {
+                    implementationSessionId: "legacy-must-go",
+                },
+            }],
+        },
+    });
+
+    const source = normalized.activity.sourceState.implementationProvenance;
+    const goal = normalized.activity.goals[0];
+    assert.equal(normalized.version, 5);
+    assert.equal(source.data[0].record.implementationSessionId, record.implementationSessionId);
+    assert.equal("arbitrary" in source, false);
+    assert.equal("arbitrary" in source.data[0], false);
+    assert.equal(
+        goal.implementationProvenance.sessions[0].implementationSessionId,
+        record.implementationSessionId,
+    );
+    assert.equal("arbitrary" in goal.implementationProvenance, false);
+    assert.equal(
+        goal.pullRequests[0].implementationProvenance.record.implementationSessionId,
+        record.implementationSessionId,
+    );
+    assert.equal("implementationSessionId" in goal.nested, false);
+});
+
+test("rejects mismatched and duplicate persisted provenance entry keys", () => {
+    const record = {
+        schemaVersion: 1,
+        producer: "squad",
+        repository: "octodemo/demo",
+        originIssue: 12,
+        implementationSessionId: "squad-implementation-session/v1/123/456",
+        sessionOrigin: {
+            repository: "octodemo/demo",
+            workflow: ".github/workflows/squad.lock.yml",
+            runId: 456,
+            runAttempt: 1,
+        },
+        workflowRun: {
+            repository: "octodemo/demo",
+            workflow: ".github/workflows/squad-implement-worker.lock.yml",
+            runId: 789,
+            runAttempt: 1,
+            event: "workflow_dispatch",
+        },
+        pullRequest: {
+            repository: "octodemo/demo",
+            number: 44,
+            headRef: "squad/implement-12-demo",
+        },
+        goals: [{
+            repository: "octodemo/demo",
+            issue: 12,
+            relationship: "closes",
+        }],
+        replaces: [],
+    };
+    const normalize = (data) => normalizePersistedState({
+        activity: {
+            ...emptyActivity(),
+            sourceState: {
+                implementationProvenance: {
+                    revision: 1,
+                    data,
+                    fetchedAt: "2026-09-21T12:00:00.000Z",
+                    status: "fresh",
+                    error: "",
+                },
+            },
+            goals: [{
+                id: "octodemo/demo#12",
+                issue: { number: 12 },
+                pullRequests: [{ number: 44 }, { number: 45 }],
+            }],
+        },
+    });
+    const mismatch = normalize([{
+        pullRequestNumber: 45,
+        status: "valid",
+        error: "",
+        record,
+    }]);
+    assert.equal(
+        mismatch.activity.sourceState.implementationProvenance.data[0].status,
+        "invalid",
+    );
+    assert.equal(
+        mismatch.activity.goals[0].pullRequests[1].implementationProvenance.record,
+        null,
+    );
+
+    const duplicate = normalize([
+        { pullRequestNumber: 44, status: "valid", error: "", record },
+        { pullRequestNumber: 44, status: "valid", error: "", record },
+    ]);
+    assert.deepEqual(duplicate.activity.sourceState.implementationProvenance.data, [{
+        pullRequestNumber: 44,
+        revision: "",
+        fetchedAt: null,
+        status: "invalid",
+        error: "duplicate-persisted-pull-request",
+        record: null,
+    }]);
+    assert.equal(
+        duplicate.activity.goals[0].pullRequests[0].implementationProvenance.record,
+        null,
+    );
 });
 
 test("preserves a stale v3 snapshot boundary across persisted-state reload", () => {

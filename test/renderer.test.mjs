@@ -213,6 +213,17 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /not when GitHub or Squad performed it/);
     assert.match(html, /source observation/);
     assert.match(html, /Workflow jobs and steps/);
+    assert.match(html, /Implementation provenance/);
+    assert.match(html, /Opaque session ID/);
+    assert.match(html, /No session URL is invented/);
+    assert.match(html, /Observed origin goal/);
+    assert.match(html, /Observed dispatcher/);
+    assert.match(html, /Observed worker run/);
+    assert.match(html, /inferred branch correlation/);
+    assert.match(html, /Authoritative-looking provenance was invalid/);
+    assert.match(html, /No authoritative implementation provenance comment was observed/);
+    assert.match(html, /The provenance source is stale/);
+    assert.match(html, /Implementation provenance is unavailable/);
     assert.match(html, /GitHub reported no jobs for this run/);
     assert.match(html, /Workflow jobs are unavailable for this run/);
     assert.doesNotMatch(html, /job duration|failure reason|percent complete/i);

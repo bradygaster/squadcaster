@@ -962,6 +962,83 @@ test("distinguishes observed and inferred correlation evidence", async ({ page }
     await expect(dialog.getByText("Inferred correlation")).toBeVisible();
 });
 
+test("renders authoritative implementation provenance accessibly across live rerenders", async ({ page }) => {
+    await page.getByText("Browse goals").click();
+    await page.locator('[data-action="expand-stage"][data-phase="reviewing"]').click();
+    await page.getByRole("button", { name: /Review keyboard drawer behavior/ }).click();
+    const drawer = page.getByRole("dialog", { name: /Review keyboard drawer behavior/ });
+    const provenance = drawer.locator(
+        'section[aria-labelledby="implementation-provenance-title"]',
+    );
+    const valid = fixture.state();
+    const goal = valid.activity.goals.find(item => item.issue.number === 4);
+    goal.implementationProvenance = {
+        revision: 1,
+        status: "valid",
+        sourceStatus: "fresh",
+        fetchedAt: "2026-09-20T18:01:00Z",
+        error: "",
+        sessions: [{
+            producer: "squad",
+            implementationSessionId: "squad-implementation-session/v1/12345/67890",
+            origin: { repository: "octodemo/frontend", issue: 4 },
+            dispatcher: {
+                repository: "octodemo/frontend",
+                workflow: ".github/workflows/squad.lock.yml",
+                runId: 67890,
+                runAttempt: 1,
+            },
+            pullRequests: [{
+                repository: "octodemo/frontend",
+                number: 26,
+                headRef: "squad/implement-4-mission-control",
+            }],
+            workflowRuns: [{
+                repository: "octodemo/frontend",
+                workflow: ".github/workflows/squad-implement-worker.lock.yml",
+                runId: 70001,
+                runAttempt: 2,
+                event: "workflow_dispatch",
+            }],
+            goals: [{
+                repository: "octodemo/frontend",
+                issue: 4,
+                relationship: "closes",
+            }],
+            replaces: [{
+                repository: "octodemo/frontend",
+                number: 25,
+            }],
+        }],
+    };
+    fixture.emit(valid);
+
+    await expect(provenance.getByRole("heading", { name: "Implementation provenance" })).toBeVisible();
+    await expect(provenance.getByRole("status")).toContainText("valid");
+    await expect(provenance.getByText("squad-implementation-session/v1/12345/67890")).toBeVisible();
+    await expect(provenance.getByRole("link", { name: "octodemo/frontend#4" })).toHaveCount(2);
+    await expect(provenance.getByRole("link", { name: "Run 67890" })).toBeVisible();
+    await expect(provenance.getByRole("link", { name: "Run 70001" })).toBeVisible();
+    await expect(provenance.getByText("inferred branch correlation")).toBeVisible();
+    await expect(provenance.getByRole("link", { name: "octodemo/frontend#25" })).toBeVisible();
+
+    const invalid = structuredClone(valid);
+    const invalidGoal = invalid.activity.goals.find(item => item.issue.number === 4);
+    invalidGoal.implementationProvenance = {
+        revision: 1,
+        status: "invalid",
+        sourceStatus: "fresh",
+        fetchedAt: "2026-09-20T18:02:00Z",
+        error: "runtime-mismatch",
+        sessions: [],
+    };
+    fixture.emit(invalid);
+    await expect(provenance.getByRole("status")).toContainText("invalid");
+    await expect(provenance.getByText("runtime-mismatch")).toBeVisible();
+    await expect(provenance.getByText("squad-implementation-session/v1/12345/67890")).toHaveCount(0);
+    await expect(drawer).toBeVisible();
+});
+
 test("renders canonical bootstrap details with observed and derived semantics", async ({ page }) => {
     await page.getByText("Browse goals").click();
     const bootstrapFilter = page.getByRole("button", { name: "Automatic bootstrap" });

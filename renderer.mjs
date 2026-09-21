@@ -2016,6 +2016,99 @@ export function renderHtml() {
         </div>\`).join("")}</div>\`;
     }
 
+    function githubIssueUrl(repository, number) {
+      return repository && number
+        ? \`https://github.com/\${encodeURI(repository)}/issues/\${encodeURIComponent(number)}\`
+        : "";
+    }
+
+    function githubPullUrl(repository, number) {
+      return repository && number
+        ? \`https://github.com/\${encodeURI(repository)}/pull/\${encodeURIComponent(number)}\`
+        : "";
+    }
+
+    function githubRunUrl(repository, runId) {
+      return repository && runId
+        ? \`https://github.com/\${encodeURI(repository)}/actions/runs/\${encodeURIComponent(runId)}\`
+        : "";
+    }
+
+    function implementationProvenanceHtml(goal) {
+      const provenance = goal.implementationProvenance || {
+        status: "unavailable",
+        sourceStatus: "unavailable",
+        sessions: [],
+      };
+      const stateCopy = {
+        missing: "No authoritative implementation provenance comment was observed. Session identity is unknown.",
+        invalid: "Authoritative-looking provenance was invalid. Cached session fields are hidden and no legacy fallback is used.",
+        stale: "The provenance source is stale. The last validated record is retained separately from fresh GitHub activity.",
+        unavailable: "Implementation provenance is unavailable. Session identity is unknown.",
+        valid: "Validated producer provenance is fresh.",
+      };
+      const sessions = Array.isArray(provenance.sessions) ? provenance.sessions : [];
+      return \`
+        <section class="drawer-section" aria-labelledby="implementation-provenance-title">
+          <h3 id="implementation-provenance-title">Implementation provenance</h3>
+          <p class="help" role="status"><strong>\${esc(String(provenance.status || "unavailable").replaceAll("_", " "))}.</strong> \${esc(stateCopy[provenance.status] || stateCopy.unavailable)}</p>
+          <p class="help">Payload goal, pull request, replacement, dispatcher, and worker references are observed producer facts. Branch correlation remains inferred. No session URL is invented.</p>
+          \${provenance.error ? \`<p class="handoff-warning">\${esc(provenance.error)}</p>\` : ""}
+          \${sessions.length ? \`<div class="drawer-list">\${sessions.map(session => {
+            const originUrl = githubIssueUrl(session.origin?.repository, session.origin?.issue);
+            const dispatcherUrl = githubRunUrl(session.dispatcher?.repository, session.dispatcher?.runId);
+            return \`
+              <article class="drawer-item">
+                <strong>Opaque session ID</strong>
+                <code style="display:block;overflow-wrap:anywhere;margin-top:4px">\${esc(session.implementationSessionId)}</code>
+                <small>Producer: \${esc(session.producer)} · source \${esc(provenance.sourceStatus || provenance.status)} · revision \${esc(provenance.revision || 1)}\${provenance.fetchedAt ? " · fetched " + esc(formatTime(provenance.fetchedAt)) : ""}</small>
+                <div class="drawer-list">
+                  <div class="drawer-item">
+                    <strong>Observed origin goal</strong>
+                    \${originUrl ? \`<a href="\${esc(originUrl)}" target="_blank" rel="noreferrer">\${esc(session.origin.repository)}#\${esc(session.origin.issue)}</a>\` : ""}
+                  </div>
+                  <div class="drawer-item">
+                    <strong>Observed dispatcher</strong>
+                    \${dispatcherUrl ? \`<a href="\${esc(dispatcherUrl)}" target="_blank" rel="noreferrer">Run \${esc(session.dispatcher.runId)}</a>\` : ""}
+                    <small>\${esc(session.dispatcher.workflow)} · attempt \${esc(session.dispatcher.runAttempt)}</small>
+                  </div>
+                  \${session.pullRequests.map(pullRequest => {
+                    const url = githubPullUrl(pullRequest.repository, pullRequest.number);
+                    return \`<div class="drawer-item">
+                      <strong>Observed pull request</strong>
+                      <a href="\${esc(url)}" target="_blank" rel="noreferrer">\${esc(pullRequest.repository)}#\${esc(pullRequest.number)}</a>
+                      <small>Head \${esc(pullRequest.headRef)} · inferred branch correlation</small>
+                    </div>\`;
+                  }).join("")}
+                  \${session.workflowRuns.map(run => {
+                    const url = githubRunUrl(run.repository, run.runId);
+                    return \`<div class="drawer-item">
+                      <strong>Observed worker run</strong>
+                      <a href="\${esc(url)}" target="_blank" rel="noreferrer">Run \${esc(run.runId)}</a>
+                      <small>\${esc(run.workflow)} · attempt \${esc(run.runAttempt)} · event \${esc(run.event)}</small>
+                    </div>\`;
+                  }).join("")}
+                  \${session.goals.map(item => {
+                    const url = githubIssueUrl(item.repository, item.issue);
+                    return \`<div class="drawer-item">
+                      <strong>Observed goal</strong>
+                      <a href="\${esc(url)}" target="_blank" rel="noreferrer">\${esc(item.repository)}#\${esc(item.issue)}</a>
+                      <small>\${esc(item.relationship)}</small>
+                    </div>\`;
+                  }).join("")}
+                  \${session.replaces.map(item => {
+                    const url = githubPullUrl(item.repository, item.number);
+                    return \`<div class="drawer-item">
+                      <strong>Observed replacement</strong>
+                      <a href="\${esc(url)}" target="_blank" rel="noreferrer">\${esc(item.repository)}#\${esc(item.number)}</a>
+                    </div>\`;
+                  }).join("")}
+                </div>
+              </article>\`;
+          }).join("")}</div>\` : ""}
+        </section>\`;
+    }
+
     function workflowJobItemsHtml(goal) {
       const selectedRuns = (goal.workflowRuns || [])
         .filter(run => run.jobsState?.status && run.jobsState.status !== "not_selected");
@@ -2357,6 +2450,7 @@ export function renderHtml() {
             \${bootstrapDrawerHtml(goal)}
             <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
             \${handoffHtml(goal)}
+            \${implementationProvenanceHtml(goal)}
             <section class="drawer-section"><h3>Pull requests and checks</h3>\${pullRequestItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Workflow runs</h3>\${workflowItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Workflow jobs and steps</h3>\${workflowJobItemsHtml(goal)}</section>

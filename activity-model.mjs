@@ -556,12 +556,89 @@ function normalizeRun(run) {
         id: Number(run?.databaseId || run?.id) || null,
         name: text(run?.displayTitle || run?.name || run?.workflowName || "Workflow run", 240),
         workflow: text(run?.workflowName || run?.name || "Workflow", 160),
+        event: text(run?.event, 80),
         status: text(run?.status || "unknown", 40).toLowerCase(),
         conclusion: text(run?.conclusion || "", 40).toLowerCase(),
         url: text(run?.url || run?.html_url, 500),
         branch: text(run?.headBranch, 240),
         createdAt: timestamp(run?.createdAt || run?.created_at),
         updatedAt: timestamp(run?.updatedAt || run?.updated_at),
+    };
+}
+
+export function implementationProvenanceForGoal({
+    goalKey,
+    relatedPullRequests,
+    entries,
+    source,
+}) {
+    const records = entries
+        .filter((entry) =>
+            entry.status === "valid" &&
+            entry.record?.goals?.some((goal) =>
+                issueKey(goal.repository, goal.issue) === goalKey))
+        .map((entry) => entry.record);
+    const sessions = new Map();
+    for (const record of records) {
+        const key = `${record.producer}\0${record.implementationSessionId}`;
+        const session = sessions.get(key) || {
+            producer: record.producer,
+            implementationSessionId: record.implementationSessionId,
+            origin: {
+                repository: record.repository,
+                issue: record.originIssue,
+            },
+            dispatcher: { ...record.sessionOrigin },
+            pullRequests: [],
+            workflowRuns: [],
+            goals: [],
+            replaces: [],
+        };
+        session.pullRequests.push({ ...record.pullRequest });
+        session.workflowRuns.push({ ...record.workflowRun });
+        session.goals.push(...record.goals.map((goal) => ({ ...goal })));
+        session.replaces.push(...record.replaces.map((replacement) => ({ ...replacement })));
+        sessions.set(key, session);
+    }
+    for (const session of sessions.values()) {
+        session.pullRequests = dedupeSemantic(
+            session.pullRequests,
+            (pullRequest) => `${pullRequest.repository}#${pullRequest.number}`,
+        );
+        session.workflowRuns = dedupeSemantic(
+            session.workflowRuns,
+            (run) => `${run.repository}#${run.runId}#${run.runAttempt}`,
+        );
+        session.goals = dedupeSemantic(
+            session.goals,
+            (goal) => `${goal.repository}#${goal.issue}#${goal.relationship}`,
+        );
+        session.replaces = dedupeSemantic(
+            session.replaces,
+            (replacement) => `${replacement.repository}#${replacement.number}`,
+        );
+    }
+    const relatedEntries = new Map(relatedPullRequests.map((pullRequest) => [
+        Number(pullRequest.number),
+        entries.find((entry) => entry.pullRequestNumber === Number(pullRequest.number)),
+    ]));
+    const invalid = [...relatedEntries.values()].find((entry) => entry?.status === "invalid");
+    const status = sessions.size > 0
+        ? source.status === "fresh" ? "valid" : source.status
+        : source.status === "unavailable"
+            ? "unavailable"
+            : source.status === "stale"
+                ? "stale"
+                : invalid
+                    ? "invalid"
+                    : "missing";
+    return {
+        revision: Number(source.revision) || 1,
+        status,
+        sourceStatus: source.status,
+        fetchedAt: source.fetchedAt || null,
+        error: invalid?.error || source.error || "",
+        sessions: [...sessions.values()],
     };
 }
 
@@ -1310,11 +1387,21 @@ export function buildActivitySnapshot({
         subIssues: normalizedSourceState(sourceState?.subIssues, [], fetchedAt),
         copilotTasks: normalizedSourceState(sourceState?.copilotTasks, [], fetchedAt),
         localSessions: normalizedSourceState(sourceState?.localSessions, [], fetchedAt),
+        implementationProvenance: {
+            ...normalizedSourceState(
+                sourceState?.implementationProvenance,
+                [],
+                fetchedAt,
+            ),
+            revision: Number(sourceState?.implementationProvenance?.revision) || 1,
+        },
     };
     issues = normalizedSources.issues.data;
     pullRequests = normalizedSources.pullRequests.data;
     workflowRuns = normalizedSources.workflowRuns.data;
     workflowJobs = normalizedSources.workflowJobs.data;
+    const implementationProvenanceEntries =
+        normalizedSources.implementationProvenance.data;
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
     const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
     const repositoryKey = repositoryName.toLowerCase();
@@ -1416,6 +1503,24 @@ export function buildActivitySnapshot({
         })),
         (pullRequest) => pullRequest.value.number || pullRequest.value.url,
     );
+    const provenanceByPullRequest = new Map(implementationProvenanceEntries.map((entry) => [
+        Number(entry?.pullRequestNumber),
+        entry,
+    ]));
+    for (const pullRequest of normalizedPullRequests) {
+        const provenance = provenanceByPullRequest.get(pullRequest.number);
+        pullRequest.value.implementationProvenance = {
+            revision: normalizedSources.implementationProvenance.revision,
+            status: provenance?.status ||
+                (normalizedSources.implementationProvenance.status === "fresh"
+                    ? "missing"
+                    : normalizedSources.implementationProvenance.status),
+            sourceStatus: normalizedSources.implementationProvenance.status,
+            fetchedAt: normalizedSources.implementationProvenance.fetchedAt,
+            error: provenance?.error || normalizedSources.implementationProvenance.error,
+            record: provenance?.status === "valid" ? provenance.record : null,
+        };
+    }
     const normalizedRuns = dedupeSemantic(
         workflowRuns
             .filter((run) =>
@@ -1457,12 +1562,28 @@ export function buildActivitySnapshot({
         const artifacts = parseArtifacts(issue?.comments, number);
         if (!isSquadGoal(issue, artifacts)) continue;
         const goalKey = issueKey(repositoryKey, number);
-        const relatedPullRequestMatches = normalizedPullRequests
+        const legacyPullRequestMatches = normalizedPullRequests
             .map((pullRequest) => ({
                 value: pullRequest.value,
                 link: pullRequest.issueLinks.find((link) => link.key === goalKey),
             }))
             .filter((pullRequest) => pullRequest.link);
+        const provenancePullRequestMatches = normalizedPullRequests
+            .filter((pullRequest) =>
+                pullRequest.value.implementationProvenance?.record?.goals?.some((goal) =>
+                    issueKey(goal.repository, goal.issue) === goalKey))
+            .map((pullRequest) => ({
+                value: pullRequest.value,
+                link: {
+                    key: goalKey,
+                    method: "implementation-provenance",
+                    confidence: "observed",
+                },
+            }));
+        const relatedPullRequestMatches = dedupeSemantic(
+            [...legacyPullRequestMatches, ...provenancePullRequestMatches],
+            (pullRequest) => pullRequest.value.number,
+        );
         const relatedPullRequests = relatedPullRequestMatches.map((pullRequest) => pullRequest.value);
         const pullRequestLinks = new Map(relatedPullRequestMatches.map((pullRequest) => [
             pullRequest.value.number,
@@ -1472,9 +1593,14 @@ export function buildActivitySnapshot({
             .filter((pullRequest) =>
                 ["closing-reference", "closing-keyword"].includes(pullRequest.link.method))
             .map((pullRequest) => pullRequest.value);
+        const provenanceRunIds = new Set(provenancePullRequestMatches
+            .map((pullRequest) =>
+                pullRequest.value.implementationProvenance.record.workflowRun.runId));
         const relatedRuns = normalizedRuns
             .filter((run) => run.issueNumbers.includes(number) ||
-                relatedPullRequests.some((pullRequest) => pullRequest.branch && pullRequest.branch === run.value.branch))
+                relatedPullRequests.some((pullRequest) =>
+                    pullRequest.branch && pullRequest.branch === run.value.branch) ||
+                provenanceRunIds.has(run.value.id))
             .map((run) => run.value);
         const authoritativeRuns = normalizedRuns
             .filter((run) => run.authoritativeIssueNumbers.includes(number) ||
@@ -1549,6 +1675,12 @@ export function buildActivitySnapshot({
             })),
             pullRequests: relatedPullRequests,
             workflowRuns: relatedRuns,
+            implementationProvenance: implementationProvenanceForGoal({
+                goalKey,
+                relatedPullRequests,
+                entries: implementationProvenanceEntries,
+                source: normalizedSources.implementationProvenance,
+            }),
             dependencies,
             blockers,
             nextAction: nextActionFor(phase, relatedPullRequests, relatedRuns, artifacts),
@@ -1604,7 +1736,13 @@ export function buildActivitySnapshot({
         source: text(error?.source || "GitHub", 80),
         message: text(error?.message || error, 800),
     }));
-    const staleSources = ["issues", "pullRequests", "workflowRuns", "workflowJobs"]
+    const staleSources = [
+        "issues",
+        "pullRequests",
+        "workflowRuns",
+        "workflowJobs",
+        "implementationProvenance",
+    ]
         .map((source) => [source, normalizedSources[source]])
         .filter(([, state]) => state.status === "stale")
         .map(([source]) => source);
