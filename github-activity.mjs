@@ -666,6 +666,8 @@ export class GitHubSquadActivityAdapter {
                         fetchedAt: attemptedAt,
                         status: "fresh",
                         error: "",
+                        exhaustive: true,
+                        truncated: false,
                     };
                     return;
                 }
@@ -714,6 +716,8 @@ export class GitHubSquadActivityAdapter {
                 fetchedAt: attemptedAt,
                 status: "fresh",
                 error: "",
+                exhaustive: true,
+                truncated: false,
             };
         } else {
             try {
@@ -727,6 +731,8 @@ export class GitHubSquadActivityAdapter {
                     fetchedAt: attemptedAt,
                     status: "fresh",
                     error: "",
+                    exhaustive: true,
+                    truncated: false,
                 };
             } catch (error) {
                 sourceState.comments = sourceFailure(previousSources.comments, errorMessage(error));

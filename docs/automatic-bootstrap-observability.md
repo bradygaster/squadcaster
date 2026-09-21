@@ -276,20 +276,23 @@ classifier fields, a separately derived `journeyPhase`, and validated
 `ambiguous`, `malformed`, or `unknown` classifier result remains repository
 level because selecting a goal in those states would guess at identity.
 
-The exact Cast pull request and canonical default-branch bootstrap attempts are
-removed from ordinary implementation correlation before goal phases are
-derived. They appear only as observed `bootstrap-cast` and
-`bootstrap-workflow` evidence. The research issue and canonical research
-envelope similarly produce observed `bootstrap-issue` and
-`bootstrap-research` evidence. Classifier reasons produce
-`bootstrap-diagnostic` evidence with `confidence: "derived"`. This separation
-keeps existing pull-request, check, and workflow behavior unchanged for all
-non-bootstrap delivery work.
+The classifier-confirmed unique Cast pull request and canonical default-branch
+bootstrap attempts are removed from ordinary implementation correlation before
+final goal phases are derived. They appear only as observed `bootstrap-cast`
+and `bootstrap-workflow` evidence. Ambiguous or malformed Cast candidates stay
+in ordinary pull-request correlation because suppressing one would guess at
+canonical identity. The research issue and canonical research envelope
+similarly produce observed `bootstrap-issue` and `bootstrap-research`
+evidence. Classifier reasons produce `bootstrap-diagnostic` evidence with
+`confidence: "derived"`. This separation keeps existing pull-request, check,
+and workflow behavior unchanged for all non-bootstrap delivery work.
 
 Schema-1 artifacts with the matching `origin_issue` may advance the documented
-journey. Unsupported kinds or schema versions and malformed envelopes remain
-in the artifact/evidence timeline with their validation result but cannot
-advance either `journeyPhase` or the existing lifecycle `phase`.
+journey only when they come from a fresh, exhaustive canonical comment source.
+Retained stale or partial comments, unsupported kinds or schema versions, and
+malformed envelopes remain in the artifact/evidence timeline with their
+validation result but cannot advance `journeyPhase`, the existing lifecycle
+`phase`, or generated-goal links.
 
 Generated implementation goals are linked only from the `Activation bindings:`
 JSON carried by a supported activation artifact. Every task and epic reference

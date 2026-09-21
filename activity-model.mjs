@@ -332,6 +332,7 @@ function parseArtifacts(comments, issueNumber) {
 
 function advancingArtifacts(artifacts) {
     return artifacts.filter((artifact) =>
+        artifact.advancing !== false &&
         artifact.validation === "supported" &&
         artifact.schemaVersion === "1" &&
         ARTIFACT_PHASES[artifact.kind]);
@@ -940,6 +941,34 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         ? goalsByNumber.get(researchIssueNumber)
         : null;
     if (rootGoal) {
+        const canonicalCastPullRequest = bootstrap.castPullRequest;
+        const defaultBranch = text(
+            snapshot.repository?.defaultBranchRef?.name || snapshot.repository?.defaultBranch,
+            240,
+        );
+        const suppressCanonicalCast = canonicalCastPullRequest &&
+            !["ambiguous", "malformed"].includes(bootstrap.status) &&
+            canonicalCastPullRequest.branch === BOOTSTRAP_IDENTIFIERS.castBranch &&
+            canonicalCastPullRequest.title === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
+            canonicalCastPullRequest.baseBranch === defaultBranch;
+        if (suppressCanonicalCast) {
+            const matchesCanonicalCast = (pullRequest) =>
+                (
+                    canonicalCastPullRequest.number &&
+                    pullRequest.number === canonicalCastPullRequest.number
+                ) ||
+                (
+                    canonicalCastPullRequest.url &&
+                    pullRequest.url === canonicalCastPullRequest.url
+                );
+            rootGoal.pullRequests = rootGoal.pullRequests.filter((pullRequest) =>
+                !matchesCanonicalCast(pullRequest));
+            rootGoal.workItems = rootGoal.workItems.filter((workItem) =>
+                !matchesCanonicalCast(workItem.pullRequest));
+            rootGoal.evidence = rootGoal.evidence.filter((item) =>
+                item.kind !== "pull-request" ||
+                item.url !== canonicalCastPullRequest.url);
+        }
         const artifactKey = (artifact) => [
             artifact.kind,
             artifact.schemaVersion,
@@ -949,10 +978,17 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
             artifact.validation,
         ].join("|");
         const existingArtifactKeys = new Set(rootGoal.artifacts.map(artifactKey));
+        const commentsSource = snapshot.sourceState?.bootstrap?.comments;
+        const commentsAreAuthoritative = commentsSource?.status === "fresh" &&
+            commentsSource.exhaustive === true &&
+            commentsSource.truncated === false;
         const discoveredArtifacts = parseArtifacts(
-            snapshot.sourceState?.bootstrap?.comments?.data,
+            commentsSource?.data,
             researchIssueNumber,
-        );
+        ).map((artifact) => ({
+            ...artifact,
+            advancing: commentsAreAuthoritative,
+        }));
         const addedArtifacts = discoveredArtifacts
             .filter((artifact) => !existingArtifactKeys.has(artifactKey(artifact)));
         rootGoal.artifacts = [...rootGoal.artifacts, ...addedArtifacts]
@@ -1094,14 +1130,7 @@ export function buildActivitySnapshot({
             ),
     });
     const normalizedPullRequests = dedupeSemantic(
-        pullRequests
-            .filter((pullRequest) => !(
-                text(pullRequest?.headRefName, 240) === BOOTSTRAP_IDENTIFIERS.castBranch &&
-                text(pullRequest?.title, 240) === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
-                text(pullRequest?.baseRefName || pullRequest?.base?.ref, 240) ===
-                    text(repository?.defaultBranchRef?.name || repository?.defaultBranch, 240)
-            ))
-            .map((pullRequest) => ({
+        pullRequests.map((pullRequest) => ({
             source: pullRequest,
             value: normalizePullRequest(pullRequest),
             issueLinks: linkedIssueLinks(pullRequest, repositoryKey),
