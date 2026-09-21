@@ -1764,21 +1764,21 @@ export function renderHtml() {
 
     function existingImplementationHtml(handoff) {
       const existing = handoff?.existingImplementation || {};
-      const groups = [
-        ["Pull requests", existing.pullRequests],
-        ["Workflow runs", existing.workflowRuns],
-        ["Copilot cloud agent", existing.copilotTasks || existing.copilotSessions || existing.assignments],
-        ["Local project sessions", existing.sessions || existing.localSessions],
-      ];
-      const items = groups.flatMap(([kind, values]) =>
-        (Array.isArray(values) ? values : []).map(item => ({ kind, item })));
+      const labels = {
+        "pull-request": "Pull request",
+        "workflow-run": "Workflow run",
+        "copilot-task": "Copilot cloud agent",
+        "copilot-assignment": "Copilot cloud agent",
+        "local-session": "Local project session",
+      };
+      const items = Array.isArray(existing.links) ? existing.links : [];
       if (!items.length) {
         return '<p class="help">No existing implementation is recorded by the normalized handoff contract.</p>';
       }
-      return \`<div class="drawer-list">\${items.map(({ kind, item }) => \`
+      return \`<div class="drawer-list">\${items.map(item => \`
         <div class="drawer-item">
-          \${handoffLink(item, kind)}
-          <small>\${esc(kind)} · \${esc(item?.status || item?.state || existing.state || "observed")}</small>
+          \${handoffLink(item, labels[item.kind] || "Existing implementation")}
+          <small>\${esc(labels[item.kind] || item.kind || "Existing implementation")} · \${esc(item?.status || item?.state || existing.state || "observed")}</small>
           \${item?.url || item?.appUrl || item?.sourceUrl ? \`<div class="handoff-actions"><a class="button" href="\${esc(item.url || item.appUrl || item.sourceUrl)}" target="_blank" rel="noreferrer">Open existing</a></div>\` : ""}
         </div>\`).join("")}</div>\`;
     }
@@ -1869,8 +1869,9 @@ export function renderHtml() {
       };
       const readinessState = readiness.state || "unknown";
       const reasons = Array.isArray(readiness.reasons) ? readiness.reasons : [];
-      const incompleteSources = Object.entries(readiness.sourceStates || {})
-        .filter(([, sourceState]) => sourceState !== "complete");
+      const incompleteSources = readinessState === "unknown"
+        ? Object.entries(readiness.sourceStates || {}).filter(([, sourceState]) => sourceState !== "complete")
+        : [];
       return \`
         <section class="drawer-section handoff-section" aria-labelledby="handoff-title">
           <div class="handoff-heading">

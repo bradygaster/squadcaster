@@ -62,6 +62,7 @@ function goal({
         }],
     }] : [];
     const readinessState = number === 1 ? "ready"
+        : number === 2 ? "already-in-progress"
         : phase === "blocked" ? "blocked"
             : phase === "completed" ? "completed"
                 : pullRequests.length || workflowRuns.length ? "already-in-progress"
@@ -113,6 +114,32 @@ function goal({
             status: "active",
         }] : [],
     };
+    existingImplementation.links = [
+        ...existingImplementation.pullRequests.map(item => ({
+            kind: "pull-request",
+            title: item.title,
+            url: item.url,
+            state: item.state,
+        })),
+        ...existingImplementation.workflowRuns.map(item => ({
+            kind: "workflow-run",
+            title: item.title,
+            url: item.url,
+            state: item.status,
+        })),
+        ...existingImplementation.copilotTasks.map(item => ({
+            kind: "copilot-task",
+            title: item.title,
+            url: item.url,
+            state: item.status,
+        })),
+        ...existingImplementation.sessions.map(item => ({
+            kind: "local-session",
+            title: item.title,
+            url: item.appUrl,
+            state: item.status,
+        })),
+    ];
     return {
         id: `${repository}#${number}`,
         phase,
@@ -547,7 +574,7 @@ test("keeps incomplete and existing-work states fail closed with open-existing a
     await page.locator('[data-action="expand-stage"][data-phase="researching"]').click();
     await page.getByRole("button", { name: /Research accessible activity summaries/ }).click();
     const incompleteDrawer = page.getByRole("dialog");
-    await expect(incompleteDrawer.getByLabel("Handoff readiness: ineligible")).toBeVisible();
+    await expect(incompleteDrawer.getByLabel("Handoff readiness: already-in-progress")).toBeVisible();
     await expect(incompleteDrawer.getByText("Incomplete source.")).toBeVisible();
     await expect(incompleteDrawer.getByRole("link", { name: "Open existing" })).toHaveCount(2);
     await expect(incompleteDrawer.getByRole("link", { name: "Open issue" })).toBeVisible();
