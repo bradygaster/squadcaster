@@ -93,6 +93,8 @@ checks, authorship, assignees, or goal ownership.
    reconstruct earlier transitions.
 5. **Squad provenance contract:** define and validate durable agent and
    implementation-session identifiers at the producer before exposing them in
-   this consumer.
+   this consumer. The consumer validation gate and current correlation audit
+   are documented in
+   [the implementation session provenance consumer contract](session-provenance-consumer-contract.md).
 6. **Daily aggregation semantics:** define timezone and day-boundary fields only
    with the first actual daily aggregate.

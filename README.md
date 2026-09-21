@@ -125,6 +125,9 @@ The
 defines the fail-closed state model for Squad's deterministic Cast pull request,
 research-proposals issue, workflow attempts, and downstream research-to-
 activation journey.
+The future Squad implementation-session integration is explicitly gated by the
+[provenance consumer contract](docs/session-provenance-consumer-contract.md);
+Squadcaster does not derive session identity from existing GitHub evidence.
 
 ## Development
 

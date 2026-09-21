@@ -46,6 +46,14 @@ Workflow runs correlate through an issue reference or an already-correlated
 implementation branch. Branch/run correlation is marked as inferred in the
 evidence timeline.
 
+Closing references, closing keywords, and the explicit Squad implementation
+marker are observed correlations. A branch-only pull-request correlation is
+inferred, even though the pull request itself is observed. If both are present,
+the observed correlation takes precedence. Implementation session provenance
+remains unknown until Squad publishes and validates a versioned producer
+payload; the consumer gate is defined in
+[`session-provenance-consumer-contract.md`](session-provenance-consumer-contract.md).
+
 Only the newest run for a workflow and branch affects failure state. Historical
 failed attempts remain visible as evidence but do not override a successful
 retry. Dependencies come from `Depends on:` or `Blocked by:` issue-body lines;
