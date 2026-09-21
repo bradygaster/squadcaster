@@ -1397,7 +1397,7 @@ export function renderHtml() {
     }
 
     function goalMatchesFilter(goal) {
-      if (bootstrapFilter && !goal.bootstrap) return false;
+      if (bootstrapFilter && !goalHasCanonicalBootstrap(goal)) return false;
       if (phaseFilter === "all") return true;
       if (phaseFilter === "active") return goal.phase !== "completed";
       return goal.phase === phaseFilter;
@@ -1540,7 +1540,7 @@ export function renderHtml() {
     function repositoryBootstrapEntries() {
       const entries = new Map();
       for (const repository of state.activity?.repositories || []) {
-        if (!repository?.bootstrap) continue;
+        if (!repository?.bootstrap || repository.included === false) continue;
         entries.set(String(repository.nameWithOwner || "").toLowerCase(), {
           repository,
           bootstrap: repository.bootstrap,
@@ -1551,10 +1551,13 @@ export function renderHtml() {
         if (!goal?.bootstrap) continue;
         const key = String(goal.repository?.nameWithOwner || "").toLowerCase();
         const existing = entries.get(key);
+        const bootstrap = existing?.bootstrap || goal.bootstrap;
+        const canonicalGoal = !["ambiguous", "malformed", "unknown"].includes(bootstrap?.status) &&
+          Number(bootstrap?.researchIssue?.number) === Number(goal.issue?.number);
         entries.set(key, {
           repository: existing?.repository || goal.repository,
-          bootstrap: existing?.bootstrap || goal.bootstrap,
-          goal,
+          bootstrap,
+          goal: canonicalGoal ? goal : null,
         });
       }
       const activityBootstrap = state.activity?.bootstrap;
@@ -1573,6 +1576,24 @@ export function renderHtml() {
         entries.set(key, { repository, bootstrap, goal: null });
       }
       return [...entries.values()];
+    }
+
+    function bootstrapForGoal(goal) {
+      if (!goal) return null;
+      const repository = (state.activity?.repositories || []).find(candidate =>
+        candidate.included !== false &&
+        String(candidate.nameWithOwner || "").toLowerCase() ===
+          String(goal.repository?.nameWithOwner || "").toLowerCase());
+      return repository?.bootstrap || goal.bootstrap || null;
+    }
+
+    function goalHasCanonicalBootstrap(goal) {
+      const bootstrap = bootstrapForGoal(goal);
+      return Boolean(
+        bootstrap &&
+        !["ambiguous", "malformed", "unknown"].includes(bootstrap.status) &&
+        Number(bootstrap.researchIssue?.number) === Number(goal.issue?.number),
+      );
     }
 
     function bootstrapEntryMatchesScope(entry) {
@@ -1627,8 +1648,8 @@ export function renderHtml() {
     }
 
     function bootstrapDrawerHtml(goal) {
-      const bootstrap = goal.bootstrap;
-      if (!bootstrap) return "";
+      const bootstrap = bootstrapForGoal(goal);
+      if (!goalHasCanonicalBootstrap(goal)) return "";
       const links = bootstrapLinks(bootstrap);
       return \`
         <section class="drawer-section" aria-labelledby="drawer-bootstrap-title">
@@ -2272,13 +2293,14 @@ export function renderHtml() {
     function goalDrawerHtml() {
       const goal = goalById(selectedGoalId);
       if (!goal) return "";
+      const goalBootstrap = goalHasCanonicalBootstrap(goal) ? bootstrapForGoal(goal) : null;
       return \`
         <div class="drawer-scrim" data-action="close-goal" aria-hidden="true"></div>
         <aside class="goal-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-describedby="drawer-description">
           <div class="drawer-header">
             <div>
               <span class="phase \${esc(goal.phase)}">\${esc(goal.phase)}</span>
-              \${goal.bootstrap ? bootstrapBadgeHtml(goal.bootstrap) : ""}
+              \${goalBootstrap ? bootstrapBadgeHtml(goalBootstrap) : ""}
               <h2 id="drawer-title" style="margin-top:8px">#\${esc(goal.issue.number)} · \${esc(goal.issue.title)}</h2>
               <p id="drawer-description">\${esc(goal.repository.nameWithOwner)}</p>
             </div>
