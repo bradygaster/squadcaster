@@ -294,6 +294,135 @@ function normalizeGoal(goal) {
     };
 }
 
+function cachedLabels(goal) {
+    return new Set((Array.isArray(goal?.issue?.labels) ? goal.issue.labels : [])
+        .map((label) => String(typeof label === "string" ? label : label?.name || "")
+            .trim()
+            .toLowerCase())
+        .filter(Boolean));
+}
+
+function cachedOwnershipMatches(goal, label, omission) {
+    const labels = cachedLabels(goal);
+    if (!labels.has("squad")) return false;
+    const agentLabels = [...labels].filter((value) => value.startsWith("squad:"));
+    const normalizedLabel = String(label || "").trim().toLowerCase();
+    if (normalizedLabel) {
+        return agentLabels.length === 1 && agentLabels[0] === normalizedLabel;
+    }
+    return ["multi-owner", "non-roster"].includes(
+        String(omission || "").trim().toLowerCase(),
+    ) && agentLabels.length === 0;
+}
+
+function invalidateCachedActivation(goal, reason) {
+    if (!goal?.handoff) return;
+    goal.handoff.activation = null;
+    goal.handoff.readiness.state = "unknown";
+    goal.handoff.readiness.reasons = [
+        ...goal.handoff.readiness.reasons,
+        reason,
+    ];
+    goal.handoff.readiness.automatedHandoffAvailable = false;
+}
+
+function reconcileCachedActivations(goals) {
+    const goalsById = new Map(goals.map((goal) => [
+        String(goal.id || "").toLowerCase(),
+        goal,
+    ]));
+    const envelopes = new Map();
+    for (const goal of goals) {
+        const activation = goal.handoff?.activation;
+        if (!activation) continue;
+        const key = `${String(activation.rootIssue).toLowerCase()}|${activation.artifactUrl}`;
+        const current = envelopes.get(key) || [];
+        current.push({ goal, activation });
+        envelopes.set(key, current);
+    }
+    for (const entries of envelopes.values()) {
+        const issueAssignments = new Map();
+        const taskIssues = new Map();
+        const epics = new Map();
+        let valid = true;
+        for (const { goal, activation } of entries) {
+            const taskGoal = goalsById.get(String(activation.issue).toLowerCase());
+            const epicGoal = goalsById.get(String(activation.epicIssue).toLowerCase());
+            const rootGoal = goalsById.get(String(activation.rootIssue).toLowerCase());
+            if (
+                taskGoal !== goal ||
+                !epicGoal ||
+                !rootGoal ||
+                !cachedOwnershipMatches(
+                    taskGoal,
+                    activation.label,
+                    activation.omissionReason,
+                ) ||
+                !cachedOwnershipMatches(
+                    epicGoal,
+                    activation.epicLabel,
+                    activation.epicOmissionReason,
+                )
+            ) {
+                valid = false;
+                break;
+            }
+            const taskAssignment = issueAssignments.get(activation.issueNumber);
+            const epicAssignment = issueAssignments.get(activation.epicIssueNumber);
+            if (
+                (taskAssignment && (
+                    taskAssignment.role !== "task" ||
+                    taskAssignment.identity !== activation.task
+                )) ||
+                (epicAssignment && (
+                    epicAssignment.role !== "epic" ||
+                    epicAssignment.identity !== activation.epic
+                ))
+            ) {
+                valid = false;
+                break;
+            }
+            issueAssignments.set(activation.issueNumber, {
+                role: "task",
+                identity: activation.task,
+            });
+            issueAssignments.set(activation.epicIssueNumber, {
+                role: "epic",
+                identity: activation.epic,
+            });
+            const priorTaskIssue = taskIssues.get(activation.task);
+            if (priorTaskIssue && priorTaskIssue !== activation.issueNumber) {
+                valid = false;
+                break;
+            }
+            taskIssues.set(activation.task, activation.issueNumber);
+            const agents = [...activation.epicAgents].map((agent) =>
+                agent.toLowerCase()).sort();
+            const priorEpic = epics.get(activation.epic);
+            if (priorEpic && (
+                priorEpic.issueNumber !== activation.epicIssueNumber ||
+                priorEpic.agents.join("\0") !== agents.join("\0")
+            )) {
+                valid = false;
+                break;
+            }
+            epics.set(activation.epic, {
+                issueNumber: activation.epicIssueNumber,
+                agents,
+            });
+        }
+        if (!valid) {
+            for (const { goal } of entries) {
+                invalidateCachedActivation(
+                    goal,
+                    "Cached activation envelope could not be revalidated.",
+                );
+            }
+        }
+    }
+    return goals;
+}
+
 export function normalizeActivity(value) {
     const contract = normalizeActivityContract(value) ||
         (isRecord(value) && value.schemaVersion === 3 && value.fetchedAt === null
@@ -310,6 +439,9 @@ export function normalizeActivity(value) {
                 : defaults.summary.bootstrap,
         }
         : defaults.summary;
+    const goals = reconcileCachedActivations(
+        recordArray(contract.goals).map(normalizeGoal),
+    );
     return {
         ...contract,
         schemaVersion: 3,
@@ -320,7 +452,7 @@ export function normalizeActivity(value) {
         repository: isRecord(contract.repository) ? contract.repository : {},
         repositories: recordArray(contract.repositories).map(normalizeRepository),
         summary,
-        goals: recordArray(contract.goals).map(normalizeGoal),
+        goals,
         bootstraps: recordArray(contract.bootstraps),
         errors: recordArray(contract.errors),
     };
