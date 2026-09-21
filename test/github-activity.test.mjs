@@ -5,6 +5,13 @@ import {
     GitHubSquadActivityAdapter,
     selectWorkflowJobRuns,
 } from "../github-activity.mjs";
+import {
+    castPullRequest as bootstrapCastPullRequest,
+    researchComment,
+    researchIssue,
+    workflow as bootstrapWorkflow,
+    workflowRun as bootstrapWorkflowRun,
+} from "./fixtures/bootstrap-classifier.mjs";
 
 const repository = {
     name: "demo",
@@ -88,6 +95,19 @@ function workflowJobs(overrides = {}) {
     };
 }
 
+function bootstrapApi(args) {
+    const endpoint = args[1];
+    if (endpoint.includes("/actions/workflows?")) return { workflows: [] };
+    if (endpoint.includes("/actions/runs?")) return { workflow_runs: [] };
+    return [];
+}
+
+function workflowJobsApi(args, response = workflowJobs()) {
+    return args.some((arg) => String(arg).includes("filter=latest"))
+        ? response
+        : bootstrapApi(args);
+}
+
 test("keeps the last known goals when issue discovery fails", async () => {
     const previous = buildActivitySnapshot({
         repository,
@@ -97,6 +117,7 @@ test("keeps the last known goals when issue discovery fails", async () => {
     const adapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return bootstrapApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") throw new Error("rate limited");
             if (args[0] === "pr") return [pullRequest({ state: "MERGED", mergedAt: "2026-09-20T13:00:00Z" })];
@@ -120,6 +141,7 @@ test("preserves successful sources when another GitHub source fails", async () =
     const adapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return bootstrapApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue({ title: "Updated dashboard", body: "" })];
             if (args[0] === "pr") throw new Error("pull request permission denied");
@@ -148,6 +170,7 @@ test("preserves implementing state when pull request refresh fails", async () =>
     const adapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return bootstrapApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue({ title: "Updated implementation", body: "" })];
             if (args[0] === "pr") throw new Error("temporary PR failure");
@@ -170,6 +193,7 @@ test("preserves failed workflow evidence and recovers on a later successful refr
     const failingAdapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return workflowJobsApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue({ title: "Updated failed work", body: "" })];
             if (args[0] === "pr") return [];
@@ -186,10 +210,10 @@ test("preserves failed workflow evidence and recovers on a later successful refr
     const recoveredAdapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return workflowJobsApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue({ title: "Recovered work", body: "" })];
             if (args[0] === "pr") return [];
-            if (args[0] === "api") return workflowJobs();
             return [workflowRun({
                 databaseId: 79,
                 conclusion: "success",
@@ -267,6 +291,9 @@ test("paginates selected workflow jobs and preserves only observed job and step 
             if (args[0] === "issue") return [issue({ body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun()];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             if (args.includes("page=1")) return workflowJobs({
                 total_count: 101,
                 jobs: firstPageJobs,
@@ -317,7 +344,9 @@ test("paginates selected workflow jobs and preserves only observed job and step 
             completedAt: null,
         }],
     });
-    const apiCalls = calls.filter((args) => args[0] === "api");
+    const apiCalls = calls.filter((args) =>
+        args[0] === "api" &&
+        args.some((arg) => String(arg).includes("filter=latest")));
     assert.equal(apiCalls.length, 2);
     assert.ok(apiCalls.every((args) => args.includes("filter=latest")));
     assert.ok(calls.every((args) => !args.some((arg) => String(arg).includes("logs"))));
@@ -366,6 +395,9 @@ test("stops at the REST reserve and marks uncached selected runs partial or unav
                 workflowRun({ databaseId: 79, updatedAt: "2026-09-20T13:00:00Z" }),
                 workflowRun(),
             ];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             return {
                 total_count: 200,
                 jobs: Array.from({ length: 100 }, (_, index) => ({
@@ -380,7 +412,9 @@ test("stops at the REST reserve and marks uncached selected runs partial or unav
     const partial = await adapter.discover({ workflowJobsRestBudget: budget });
     const runs = partial.goals[0].workflowRuns;
 
-    assert.equal(calls.filter((args) => args[0] === "api").length, 1);
+    assert.equal(calls.filter((args) =>
+        args[0] === "api" &&
+        args.some((arg) => String(arg).includes("filter=latest"))).length, 1);
     assert.equal(budget.remaining, 100);
     assert.equal(partial.sourceState.workflowJobs.status, "partial");
     assert.equal(runs.find((run) => run.id === 79).jobsState.status, "partial");
@@ -436,7 +470,7 @@ test("distinguishes a successful empty jobs response from unavailable jobs", asy
             if (args[0] === "issue") return [issue({ body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun()];
-            return { total_count: 0, jobs: [] };
+            return workflowJobsApi(args, { total_count: 0, jobs: [] });
         },
     });
     const empty = await emptyAdapter.discover();
@@ -450,6 +484,9 @@ test("distinguishes a successful empty jobs response from unavailable jobs", asy
             if (args[0] === "issue") return [issue({ body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun()];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             throw new Error("HTTP 403: Resource not accessible by integration");
         },
     });
@@ -493,6 +530,9 @@ test("preserves each selected run's last successful jobs when only the jobs sour
             if (args[0] === "issue") return [issue({ title: "Updated", body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun({ conclusion: "success" })];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             throw new Error("workflow jobs permission denied");
         },
     });
@@ -539,6 +579,7 @@ test("keeps a never-successful source unavailable across repeated failures", asy
     const adapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return bootstrapApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") throw new Error("issues unavailable");
             return [];
@@ -627,6 +668,7 @@ test("legacy snapshot recovery preserves pull requests linked to multiple goals"
     const adapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return bootstrapApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue(), secondIssue];
             if (args[0] === "pr") throw new Error("temporary PR failure");
@@ -652,6 +694,7 @@ test("legacy issue failure preserves a command-comment-only goal", async () => {
     const adapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
+            if (args[0] === "api") return bootstrapApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") throw new Error("temporary issue failure");
             return [];
@@ -819,4 +862,519 @@ Structured data:
     assert.equal(result.sourceState.workflowRuns.status, "skipped");
     assert.equal(handoff.readiness.state, "unknown");
     assert.match(handoff.readiness.reasons.join(" "), /workflow runs evidence was not refreshed/i);
+});
+
+function bootstrapDiscoveryAdapter(responses, calls = [], options = {}) {
+    const attempts = new Map();
+    return new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        retryAttempts: options.retryAttempts ?? 3,
+        sleep: options.sleep || (async () => {}),
+        now: options.now || (() => Date.parse("2026-09-21T12:00:00.000Z")),
+        maxRetryDelayMs: options.maxRetryDelayMs ?? 60 * 1000,
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] !== "api") return [];
+            const endpoint = args[1];
+            const key = Object.keys(responses).find((candidate) => endpoint.includes(candidate));
+            if (!key) throw new Error(`Unexpected endpoint: ${endpoint}`);
+            const count = attempts.get(key) || 0;
+            attempts.set(key, count + 1);
+            const configured = responses[key];
+            const response = Array.isArray(configured?.attempts)
+                ? configured.attempts[Math.min(count, configured.attempts.length - 1)]
+                : configured;
+            if (response instanceof Error) throw response;
+            return typeof response === "function"
+                ? response({ args, count })
+                : response;
+        },
+    });
+}
+
+function bootstrapRepository() {
+    return {
+        name: "demo",
+        nameWithOwner: "octodemo/demo",
+        url: "https://github.com/octodemo/demo",
+        defaultBranchRef: { name: "main" },
+    };
+}
+
+function bootstrapResponses(overrides = {}) {
+    return {
+        "actions/workflows?": {
+            workflows: [bootstrapWorkflow({ id: 42 })],
+        },
+        "actions/workflows/42/runs?": {
+            workflow_runs: [
+                bootstrapWorkflowRun({
+                    databaseId: 19,
+                    conclusion: "failure",
+                    updatedAt: "2026-09-21T10:00:00Z",
+                }),
+                bootstrapWorkflowRun({
+                    databaseId: 20,
+                    updatedAt: "2026-09-21T11:00:00Z",
+                }),
+            ],
+        },
+        "pulls?state=all": [bootstrapCastPullRequest(), {
+            number: 4,
+            title: "Unrelated",
+            head: { ref: "feature" },
+            base: { ref: "main" },
+            state: "open",
+        }],
+        "issues?state=all": [researchIssue(), {
+            number: 7,
+            title: "Unrelated",
+            body: "",
+            state: "open",
+        }],
+        "issues/6/comments?": [researchComment()],
+        ...overrides,
+    };
+}
+
+test("discovers exhaustive paginated bootstrap evidence with bounded API cost", async () => {
+    const calls = [];
+    const restBudget = { remaining: 105, reserve: 100 };
+    const adapter = bootstrapDiscoveryAdapter(bootstrapResponses(), calls);
+    const result = await adapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+        restBudget,
+    });
+
+    assert.equal(result.bootstrap.status, "complete");
+    assert.deepEqual(result.bootstrap.workflowAttempts.map((run) => run.id), [19, 20]);
+    assert.equal(result.sourceState.pullRequests.data.length, 2);
+    assert.equal(result.sourceState.issues.data.length, 2);
+    assert.equal(calls.length, 5);
+    assert.equal(restBudget.remaining, restBudget.reserve);
+    assert.equal(calls.filter((args) => args[1].includes("/comments?")).length, 1);
+    const runCall = calls.find((args) => args[1].includes("/actions/workflows/42/runs?"));
+    assert.equal(runCall[1].includes("branch="), false);
+    assert.equal(runCall.includes("--paginate"), false);
+    for (const args of calls) {
+        assert.equal(args[0], "api");
+        assert.match(args[1], /per_page=100/);
+        assert.match(args[1], /page=1/);
+        assert.equal(args.includes("--paginate"), false);
+    }
+});
+
+test("fetches comments only for the unique canonical research issue", async () => {
+    const calls = [];
+    const duplicateIssue = researchIssue({ number: 7 });
+    const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
+        "issues?state=all": [researchIssue(), duplicateIssue],
+    }), calls);
+    const result = await adapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.equal(result.bootstrap.status, "ambiguous");
+    assert.equal(calls.length, 4);
+    assert.equal(calls.some((args) => args[1].includes("/comments?")), false);
+    assert.equal(result.sourceState.comments.status, "fresh");
+    assert.deepEqual(result.sourceState.comments.data, []);
+});
+
+test("returns unknown when canonical comment discovery has never succeeded", async () => {
+    const calls = [];
+    const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
+        "issues/6/comments?": new Error("HTTP 403: comments unavailable"),
+    }), calls);
+    const result = await adapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.equal(result.bootstrap.status, "unknown");
+    assert.equal(result.bootstrap.stale, true);
+    assert.deepEqual(result.bootstrap.staleSources, ["comments"]);
+    assert.equal(result.sourceState.comments.status, "unavailable");
+    assert.equal(calls.filter((args) => args[1].includes("/comments?")).length, 1);
+});
+
+test("retains the last complete classification across comment and source failures", async () => {
+    const initialAdapter = bootstrapDiscoveryAdapter(bootstrapResponses());
+    const first = await initialAdapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+    const previous = {
+        bootstrap: first.bootstrap,
+        sourceState: { bootstrap: first.sourceState },
+    };
+    const failingAdapter = bootstrapDiscoveryAdapter(bootstrapResponses({
+        "pulls?state=all": new Error("HTTP 403: pull requests unavailable"),
+        "issues/6/comments?": new Error("HTTP 403: comments unavailable"),
+    }));
+    const second = await failingAdapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous,
+        attemptedAt: "2026-09-21T12:05:00.000Z",
+    });
+
+    assert.equal(second.bootstrap.status, "complete");
+    assert.equal(second.bootstrap.stale, true);
+    assert.deepEqual(second.bootstrap.staleSources, ["pullRequests", "comments"]);
+    assert.equal(second.sourceState.pullRequests.status, "stale");
+    assert.equal(second.sourceState.issues.status, "fresh");
+    assert.equal(second.sourceState.comments.status, "stale");
+    assert.equal(second.sourceState.comments.data[0].id, 9);
+});
+
+test("retries transient bootstrap source failures and records recovered freshness", async () => {
+    const delays = [];
+    const calls = [];
+    const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            attempts: [
+                new Error("HTTP 502: temporary workflow failure"),
+                { workflow_runs: [bootstrapWorkflowRun()] },
+            ],
+        },
+    }), calls, { sleep: async (milliseconds) => delays.push(milliseconds) });
+    const result = await adapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.equal(result.sourceState.workflowRuns.status, "fresh");
+    assert.equal(result.sourceState.workflowRuns.data.length, 1);
+    assert.deepEqual(delays, [250]);
+    assert.equal(
+        calls.filter((args) => args[1].includes("/actions/workflows/42/runs?")).length,
+        2,
+    );
+});
+
+test("preserves first workflow observation time so installed bootstrap can become delayed", async () => {
+    const responses = bootstrapResponses({
+        "actions/workflows?": {
+            workflows: [bootstrapWorkflow({ id: 42, observedAt: undefined })],
+        },
+        "actions/workflows/42/runs?": { workflow_runs: [] },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    });
+    const firstAdapter = bootstrapDiscoveryAdapter(responses);
+    const first = await firstAdapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T11:30:00.000Z",
+    });
+    const secondAdapter = bootstrapDiscoveryAdapter(responses);
+    const second = await secondAdapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.equal(first.bootstrap.status, "pending");
+    assert.equal(second.bootstrap.status, "delayed");
+    assert.equal(
+        second.sourceState.workflows.data[0].observedAt,
+        "2026-09-21T11:30:00.000Z",
+    );
+});
+
+test("exhausts more than one thousand canonical workflow runs without a filtered cap", async () => {
+    const calls = [];
+    const runs = Array.from({ length: 1002 }, (_, index) => bootstrapWorkflowRun({
+        databaseId: 2000 - index,
+        headBranch: index === 1001 ? "release" : "main",
+        updatedAt: new Date(Date.parse("2026-09-21T11:59:00Z") - index * 1000).toISOString(),
+    }));
+    const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": ({ args }) => {
+            const page = Number(new URL(`https://api.github.test/?${args[1].split("?")[1]}`)
+                .searchParams.get("page"));
+            const start = (page - 1) * 100;
+            return { workflow_runs: runs.slice(start, start + 100) };
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    }), calls);
+    const restBudget = { remaining: 114, reserve: 100 };
+    const result = await adapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+        restBudget,
+    });
+
+    assert.equal(result.sourceState.workflowRuns.data.length, 1002);
+    assert.equal(result.bootstrap.workflowAttempts.length, 1001);
+    const runCalls = calls.filter((args) => args[1].includes("/actions/workflows/42/runs?"));
+    assert.equal(runCalls.length, 11);
+    assert.deepEqual(
+        runCalls.map((args) => Number(new URL(`https://api.github.test/${args[1]}`)
+            .searchParams.get("page"))),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    );
+    assert.equal(runCalls.some((args) => args.includes("--paginate") || args.includes("--slurp")), false);
+    assert.equal(restBudget.remaining, restBudget.reserve);
+});
+
+test("uses cached workflow history to bound repeated refresh cost", async () => {
+    const runs = Array.from({ length: 101 }, (_, index) => bootstrapWorkflowRun({
+        databaseId: 500 - index,
+    }));
+    const responses = bootstrapResponses({
+        "actions/workflows/42/runs?": ({ args }) => {
+            const page = Number(new URL(`https://api.github.test/?${args[1].split("?")[1]}`)
+                .searchParams.get("page"));
+            return { workflow_runs: runs.slice((page - 1) * 100, page * 100) };
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    });
+    const first = await bootstrapDiscoveryAdapter(responses).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+    const calls = [];
+    const second = await bootstrapDiscoveryAdapter(responses, calls).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:05:00.000Z",
+    });
+
+    assert.equal(second.sourceState.workflowRuns.data.length, 101);
+    assert.equal(calls.length, 4);
+    assert.equal(
+        calls.filter((args) => args[1].includes("/actions/workflows/42/runs?")).length,
+        1,
+    );
+});
+
+test("invalidates workflow-run cache when canonical workflow identity changes", async () => {
+    const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+    const replacementRuns = Array.from({ length: 101 }, (_, index) => bootstrapWorkflowRun({
+        databaseId: 900 - index,
+    }));
+    const calls = [];
+    const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows?": { workflows: [bootstrapWorkflow({ id: 43 })] },
+        "actions/workflows/43/runs?": ({ args }) => {
+            const page = Number(new URL(`https://api.github.test/?${args[1].split("?")[1]}`)
+                .searchParams.get("page"));
+            return { workflow_runs: replacementRuns.slice((page - 1) * 100, page * 100) };
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    }), calls).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:05:00.000Z",
+    });
+
+    assert.deepEqual(second.sourceState.workflowRuns.workflowIds, [43]);
+    assert.equal(second.sourceState.workflowRuns.data.length, 101);
+    assert.equal(
+        calls.filter((args) => args[1].includes("/actions/workflows/43/runs?")).length,
+        2,
+    );
+});
+
+test("fails closed on rate limits without reset metadata instead of busy retrying", async () => {
+    const delays = [];
+    const calls = [];
+    const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
+        "pulls?state=all": new Error("HTTP 429: API rate limit exceeded"),
+    }), calls, { sleep: async (milliseconds) => delays.push(milliseconds) });
+    const result = await adapter.discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.equal(result.sourceState.pullRequests.status, "unavailable");
+    assert.deepEqual(delays, []);
+    assert.equal(calls.filter((args) => args[1].includes("/pulls?")).length, 1);
+});
+
+test("honors primary and secondary rate-limit reset delays with a maximum bound", async () => {
+    for (const [message, expectedDelay] of [
+        ["HTTP 403: rate limit; X-RateLimit-Reset: 1789992003", 3000],
+        ["HTTP 429: secondary rate limit; Retry-After: 120", 5000],
+    ]) {
+        const delays = [];
+        const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
+            "pulls?state=all": {
+                attempts: [new Error(message), [bootstrapCastPullRequest()]],
+            },
+        }), [], {
+            sleep: async (milliseconds) => delays.push(milliseconds),
+            now: () => Date.parse("2026-09-21T12:00:00.000Z"),
+            maxRetryDelayMs: 5000,
+        });
+        const result = await adapter.discoverBootstrap({
+            repository: bootstrapRepository(),
+            previous: null,
+            attemptedAt: "2026-09-21T12:00:00.000Z",
+        });
+
+        assert.equal(result.sourceState.pullRequests.status, "fresh");
+        assert.deepEqual(delays, [expectedDelay]);
+    }
+});
+
+test("audits replace deleted and rewritten recent runs while retaining older history", async () => {
+    const deletedFailure = bootstrapWorkflowRun({
+        databaseId: 700,
+        conclusion: "failure",
+        updatedAt: "2026-09-21T11:59:30Z",
+    });
+    const rerunBefore = bootstrapWorkflowRun({
+        databaseId: 701,
+        conclusion: "failure",
+        updatedAt: "2026-09-21T11:59:00Z",
+    });
+    const olderHistory = bootstrapWorkflowRun({
+        databaseId: 1,
+        conclusion: "failure",
+        createdAt: "2026-09-20T12:00:00Z",
+        updatedAt: "2026-09-21T11:59:45Z",
+    });
+    const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [deletedFailure, rerunBefore, olderHistory],
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T05:00:00.000Z",
+    });
+    const currentWindow = Array.from({ length: 300 }, (_, index) => bootstrapWorkflowRun({
+        databaseId: index === 0 ? 701 : 1000 + index,
+        conclusion: "success",
+        updatedAt: new Date(Date.parse("2026-09-21T11:59:00Z") - index * 1000).toISOString(),
+    }));
+    const calls = [];
+    const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": ({ args }) => {
+            const page = Number(new URL(`https://api.github.test/?${args[1].split("?")[1]}`)
+                .searchParams.get("page"));
+            return { workflow_runs: currentWindow.slice((page - 1) * 100, page * 100) };
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    }), calls).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    const byId = new Map(second.sourceState.workflowRuns.data.map((run) => [
+        Number(run.id || run.databaseId),
+        run,
+    ]));
+    assert.equal(byId.has(700), false);
+    assert.equal(byId.get(701).conclusion, "success");
+    assert.equal(byId.has(1), true);
+    assert.equal(
+        calls.filter((args) => args[1].includes("/actions/workflows/42/runs?")).length,
+        3,
+    );
+});
+
+test("an exhausted first page immediately evicts absent cached runs", async () => {
+    const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [
+                bootstrapWorkflowRun({ databaseId: 801, conclusion: "failure" }),
+                bootstrapWorkflowRun({ databaseId: 802, conclusion: "success" }),
+            ],
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T11:55:00.000Z",
+    });
+    const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [bootstrapWorkflowRun({ databaseId: 802, conclusion: "success" })],
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.deepEqual(
+        second.sourceState.workflowRuns.data.map((run) => Number(run.id || run.databaseId)),
+        [802],
+    );
+});
+
+test("failed workflow-run audits preserve cached history as stale", async () => {
+    const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [bootstrapWorkflowRun({ conclusion: "failure" })],
+        },
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T05:00:00.000Z",
+    });
+    const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": new Error("HTTP 403: audit unavailable"),
+        "pulls?state=all": [],
+        "issues?state=all": [],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.equal(second.sourceState.workflowRuns.status, "stale");
+    assert.equal(second.sourceState.workflowRuns.data.length, 1);
+    assert.equal(second.bootstrap.status, first.bootstrap.status);
+    assert.equal(second.bootstrap.stale, true);
 });

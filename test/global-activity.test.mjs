@@ -39,10 +39,35 @@ const teamMarkdown = (name, role) => `
 | **${name}** | ${role} | \`.squad/agents/${name.toLowerCase()}.md\` | Active |
 `;
 
+function emptyBootstrapApi(args) {
+    if (args[1] === "rate_limit") {
+        return {
+            resources: {
+                core: {
+                    limit: 5000,
+                    remaining: 5000,
+                    reset: Math.floor(Date.parse("2099-09-21T14:00:00.000Z") / 1000),
+                },
+            },
+        };
+    }
+    if (args[1].includes("/actions/workflows?")) return { workflows: [] };
+    if (args[1].includes("/actions/workflows/")) return { workflow_runs: [] };
+    return [];
+}
+
+const adequateRestRateLimit = {
+    remaining: 5000,
+    resetAt: "2099-09-21T14:00:00.000Z",
+};
+
 function remoteActivityRunJson({ rosterByOid = {}, issues = [] } = {}) {
     const blobCalls = [];
     const runJson = async (args) => {
         if (args[0] === "api") {
+            if (!args[1].includes("/git/blobs/")) {
+                return emptyBootstrapApi(args);
+            }
             const oid = args[1].split("/").at(-1);
             blobCalls.push(oid);
             const configured = rosterByOid[oid];
@@ -369,6 +394,10 @@ test("records dependency-driven aggregate phase changes with dependency freshnes
     });
     const registry = {
         discoveredAt: new Date().toISOString(),
+        restRateLimit: {
+            remaining: 5000,
+            resetAt: "2099-09-21T14:00:00.000Z",
+        },
         repositories: [
             {
                 ...repository(frontendName),
@@ -445,6 +474,7 @@ test("dependency observation does not contaminate raw repository snapshots acros
     });
     const registry = {
         discoveredAt: new Date().toISOString(),
+        restRateLimit: adequateRestRateLimit,
         repositories: [
             {
                 ...repository(frontendName),
@@ -1207,6 +1237,10 @@ test("aggregate refresh skips excluded repositories and reuses the current snaps
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: {
+                remaining: 5000,
+                resetAt: "2099-09-21T14:00:00.000Z",
+            },
             repositories: [
                 { ...repository("octodemo/frontend"), owner: "octodemo", included: true },
                 { ...repository("octodemo/backend"), owner: "octodemo", included: false },
@@ -1239,6 +1273,7 @@ test("excluded cached activity preserves refresh timestamps and resumes after re
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [
                 {
                     ...repository(nameWithOwner),
@@ -1254,6 +1289,7 @@ test("excluded cached activity preserves refresh timestamps and resumes after re
             calls.push(args);
             if (args[0] === "repo") return repository(nameWithOwner);
             if (args[0] === "issue") return [issue(nameWithOwner, 58)];
+            if (args[0] === "api") return emptyBootstrapApi(args);
             return [];
         },
     });
@@ -1296,7 +1332,10 @@ test("excluded cached activity preserves refresh timestamps and resumes after re
     });
 
     assert.equal(refreshedActivity.refreshed, true);
-    assert.deepEqual(calls.map((args) => args[0]), ["repo", "issue", "pr", "run"]);
+    assert.deepEqual(
+        calls.map((args) => args[0]),
+        ["repo", "issue", "pr", "run", "api", "api", "api"],
+    );
     assert.equal(refreshed.goals.length, 1);
     assert.equal(refreshed.goals[0].id, `${nameWithOwner}#58`);
     assert.equal(refreshed.repositories[0].included, true);
@@ -1312,6 +1351,10 @@ test("current repository identity is resolved before excluded activity is refres
     const activity = await discoverCurrentRepositoryActivity({
         cwd: "/repo",
         registry: {
+            restRateLimit: {
+                remaining: 5000,
+                resetAt: "2099-09-21T14:00:00.000Z",
+            },
             repositories: [
                 { ...repository(nameWithOwner), owner: "octodemo", included: false },
             ],
@@ -1344,6 +1387,7 @@ test("forced discovery omission preserves the current repository exclusion", asy
     const global = new GitHubGlobalActivity({
         cwd: "/repo",
         registry: {
+            restRateLimit: adequateRestRateLimit,
             repositories: [
                 {
                     ...repository(nameWithOwner),
@@ -1389,6 +1433,7 @@ test("forced discovery omission preserves the current repository exclusion", asy
             if (args[0] === "repo") return repository(nameWithOwner);
             if (args[0] === "issue") return [remoteIssue];
             if (args[0] === "pr" || args[0] === "run") return [];
+            if (args[0] === "api") return emptyBootstrapApi(args);
             throw new Error(`Unexpected call: ${args.join(" ")}`);
         },
     });
@@ -1422,7 +1467,10 @@ test("forced discovery omission preserves the current repository exclusion", asy
         forceAll: true,
     });
 
-    assert.deepEqual(calls.map((args) => args[0]), ["api", "repo", "issue", "pr", "run"]);
+    assert.deepEqual(
+        calls.map((args) => args[0]),
+        ["api", "repo", "issue", "pr", "run", "api", "api", "api"],
+    );
     assert.equal(global.registry.rosters[nameWithOwner].status, "fresh");
     assert.equal(global.registry.rosters[nameWithOwner].members.length, 1);
     assert.equal(refreshed.goals[0].owner.name, "Frontend");
@@ -1480,6 +1528,7 @@ test("loads and reuses a non-current repository roster for squad ownership", asy
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/backend"),
                 owner: "octodemo",
@@ -1516,6 +1565,7 @@ test("reloads a remote roster when its discovered blob OID changes", async () =>
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/backend"),
                 owner: "octodemo",
@@ -1544,6 +1594,7 @@ test("surfaces a malformed remote roster and keeps Unknown fallback", async () =
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/backend"),
                 included: true,
@@ -1571,6 +1622,7 @@ test("surfaces a missing remote roster without downloading and uses assignee fal
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/backend"),
                 included: true,
@@ -1582,6 +1634,7 @@ test("surfaces a missing remote roster without downloading and uses assignee fal
             calls.push(args);
             if (args[0] === "repo") return repository("octodemo/backend");
             if (args[0] === "issue") return [remoteIssue];
+            if (args[0] === "api") return emptyBootstrapApi(args);
             return [];
         },
     });
@@ -1590,7 +1643,10 @@ test("surfaces a missing remote roster without downloading and uses assignee fal
 
     assert.equal(aggregate.goals[0].owner.name, "octocat");
     assert.equal(aggregate.goals[0].owner.source, "assignee");
-    assert.equal(calls.filter((args) => args[0] === "api").length, 0);
+    assert.equal(
+        calls.filter((args) => args[0] === "api" && args[1].includes("/git/blobs/")).length,
+        0,
+    );
     assert.match(aggregate.errors[0].message, /does not contain .squad\/team.md/);
 });
 
@@ -1612,6 +1668,7 @@ test("preserves a cached valid roster and retries a changed blob after a source 
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/backend"),
                 included: true,
@@ -1669,6 +1726,7 @@ test("partial refresh retains the last fully successful timestamp and later reco
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/frontend"),
                 owner: "octodemo",
@@ -1681,6 +1739,7 @@ test("partial refresh retains the last fully successful timestamp and later reco
             if (args[0] === "repo") return repository("octodemo/frontend");
             if (args[0] === "issue") return [issue("octodemo/frontend", 57)];
             if (args[0] === "pr" && failPullRequests) throw new Error("temporary PR failure");
+            if (args[0] === "api") return emptyBootstrapApi(args);
             return [];
         },
     });
@@ -1728,6 +1787,7 @@ test("stale current snapshots never advance successful refresh time and later re
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/frontend"),
                 owner: "octodemo",
@@ -1789,6 +1849,7 @@ test("background refresh retries stale workflow sources for inactive repositorie
         cwd: "/repo",
         registry: {
             discoveredAt: new Date().toISOString(),
+            restRateLimit: adequateRestRateLimit,
             repositories: [{
                 ...repository("octodemo/frontend"),
                 owner: "octodemo",
@@ -1801,7 +1862,11 @@ test("background refresh retries stale workflow sources for inactive repositorie
             calls.push(args);
             if (args[0] === "repo") return repository("octodemo/frontend");
             if (args[0] === "issue") return [issue("octodemo/frontend", 57, "", "CLOSED")];
-            if (args[0] === "api") return { total_count: 0, jobs: [] };
+            if (args[0] === "api") {
+                return args.some((arg) => String(arg).includes("filter=latest"))
+                    ? { total_count: 0, jobs: [] }
+                    : emptyBootstrapApi(args);
+            }
             return [];
         },
     });

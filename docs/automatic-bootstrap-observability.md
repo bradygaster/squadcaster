@@ -216,6 +216,56 @@ If comment retrieval fails after the issue and Cast pull request are observed,
 the last complete classification is retained. Without a prior classification,
 the state is unknown rather than `partial`.
 
+The repository adapter implements this contract with paginated REST reads:
+
+- workflow definitions and default-branch workflow-run history
+- all-state pull requests and issues, with pull requests removed from the
+  issue endpoint's mixed response
+- comments only after the shared classifier selects one exact canonical
+  research issue
+
+Candidate collection requests use `per_page=100`, `--paginate`, and `--slurp`;
+a capped search result is never used to prove uniqueness. Workflow runs use the
+canonical workflow-specific endpoint without a branch filter, avoiding
+GitHub's 1,000-result cap for filtered run queries. The first refresh exhausts
+that history manually. Later refreshes stop when the latest-first pages overlap
+the cached run IDs, while a periodic three-page audit rechecks recent history.
+Changing the workflow identity or default branch invalidates the run cache and
+forces another exhaustive read. A short final page is an authoritative complete
+history and evicts absent cached runs immediately. A bounded audit replaces its
+newest-by-creation window, including deletions and reruns, while retaining only
+cached runs created before the oldest audited page boundary.
+
+A normal refresh performs four endpoint traversals when no unique research
+issue exists and five when its comments must be hydrated; repeated refreshes
+normally read one workflow-run page. Historical failed attempts stay cached
+after retry or success. Timeout, connection-reset, and 5xx failures receive
+bounded exponential retries. Primary and secondary rate limits retry only when
+GitHub supplies `Retry-After` or `X-RateLimit-Reset` timing, with a maximum wait;
+otherwise the source fails closed and retains its prior cache instead of busy
+retrying or becoming an authoritative empty result. Permission and structural
+failures also remain visible without retry loops.
+
+The repository snapshot exposes the classifier result as `bootstrap`. Its
+cached discovery inputs are retained independently under:
+
+```text
+sourceState.bootstrap.workflows
+sourceState.bootstrap.workflowRuns
+sourceState.bootstrap.pullRequests
+sourceState.bootstrap.issues
+sourceState.bootstrap.comments
+```
+
+Each entry uses the existing `{ data, fetchedAt, status, error }` source
+contract. Workflow-run cache entries additionally record the workflow IDs,
+default branch, and last bounded-audit timestamp used for invalidation. A
+successful source can advance its own cache while another remains stale. The
+adapter passes only freshness metadata to the pure classifier and keeps the raw
+cached evidence for the next refresh. The classifier's guarded
+`lastClassified` state is therefore the sole authority for last-complete
+retention; discovery does not duplicate or weaken its precedence rules.
+
 ## Renderer direction
 
 The dashboard should add:
