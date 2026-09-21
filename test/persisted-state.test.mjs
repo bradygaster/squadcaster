@@ -92,6 +92,63 @@ test("coerces malformed schema-v2 activity into renderer-safe shapes", () => {
     assert.deepEqual(normalized.activity.goals[0].workflowRuns, [{ workflow: "Squad" }]);
 });
 
+function containsAgentIdentity(value) {
+    if (Array.isArray(value)) return value.some(containsAgentIdentity);
+    if (!value || typeof value !== "object") return false;
+    return Object.entries(value).some(
+        ([key, nested]) => key === "agentIdentity" || containsAgentIdentity(nested),
+    );
+}
+
+test("drops unvalidated stable agent identity recursively from persisted activity", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            ...emptyActivity(),
+            agentIdentity: { status: "resolved" },
+            goals: [{
+                id: "octodemo/demo#12",
+                owner: {
+                    id: "octocat",
+                    name: "octocat",
+                    source: "assignee",
+                    agentIdentity: { status: "resolved" },
+                },
+                issue: {
+                    number: 12,
+                    agentIdentity: { status: "resolved" },
+                },
+                agentIdentity: {
+                    status: "resolved",
+                    record: {
+                        schemaVersion: 1,
+                        id: "candidate-agent",
+                        displayName: "Candidate",
+                    },
+                },
+                pullRequests: [{
+                    number: 44,
+                    agentIdentity: { status: "resolved" },
+                    reviews: [{
+                        actor: {
+                            login: "octocat",
+                            agentIdentity: { status: "resolved" },
+                        },
+                    }],
+                }],
+                workflowRuns: [{
+                    id: 77,
+                    agentIdentity: { status: "resolved" },
+                }],
+            }],
+        },
+    });
+
+    assert.equal(containsAgentIdentity(normalized), false);
+    assert.equal(normalized.activity.goals[0].owner.name, "octocat");
+    assert.equal(normalized.activity.goals[0].pullRequests[0].reviews[0].actor.login, "octocat");
+    assert.equal(normalized.activity.goals[0].workflowRuns[0].id, 77);
+});
+
 test("recursively drops unvalidated implementation session provenance from persisted goals", () => {
     const normalized = normalizePersistedState({
         activity: {

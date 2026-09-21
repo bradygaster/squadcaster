@@ -111,6 +111,9 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /No latest reviews reported/);
     assert.match(html, /Review requests unavailable/);
     assert.match(html, /No pending review requests/);
+    assert.match(html, /Owners:/);
+    assert.match(html, /No observed owners/);
+    assert.doesNotMatch(html, /Agents:|No assigned agents/);
     assert.match(html, /Observed correlation/);
     assert.match(html, /Inferred correlation/);
     assert.match(html, /last fully synced/);

@@ -197,6 +197,43 @@ test("distinguishes successful empty review connections from unavailable legacy 
     assert.equal(legacy.reviewRequests, null);
 });
 
+test("does not infer stable agent identity from owners or GitHub participants", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        members: [{ id: "octocat", name: "octocat", role: "Reviewer" }],
+        issues: [issue({
+            body: "",
+            labels: [{ name: "squad" }],
+            assignees: [{ login: "octocat" }],
+            author: { login: "octocat" },
+        })],
+        pullRequests: [{
+            number: 44,
+            title: "Implement #12",
+            body: "Closes #12",
+            state: "OPEN",
+            headRefName: "squad/implement-12-octocat",
+            author: { login: "octocat" },
+            latestReviews: [{
+                author: { login: "octocat", __typename: "User" },
+                state: "APPROVED",
+            }],
+            reviewRequests: [{ login: "octocat", __typename: "User" }],
+        }],
+    });
+
+    const goal = snapshot.goals[0];
+    assert.deepEqual(goal.owner, {
+        id: "octocat",
+        name: "octocat",
+        source: "assignee",
+    });
+    assert.equal(goal.pullRequests[0].reviews[0].actor.login, "octocat");
+    assert.equal(goal.pullRequests[0].reviewRequests[0].actor.login, "octocat");
+    assert.equal("agentIdentity" in goal, false);
+    assert.equal("avatar" in goal.owner, false);
+});
+
 test("surfaces failed automation before review state", () => {
     const snapshot = buildActivitySnapshot({
         repository,

@@ -1120,9 +1120,11 @@ export function renderHtml() {
 
     function stageHtml(phase, goals) {
       const selected = expandedStage === phase;
-      const owners = [...new Map(goals.map(goal => {
-        const name = goal.owner?.name || "Unknown";
-        return [goal.owner?.id || name, name];
+      const owners = [...new Map(goals.flatMap(goal => {
+        const owner = goal.owner;
+        const name = String(owner?.name || "").trim();
+        if (!name || name.toLowerCase() === "unknown" || owner?.source === "unknown") return [];
+        return [[owner?.id || name, name]];
       })).values()];
       const visibleOwners = owners.slice(0, 2);
       return \`
@@ -1133,7 +1135,7 @@ export function renderHtml() {
               <strong>\${esc(phase)}</strong>
             </span>
             <span class="stage-load"><b>\${goals.length}</b><span>\${goals.length === 1 ? "goal" : "goals"}</span></span>
-            <span class="stage-agents" aria-label="\${owners.length ? "Agents: " + esc(owners.join(", ")) : "No assigned agents"}">
+            <span class="stage-agents" aria-label="\${owners.length ? "Owners: " + esc(owners.join(", ")) : "No observed owners"}">
               \${visibleOwners.map((owner, index) => \`
                 <span class="agent-chip tone-\${index % 4}" title="\${esc(owner)}" aria-hidden="true">\${esc(initials(owner))}</span>
               \`).join("")}

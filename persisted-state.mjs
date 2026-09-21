@@ -34,36 +34,36 @@ function normalizeRepository(repository) {
     };
 }
 
-function isUnvalidatedSessionProvenanceField(key) {
-    return String(key).replace(/[^a-z0-9]/gi, "").toLowerCase().includes("session");
+function isUnvalidatedProvenanceField(key) {
+    const normalized = String(key).replace(/[^a-z0-9]/gi, "").toLowerCase();
+    return normalized === "agentidentity" || normalized.includes("session");
 }
 
-function withoutUnvalidatedSessionProvenance(value) {
-    if (Array.isArray(value)) return value.map(withoutUnvalidatedSessionProvenance);
+function withoutUnvalidatedProvenance(value) {
+    if (Array.isArray(value)) return value.map(withoutUnvalidatedProvenance);
     if (!isRecord(value)) return value;
     return Object.fromEntries(
         Object.entries(value)
-            .filter(([key]) => !isUnvalidatedSessionProvenanceField(key))
+            .filter(([key]) => !isUnvalidatedProvenanceField(key))
             .map(([key, nestedValue]) => [
                 key,
-                withoutUnvalidatedSessionProvenance(nestedValue),
+                withoutUnvalidatedProvenance(nestedValue),
             ]),
     );
 }
 
 function normalizeGoal(goal) {
-    const supportedGoal = withoutUnvalidatedSessionProvenance(goal);
     return {
-        ...supportedGoal,
-        repository: isRecord(supportedGoal.repository)
-            ? normalizeRepository(supportedGoal.repository)
+        ...goal,
+        repository: isRecord(goal.repository)
+            ? normalizeRepository(goal.repository)
             : {},
-        issue: isRecord(supportedGoal.issue) ? supportedGoal.issue : {},
-        owner: isRecord(supportedGoal.owner) ? supportedGoal.owner : null,
-        blockers: recordArray(supportedGoal.blockers),
-        evidence: recordArray(supportedGoal.evidence),
-        pullRequests: recordArray(supportedGoal.pullRequests),
-        workflowRuns: recordArray(supportedGoal.workflowRuns),
+        issue: isRecord(goal.issue) ? goal.issue : {},
+        owner: isRecord(goal.owner) ? goal.owner : null,
+        blockers: recordArray(goal.blockers),
+        evidence: recordArray(goal.evidence),
+        pullRequests: recordArray(goal.pullRequests),
+        workflowRuns: recordArray(goal.workflowRuns),
     };
 }
 
@@ -84,6 +84,6 @@ export function normalizePersistedState(value) {
     const source = isRecord(value) ? value : {};
     return {
         version: 3,
-        activity: normalizeActivity(source.activity),
+        activity: normalizeActivity(withoutUnvalidatedProvenance(source.activity)),
     };
 }

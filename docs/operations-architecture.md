@@ -19,6 +19,12 @@ name and an observed GraphQL type when available; it is not treated as Squad
 agent identity. A successful response with no entries is `[]`; legacy or
 unavailable review connections are `null`.
 
+Stable Squad agent identity is intentionally absent. The consumer boundary,
+candidate-field audit, future schema, and fail-closed cache and renderer
+semantics are defined in
+[`agent-identity-consumer-contract.md`](agent-identity-consumer-contract.md).
+Goal owners, GitHub participants, and roster entries remain separate concepts.
+
 The supported lifecycle is `queued`, `researching`, `implementing`, `reviewing`,
 `blocked`, `completed`, and `failed`. GitHub state has precedence over inferred
 planning state: closed or merged work is complete; unresolved dependencies are
@@ -153,5 +159,7 @@ the authoritative state model, evidence mapping, and renderer decision.
   the last complete successful synchronization. Partial or stale snapshots do
   not advance the successful timestamp.
 - Unknown relationships are not promoted to observed facts.
+- Unvalidated stable agent identity fields are discarded from persisted
+  activity rather than restored or inferred.
 - Candidate implementation-session provenance fields are discarded from
   persisted activity until the producer contract is validated.
