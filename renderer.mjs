@@ -458,6 +458,35 @@ export function renderHtml() {
       color: var(--muted);
       font-size: 11px;
     }
+    .attention-panel {
+      overflow: hidden;
+      margin-top: 14px;
+      border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+      border-radius: 7px;
+      background: var(--bg);
+    }
+    .attention-lanes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 14px;
+    }
+    .attention-count { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-weight: 600; }
+    .attention-lane {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+    }
+    .attention-lane h3 {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--danger);
+      text-transform: capitalize;
+    }
+    .attention-goals { display: grid; gap: 8px; margin-top: 10px; }
     .stage-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
     .stage-detail-heading h3 { text-transform: capitalize; }
     .stage-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 9px; margin-top: 12px; }
@@ -740,6 +769,7 @@ export function renderHtml() {
       }
       .run-row { grid-template-columns: 18px minmax(0, 1fr); }
       .run-side { grid-column: 2; min-width: 0; text-align: left; }
+      .attention-lanes { grid-template-columns: 1fr; }
     }
     @media (max-width: 1040px) and (min-width: 901px) {
       .pipeline {
@@ -975,8 +1005,21 @@ export function renderHtml() {
       const watching = goals
         ? \`Watching \${goals} goal\${goals === 1 ? "" : "s"} across \${repositories} repo\${repositories === 1 ? "" : "s"}\`
         : \`Watching \${repositories} repo\${repositories === 1 ? "" : "s"}\`;
-      const synced = state.activity?.fetchedAt ? \` · synced \${formatTime(state.activity.fetchedAt)}\` : "";
-      repoHeader.innerHTML = \`<span>\${esc(watching)}\${esc(synced)}</span><span class="mode">\${active} active</span>\`;
+      const activity = state.activity || {};
+      const attemptedAt = activity.lastAttemptedRefresh || activity.fetchedAt;
+      const successfulAt = activity.lastSuccessfulRefresh;
+      let refreshStatus = "";
+      if (activity.partial || activity.stale) {
+        if (attemptedAt) refreshStatus += \` · refresh attempted \${formatTime(attemptedAt)}\`;
+        refreshStatus += successfulAt
+          ? \` · last fully synced \${formatTime(successfulAt)}\`
+          : " · no complete sync yet";
+      } else if (successfulAt) {
+        refreshStatus = \` · synced \${formatTime(successfulAt)}\`;
+      } else if (attemptedAt) {
+        refreshStatus = \` · refresh attempted \${formatTime(attemptedAt)}\`;
+      }
+      repoHeader.innerHTML = \`<span>\${esc(watching)}\${esc(refreshStatus)}</span><span class="mode">\${active} active</span>\`;
     }
 
     function formatTime(value) {
@@ -1120,6 +1163,32 @@ export function renderHtml() {
             \${visible.items.length ? visible.items.map(goal => goalTriggerHtml(goal)).join("") : '<p class="help">No visible goals are in this stage.</p>'}
           </div>
           \${visible.hidden ? \`<p class="collection-note">Showing the first \${visible.items.length} of \${visible.total} matching goals. Narrow the goal filters to inspect the remainder.</p>\` : ""}
+        </section>\`;
+    }
+
+    function needsAttentionHtml(goals) {
+      const attentionGoals = goals.filter(goal => goal.phase === "blocked" || goal.phase === "failed");
+      if (!attentionGoals.length) return "";
+      return \`
+        <section class="attention-panel" aria-labelledby="attention-title">
+          <div class="panel-header">
+            <div><h2 id="attention-title">Needs attention</h2><p>Blocked and failed goals remain directly inspectable outside the forward lifecycle.</p></div>
+            <span class="attention-count">\${attentionGoals.length}</span>
+          </div>
+          <div class="attention-lanes">
+            \${["blocked", "failed"].map(phase => {
+              const phaseGoals = attentionGoals.filter(goal => goal.phase === phase);
+              return \`
+                <section class="attention-lane" aria-labelledby="attention-\${phase}">
+                  <h3 id="attention-\${phase}"><span>\${phase}</span><span>\${phaseGoals.length}</span></h3>
+                  <div class="attention-goals">
+                    \${phaseGoals.length
+                      ? phaseGoals.map(goal => goalTriggerHtml(goal, true)).join("")
+                      : \`<p class="help">No visible \${phase} goals.</p>\`}
+                  </div>
+                </section>\`;
+            }).join("")}
+          </div>
         </section>\`;
     }
 
@@ -1487,6 +1556,7 @@ export function renderHtml() {
                 \${stageDetailHtml(goals)}
                 <div class="pipeline-footer"><span>Select a stage to inspect its goals. Blocked and failed work stays separate.</span><span>\${goals.length} visible</span></div>
               </section>
+              \${needsAttentionHtml(goals)}
               \${activeWorkflowRunsHtml(goals)}
               \${goals.length ? "" : \`
                 <section class="empty" style="margin-top:14px">

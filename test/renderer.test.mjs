@@ -13,8 +13,8 @@ test("renders the read-only mission control prototype surfaces", () => {
     assert.doesNotMatch(html, />Squadcaster</);
     assert.doesNotMatch(html, />SC</);
     assert.match(html, /Factory floor/);
-    assert.match(html, />Activity</);
     assert.match(html, /Needs attention/);
+    assert.match(html, />Activity</);
     assert.match(html, /role="dialog"/);
     assert.match(html, /Browse goals/);
     assert.doesNotMatch(html, /\b(?:Watch|Fork|Star|Credits)\b|percent complete/i);
@@ -106,6 +106,7 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.doesNotMatch(html, /runs today/);
     assert.match(html, /Some GitHub data is from an earlier sync/);
     assert.match(html, /last fully synced/);
+    assert.match(html, /refresh attempted/);
     assert.doesNotMatch(html, /Last successful snapshot/);
     assert.match(html, /goal-drawer, \.runs-panel/);
     assert.match(html, /keyedDisclosure/);

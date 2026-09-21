@@ -90,6 +90,8 @@ function fixtureState() {
         activity: {
             currentRepository: "octodemo/frontend",
             fetchedAt: "2026-09-20T18:00:00Z",
+            lastAttemptedRefresh: "2026-09-20T18:00:00Z",
+            lastSuccessfulRefresh: "2026-09-20T18:00:00Z",
             repositories: [
                 {
                     nameWithOwner: "octodemo/frontend",
@@ -344,6 +346,34 @@ test("supports stage expansion and a contained modal focus cycle", async ({ page
     await expect(dialog).toHaveCount(0);
     await expect(goalTrigger).toBeFocused();
     await expect(page.locator("body")).not.toHaveCSS("overflow", "hidden");
+});
+
+test("opens blocked goals from the Needs attention section", async ({ page }) => {
+    await page.getByText("Browse goals").click();
+    await page.locator('[data-action="phase-filter"][data-phase="blocked"]').click();
+
+    await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible();
+    const blockedGoal = page.getByRole("button", { name: /Resolve upstream contract blocker/ });
+    await expect(blockedGoal).toBeVisible();
+    await blockedGoal.click();
+
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog")).toContainText("Resolve upstream contract blocker");
+});
+
+test("labels partial refresh attempts separately from successful syncs", async ({ page }) => {
+    await expect(page.locator("#repo-header")).toContainText(/synced/);
+
+    const partialState = fixture.state();
+    partialState.activity.fetchedAt = "2026-09-21T20:00:00Z";
+    partialState.activity.lastAttemptedRefresh = "2026-09-21T20:00:00Z";
+    partialState.activity.lastSuccessfulRefresh = "2026-09-20T18:00:00Z";
+    partialState.activity.partial = true;
+    partialState.activity.stale = true;
+    fixture.emit(partialState);
+
+    await expect(page.locator("#repo-header")).toContainText("refresh attempted");
+    await expect(page.locator("#repo-header")).toContainText("last fully synced");
 });
 
 test("preserves filters, expansion, and drawer state across live rerenders", async ({ page }) => {
