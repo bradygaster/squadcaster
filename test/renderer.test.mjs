@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
     boundedItems,
+    compareFeedItems,
     describeActivityDelta,
+    pagedItems,
     renderHtml,
+    semanticFeedItems,
 } from "../renderer.mjs";
 
 test("renders the read-only mission control prototype surfaces", () => {
@@ -43,6 +46,29 @@ test("bounds dense collections without changing the authoritative total", () => 
         items: ["a", "b"],
         total: 4,
         hidden: 2,
+    });
+});
+
+test("paginates and semantically deduplicates dense feeds", () => {
+    const items = [
+        { kind: "issue", title: "Beta", url: "/b", timestamp: "2026-09-20T12:00:00Z" },
+        { kind: "issue", title: "Alpha", url: "/a", timestamp: "2026-09-20T12:00:00Z" },
+        { kind: "issue", title: "Alpha", url: "/a", timestamp: "2026-09-20T12:00:00Z" },
+        { kind: "workflow", title: "Missing", url: "/missing", timestamp: null },
+    ];
+    const deduped = semanticFeedItems(items);
+
+    assert.deepEqual(deduped.map((item) => item.title), ["Alpha", "Beta", "Missing"]);
+    assert.equal(compareFeedItems(deduped[0], deduped[1]), -1);
+    assert.deepEqual(pagedItems(deduped, 1, 2), {
+        items: [deduped[2]],
+        total: 3,
+        page: 1,
+        pages: 2,
+        start: 3,
+        end: 3,
+        hasNewer: true,
+        hasOlder: false,
     });
 });
 
@@ -99,9 +125,10 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /data-scroll-key="pipeline"/);
     assert.match(html, /data-scroll-key="goal-drawer"/);
     assert.match(html, /data-state-key="goal-filters"/);
-    assert.match(html, /data-state-key="activity-more"/);
     assert.match(html, /min-width: 760px/);
-    assert.match(html, /Showing the newest/);
+    assert.match(html, /Filter activity by evidence kind/);
+    assert.match(html, /Older evidence/);
+    assert.match(html, /Older workflows/);
     assert.match(html, /active workflow runs/);
     assert.doesNotMatch(html, /runs today/);
     assert.match(html, /Some GitHub data is from an earlier sync/);
@@ -121,4 +148,6 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.doesNotMatch(html, /Last successful snapshot/);
     assert.match(html, /goal-drawer, \.runs-panel/);
     assert.match(html, /keyedDisclosure/);
+    assert.match(html, /-webkit-line-clamp: 2/);
+    assert.match(html, /overflow-wrap: anywhere/);
 });

@@ -561,11 +561,13 @@ test("preserves keyed scroll state while bounding production-scale collections",
     fixture.emit(stressState);
 
     await expect(page.locator(".evidence-count")).toHaveText("4200");
-    await expect(page.locator(".activity-item")).toHaveCount(100);
-    await expect(page.getByText("Showing the newest 100 of 4200 evidence events.")).toBeVisible();
-    const olderActivity = page.locator("details.activity-more");
-    await expect(olderActivity.getByText("Show 88 older events")).toBeVisible();
-    await olderActivity.locator("summary").click();
+    await expect(page.locator(".activity-item")).toHaveCount(20);
+    await expect(page.getByText("Showing 1–20 of 4200 evidence events.")).toBeVisible();
+    const olderActivity = page.getByRole("button", { name: "Older evidence" });
+    await olderActivity.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Showing 21–40 of 4200 evidence events.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Newer evidence" })).toBeEnabled();
 
     const pipeline = page.getByRole("region", { name: "Factory floor stages" });
     await pipeline.focus();
@@ -574,14 +576,16 @@ test("preserves keyed scroll state while bounding production-scale collections",
     expect(pipelineScrollLeft).toBeGreaterThan(0);
 
     fixture.emit(stressState);
-    await expect(olderActivity).toHaveAttribute("open", "");
+    await expect(page.getByText("Showing 21–40 of 4200 evidence events.")).toBeVisible();
     await expect(pipeline).toHaveJSProperty("scrollLeft", pipelineScrollLeft);
 
     await page.locator('[data-action="expand-stage"][data-phase="implementing"]').click();
     await expect(page.locator(".stage-goals .goal-trigger")).toHaveCount(80);
     await expect(page.getByText("Showing the first 80 of 140 matching goals.")).toBeVisible();
     await expect(page.locator(".run-row")).toHaveCount(12);
-    await expect(page.getByText("Showing the newest 12 of 280 active workflow runs.")).toBeVisible();
+    await expect(page.getByText("Showing 1–12 of 280 active workflow runs.")).toBeVisible();
+    await page.getByRole("button", { name: "Older workflows" }).click();
+    await expect(page.getByText("Showing 13–24 of 280 active workflow runs.")).toBeVisible();
     const stageScrollLeft = await pipeline.evaluate(element => element.scrollLeft);
 
     await page.locator(".stage-goals .goal-trigger").first().click();
@@ -602,6 +606,101 @@ test("preserves keyed scroll state while bounding production-scale collections",
     await expect(page.locator(".topbar")).toHaveAttribute("inert", "");
     await expect(drawerBody).toHaveJSProperty("scrollTop", drawerScrollTop);
     await expect(pipeline).toHaveJSProperty("scrollLeft", stageScrollLeft);
+});
+
+test("filters evidence kinds and preserves bounded pages across repeated refreshes", async ({ page }) => {
+    const stressState = createStressCanvasState();
+    fixture.emit(stressState);
+
+    const activity = page.locator(".activity-panel");
+    await activity.getByRole("button", { name: "Checks" }).click();
+    const checksFilter = activity.getByRole("button", { name: "Checks" });
+    await expect(checksFilter).toHaveAttribute("aria-pressed", "true");
+    await expect(activity.locator(".activity-item")).toHaveCount(20);
+    await expect(activity.getByText(/of 700 check events/)).toBeVisible();
+
+    await checksFilter.focus();
+    fixture.emit(structuredClone(stressState));
+    await expect(checksFilter).toBeFocused();
+
+    await activity.getByRole("button", { name: "Older evidence" }).click();
+    await expect(activity.getByText("Showing 21–40 of 700 check events.")).toBeVisible();
+
+    fixture.emit(structuredClone(stressState));
+    fixture.emit(structuredClone(stressState));
+
+    await expect(activity.getByText("Showing 21–40 of 700 check events.")).toBeVisible();
+    await expect(activity.locator(".activity-item")).toHaveCount(20);
+});
+
+test("deduplicates refresh evidence and deterministically orders equal or missing timestamps", async ({ page }) => {
+    const nextState = fixture.state();
+    const target = nextState.activity.goals[0];
+    target.evidence = [
+        {
+            kind: "issue",
+            title: "Beta equal timestamp",
+            timestamp: "2026-09-20T12:00:00Z",
+            url: "https://example.test/beta",
+        },
+        {
+            kind: "issue",
+            title: "Alpha equal timestamp",
+            timestamp: "2026-09-20T12:00:00Z",
+            url: "https://example.test/alpha",
+        },
+        {
+            kind: "issue",
+            title: "Alpha equal timestamp",
+            timestamp: "2026-09-20T12:00:00Z",
+            url: "https://example.test/alpha",
+        },
+        {
+            kind: "workflow",
+            title: "Missing timestamp",
+            timestamp: null,
+            url: "https://example.test/missing",
+        },
+    ];
+    for (const goalItem of nextState.activity.goals.slice(1)) goalItem.evidence = [];
+
+    fixture.emit(nextState);
+    fixture.emit(structuredClone(nextState));
+
+    const titles = await page.locator(".activity-item a").allTextContents();
+    expect(titles).toEqual([
+        "Alpha equal timestamp",
+        "Beta equal timestamp",
+        "Missing timestamp",
+    ]);
+});
+
+test("wraps dense workflow identifiers without viewport overflow", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    const stressState = createStressCanvasState();
+    for (const item of stressState.activity.goals) item.phase = "implementing";
+    fixture.emit(stressState);
+
+    const dimensions = await page.locator(".run-row").first().evaluate((row) => {
+        const name = row.querySelector(".run-name");
+        const repository = row.querySelector(".run-repository");
+        const branch = row.querySelector(".run-branch");
+        return {
+            documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            nameLines: Math.round(name.getBoundingClientRect().height / parseFloat(getComputedStyle(name).lineHeight)),
+            repositoryWrap: getComputedStyle(repository).overflowWrap,
+            branchWrap: getComputedStyle(branch).overflowWrap,
+            fullName: name.textContent,
+            title: name.getAttribute("title"),
+        };
+    });
+
+    expect(dimensions.documentOverflow).toBeLessThanOrEqual(0);
+    expect(dimensions.nameLines).toBeGreaterThanOrEqual(1);
+    expect(dimensions.nameLines).toBeLessThanOrEqual(2);
+    expect(dimensions.repositoryWrap).toBe("anywhere");
+    expect(dimensions.branchWrap).toBe("anywhere");
+    expect(dimensions.title).toBe(dimensions.fullName);
 });
 
 test("announces refresh completion without replacing the persistent status region", async ({ page }) => {

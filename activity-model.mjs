@@ -25,6 +25,48 @@ function timestamp(value) {
     return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
+function stableIdentity(value) {
+    return [
+        value?.repository?.nameWithOwner,
+        value?.goal?.id,
+        value?.kind,
+        value?.id,
+        value?.number,
+        value?.workflow,
+        value?.branch,
+        value?.name,
+        value?.title,
+        value?.url,
+        value?.status,
+        value?.conclusion,
+    ].map((part) => text(part, 500).toLowerCase()).join("|");
+}
+
+export function compareNewestFirst(left, right) {
+    const leftTimestamp = timestamp(
+        left?.timestamp || left?.updatedAt || left?.createdAt || left?.mergedAt,
+    );
+    const rightTimestamp = timestamp(
+        right?.timestamp || right?.updatedAt || right?.createdAt || right?.mergedAt,
+    );
+    if (leftTimestamp && rightTimestamp && leftTimestamp !== rightTimestamp) {
+        return rightTimestamp.localeCompare(leftTimestamp);
+    }
+    if (leftTimestamp !== rightTimestamp) return leftTimestamp ? -1 : 1;
+    return stableIdentity(left).localeCompare(stableIdentity(right));
+}
+
+export function dedupeSemantic(items, identity) {
+    const values = Array.isArray(items) ? items : [];
+    const keyFor = typeof identity === "function" ? identity : stableIdentity;
+    const unique = new Map();
+    for (const value of [...values].sort(compareNewestFirst)) {
+        const key = text(keyFor(value), 2000).toLowerCase();
+        if (!unique.has(key)) unique.set(key, value);
+    }
+    return [...unique.values()].sort(compareNewestFirst);
+}
+
 function normalizedSourceState(value, data, fetchedAt) {
     const status = ["fresh", "stale", "unavailable", "skipped"].includes(value?.status)
         ? value.status
@@ -242,8 +284,11 @@ function normalizeReviewRequest(request) {
 }
 
 function normalizePullRequest(pullRequest) {
-    const checks = (Array.isArray(pullRequest?.statusCheckRollup) ? pullRequest.statusCheckRollup : [])
-        .map(normalizeCheck);
+    const checks = dedupeSemantic(
+        (Array.isArray(pullRequest?.statusCheckRollup) ? pullRequest.statusCheckRollup : [])
+            .map(normalizeCheck),
+        (check) => `${check.name}|${check.url}|${check.status}`,
+    );
     const reviews = Array.isArray(pullRequest?.latestReviews)
         ? pullRequest.latestReviews.map(normalizeReview)
         : null;
@@ -303,7 +348,7 @@ function phaseFor({ issue, artifacts, pullRequests, workflowRuns, blockers, igno
         return "completed";
     }
     const latestRuns = [...workflowRuns]
-        .sort((left, right) => String(right.updatedAt || right.createdAt).localeCompare(String(left.updatedAt || left.createdAt)))
+        .sort(compareNewestFirst)
         .filter((run, index, runs) =>
             runs.findIndex((candidate) => `${candidate.workflow}:${candidate.branch}` === `${run.workflow}:${run.branch}`) === index);
     const currentRuns = latestRuns.filter((run) => run.status !== "completed");
@@ -391,7 +436,10 @@ function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner, pullRe
             });
         }
     }
-    return evidence.sort((left, right) => String(right.timestamp).localeCompare(String(left.timestamp)));
+    return dedupeSemantic(
+        evidence,
+        (item) => `${item.kind}|${item.title}|${item.url}`,
+    );
 }
 
 export function buildActivitySnapshot({
@@ -415,16 +463,33 @@ export function buildActivitySnapshot({
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
     const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
     const repositoryKey = repositoryName.toLowerCase();
-    const normalizedPullRequests = pullRequests.map((pullRequest) => ({
-        source: pullRequest,
-        value: normalizePullRequest(pullRequest),
-        issueLinks: linkedIssueLinks(pullRequest, repositoryKey),
-    }));
-    const normalizedRuns = workflowRuns.map((run) => ({
-        source: run,
-        value: normalizeRun(run),
-        issueNumbers: linkedRunNumbers(run),
-    }));
+    const normalizedPullRequests = dedupeSemantic(
+        pullRequests.map((pullRequest) => ({
+            source: pullRequest,
+            value: normalizePullRequest(pullRequest),
+            issueLinks: linkedIssueLinks(pullRequest, repositoryKey),
+            number: Number(pullRequest?.number) || null,
+            url: text(pullRequest?.url, 500),
+            createdAt: timestamp(pullRequest?.createdAt),
+            updatedAt: timestamp(pullRequest?.updatedAt || pullRequest?.mergedAt),
+        })),
+        (pullRequest) => pullRequest.value.number || pullRequest.value.url,
+    );
+    const normalizedRuns = dedupeSemantic(
+        workflowRuns.map((run) => ({
+            source: run,
+            value: normalizeRun(run),
+            issueNumbers: linkedRunNumbers(run),
+            id: Number(run?.databaseId || run?.id) || null,
+            url: text(run?.url || run?.html_url, 500),
+            workflow: text(run?.workflowName || run?.name, 160),
+            branch: text(run?.headBranch, 240),
+            createdAt: timestamp(run?.createdAt || run?.created_at),
+            updatedAt: timestamp(run?.updatedAt || run?.updated_at),
+        })),
+        (run) => run.id || run.url ||
+            `${run.workflow}|${run.branch}|${run.createdAt}|${run.value.status}|${run.value.conclusion}`,
+    );
     const goals = [];
 
     for (const issue of issues) {
@@ -536,7 +601,7 @@ export function buildActivitySnapshot({
     goals.sort((left, right) => {
         const leftActive = ACTIVE_STATES.has(left.phase) ? 1 : 0;
         const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
-        return rightActive - leftActive || String(right.updatedAt).localeCompare(String(left.updatedAt));
+        return rightActive - leftActive || compareNewestFirst(left, right);
     });
     const count = (phase) => goals.filter((goal) => phase.includes(goal.phase)).length;
     const normalizedErrors = (Array.isArray(errors) ? errors : []).map((error) => ({
@@ -586,12 +651,15 @@ export function aggregateActivitySnapshots({
     errors = [],
     fetchedAt = new Date().toISOString(),
 } = {}) {
-    const goals = snapshots.flatMap((snapshot) =>
-        (Array.isArray(snapshot?.goals) ? snapshot.goals : []).map((goal) => ({
-            ...goal,
-            dependencies: [...(goal.dependencies || [])],
-            blockers: [...(goal.blockers || [])],
-        })));
+    const goals = dedupeSemantic(
+        snapshots.flatMap((snapshot) =>
+            (Array.isArray(snapshot?.goals) ? snapshot.goals : []).map((goal) => ({
+                ...goal,
+                dependencies: [...(goal.dependencies || [])],
+                blockers: [...(goal.blockers || [])],
+            }))),
+        (goal) => goal.id,
+    );
     const goalsById = new Map(goals.map((goal) => [String(goal.id).toLowerCase(), goal]));
 
     for (const goal of goals) {
@@ -618,7 +686,7 @@ export function aggregateActivitySnapshots({
     goals.sort((left, right) => {
         const leftActive = ACTIVE_STATES.has(left.phase) ? 1 : 0;
         const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
-        return rightActive - leftActive || String(right.updatedAt).localeCompare(String(left.updatedAt));
+        return rightActive - leftActive || compareNewestFirst(left, right);
     });
     const count = (phase) => goals.filter((goal) => phase.includes(goal.phase)).length;
     const snapshotErrors = snapshots.flatMap((snapshot) =>

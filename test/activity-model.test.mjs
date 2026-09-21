@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildActivitySnapshot, isCompleteActivitySnapshot } from "../activity-model.mjs";
+import {
+    aggregateActivitySnapshots,
+    buildActivitySnapshot,
+    compareNewestFirst,
+    dedupeSemantic,
+    isCompleteActivitySnapshot,
+} from "../activity-model.mjs";
 
 const repository = {
     name: "demo",
@@ -448,6 +454,53 @@ test("uses only the latest run outcome for the same workflow branch", () => {
         ],
     });
     assert.equal(snapshot.goals[0].phase, "queued");
+});
+
+test("deduplicates repeated semantic evidence and workflow runs", () => {
+    const duplicateRun = {
+        databaseId: 79,
+        workflowName: "Squad Implement Worker",
+        displayTitle: "Implement #12",
+        status: "in_progress",
+        headBranch: "squad/implement-12-dashboard",
+        url: "https://github.com/octodemo/demo/actions/runs/79",
+        updatedAt: "2026-09-20T12:00:00Z",
+    };
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        workflowRuns: [duplicateRun, structuredClone(duplicateRun)],
+    });
+
+    assert.equal(snapshot.goals[0].workflowRuns.length, 1);
+    assert.equal(snapshot.goals[0].evidence.filter((item) => item.kind === "workflow").length, 1);
+
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot, structuredClone(snapshot)],
+        repositories: [{ nameWithOwner: repository.nameWithOwner, included: true }],
+    });
+    assert.equal(aggregate.goals.length, 1);
+});
+
+test("orders missing and equal timestamps deterministically", () => {
+    const values = [
+        { kind: "workflow", title: "Zulu", timestamp: null, url: "/z" },
+        { kind: "issue", title: "Beta", timestamp: "2026-09-20T12:00:00Z", url: "/b" },
+        { kind: "issue", title: "Alpha", timestamp: "2026-09-20T12:00:00Z", url: "/a" },
+        { kind: "artifact", title: "Older", timestamp: "2026-09-20T11:00:00Z", url: "/o" },
+    ];
+
+    assert.deepEqual(
+        [...values].sort(compareNewestFirst).map((item) => item.title),
+        ["Alpha", "Beta", "Older", "Zulu"],
+    );
+    assert.deepEqual(
+        dedupeSemantic(
+            [values[1], { ...values[1], timestamp: "2026-09-20T13:00:00Z" }],
+            (item) => `${item.kind}|${item.title}|${item.url}`,
+        ).map((item) => item.timestamp),
+        ["2026-09-20T13:00:00Z"],
+    );
 });
 
 test("treats stale or unavailable source state as incomplete without requiring an error", () => {
