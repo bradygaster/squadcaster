@@ -177,13 +177,133 @@ test("repository discovery preserves exclusions and ignores non-Squad repositori
     assert.equal(global.registry.rateLimit.remaining, 4999);
 });
 
+test("discovers repositories whose only Squad signal is an open prefixed label", async () => {
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/prefix-only"),
+                                    viewerPermission: "WRITE",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "repos/octodemo/prefix-only/issues") {
+                return "squad:frontend";
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.deepEqual(
+        global.registry.repositories.map((candidate) => candidate.nameWithOwner),
+        ["octodemo/prefix-only"],
+    );
+    assert.equal(global.registry.repositories[0].squadDetected, true);
+    const labelCall = calls.find((args) => args[1] === "repos/octodemo/prefix-only/issues");
+    assert.ok(labelCall.includes("--paginate"));
+    assert.equal(labelCall.includes("--slurp"), false);
+    assert.ok(labelCall.includes(".[] | .labels[]?.name | @json"));
+    assert.equal(calls.some((args) => args[0] === "search"), false);
+});
+
+test("multiple prefixed labels discover a repository only once", async () => {
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository("octodemo/multiple-prefixes"),
+                                    viewerPermission: "READ",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "repos/octodemo/multiple-prefixes/issues") {
+                return [["squad:frontend", "squad:backend"], ["squad:frontend"]];
+            }
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.equal(global.registry.repositories.length, 1);
+    assert.equal(global.registry.repositories[0].nameWithOwner, "octodemo/multiple-prefixes");
+});
+
+test("prefixed label matching and repository deduplication are case-insensitive", async () => {
+    let page = 0;
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[1] === "graphql") {
+                page += 1;
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [{
+                                    ...repository(page === 1
+                                        ? "octodemo/case-test"
+                                        : "OCTODEMO/CASE-TEST"),
+                                    viewerPermission: "WRITE",
+                                    issues: { totalCount: 0 },
+                                    pullRequests: { totalCount: 0 },
+                                }],
+                                pageInfo: page === 1
+                                    ? { hasNextPage: true, endCursor: "page-2" }
+                                    : { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args[1] === "repos/OCTODEMO/CASE-TEST/issues") return ["Squad:Frontend"];
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.equal(global.registry.repositories.length, 1);
+    assert.equal(global.registry.repositories[0].nameWithOwner.toLowerCase(), "octodemo/case-test");
+    assert.equal(global.registry.repositories[0].squadDetected, true);
+});
+
 test("fallback discovery searches each affiliated repository and rejects unrelated results", async () => {
     const calls = [];
     const global = new GitHubGlobalActivity({
         cwd: "/repo",
         runJson: async (args) => {
             calls.push(args);
-            if (args[0] === "api") {
+            if (args[1] === "graphql") {
                 return {
                     data: {
                         viewer: {
@@ -209,6 +329,7 @@ test("fallback discovery searches each affiliated repository and rejects unrelat
                     },
                 };
             }
+            if (args[0] === "api") return [];
             if (args.includes("octodemo/artifacts")) {
                 return [
                     { repository: { nameWithOwner: "octodemo/artifacts" } },
@@ -229,7 +350,7 @@ test("fallback discovery searches each affiliated repository and rejects unrelat
     assert.equal(calls.filter((args) => args[0] === "search").length, 2);
     assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("--repo")));
     assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("1")));
-    const discoveryQuery = calls.find((args) => args[0] === "api").find(
+    const discoveryQuery = calls.find((args) => args[1] === "graphql").find(
         (argument) => argument.startsWith("query="),
     );
     assert.match(discoveryQuery, /affiliations: \[OWNER, COLLABORATOR, ORGANIZATION_MEMBER\]/);
@@ -240,7 +361,7 @@ test("fallback discovery keeps every paginated affiliated repository eligible", 
     const global = new GitHubGlobalActivity({
         cwd: "/repo",
         runJson: async (args) => {
-            if (args[0] === "api") {
+            if (args[1] === "graphql") {
                 const cursorIndex = args.indexOf("cursor=page-2");
                 if (cursorIndex >= 0) {
                     return {
@@ -288,6 +409,7 @@ test("fallback discovery keeps every paginated affiliated repository eligible", 
                     },
                 };
             }
+            if (args[0] === "api") return [];
             searchCalls.push(args);
             assert.ok(args.includes("--repo"), "fallback searches must never use a global result window");
             return args.includes("octodemo/second-page")

@@ -414,7 +414,11 @@ async function runGhJson(args, cwd, input) {
             try {
                 resolve(JSON.parse(output));
             } catch {
-                reject(new Error("GitHub CLI returned an invalid JSON response."));
+                try {
+                    resolve(output.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)));
+                } catch {
+                    reject(new Error("GitHub CLI returned an invalid JSON response."));
+                }
             }
         });
         child.stdin.on("error", (error) => reject(new Error(`Unable to send data to GitHub CLI: ${error.message}`)));

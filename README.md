@@ -74,10 +74,12 @@ context. Use **Manage** to exclude repositories from refresh and totals, and
 
 Squadcaster discovers repositories through the authenticated user's owner,
 collaborator, and organization-member affiliations. A repository is included
-when it has a Squad workflow, roster, open `squad` issue/PR, or searchable
-structured Squad artifact. It reads up to 1,000 issues and pull requests per
-included repository; Actions runs are refreshed for the current repository and
-repositories with active work.
+when it has a Squad workflow, roster, open `squad`/`squad:*` issue or pull
+request, or searchable structured Squad artifact. Prefix-label and artifact
+fallbacks are scoped to each affiliated repository; open labels are fully
+paginated rather than discovered through a capped global search. Squadcaster
+reads up to 1,000 issues and pull requests per included repository; Actions runs
+are refreshed for the current repository and repositories with active work.
 
 Independent GitHub sources are fetched separately, so a permissions or
 rate-limit failure in one source does not discard data from the others. Failed

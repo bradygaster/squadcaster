@@ -51,6 +51,12 @@ snapshot without exposing GitHub CLI response shapes to the renderer.
 user across owner, collaborator, and organization-member affiliations. It
 maintains a user-level registry and combines repository snapshots using
 `repository.nameWithOwner` plus the immutable issue number as the goal key.
+Workflow, roster, and exact `squad` label signals are read during paginated
+affiliation discovery. Repositories without those direct signals receive
+repository-scoped, fully paginated open-label discovery for `squad:*`, followed
+by the repository-scoped structured-artifact fallback. These paths never add a
+repository outside the affiliated set and deduplicate identities
+case-insensitively.
 
 The repository used to open the canvas is refreshed every 10 seconds. Other
 repositories with active work refresh every minute, and inactive repositories

@@ -61,6 +61,12 @@ function repositoryNameFromSearch(result) {
     return nameWithOwner.includes("/") ? nameWithOwner : "";
 }
 
+function hasSquadPrefixedLabel(labels) {
+    return (Array.isArray(labels) ? labels : [labels])
+        .flat(Infinity)
+        .some((label) => /^squad:/i.test(clean(label, 160)));
+}
+
 function registryRepository(repository, previous = {}) {
     return {
         name: clean(repository?.name, 160),
@@ -133,8 +139,13 @@ export class GitHubGlobalActivity {
         const previous = new Map(
             this.registry.repositories.map((repository) => [repository.nameWithOwner.toLowerCase(), repository]),
         );
-        const repositories = [];
+        const repositories = new Map();
         const affiliated = new Map();
+        const addRepository = (repository) => {
+            const key = String(repository?.nameWithOwner || "").toLowerCase();
+            if (!key || repositories.has(key)) return;
+            repositories.set(key, registryRepository(repository, previous.get(key)));
+        };
         let cursor = null;
         let viewer = "";
         let rateLimit = null;
@@ -150,10 +161,7 @@ export class GitHubGlobalActivity {
                     if (repository?.isArchived) continue;
                     affiliated.set(String(repository.nameWithOwner).toLowerCase(), repository);
                     if (!hasSquadSignal(repository)) continue;
-                    repositories.push(registryRepository(
-                        repository,
-                        previous.get(String(repository.nameWithOwner).toLowerCase()),
-                    ));
+                    addRepository(repository);
                 }
                 cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
             } while (cursor);
@@ -164,6 +172,22 @@ export class GitHubGlobalActivity {
                 MAX_CONCURRENCY,
                 async (repository) => {
                     const key = String(repository.nameWithOwner).toLowerCase();
+                    try {
+                        const labels = await this.runJson(
+                            [
+                                "api", `repos/${repository.nameWithOwner}/issues`,
+                                "--method", "GET",
+                                "-f", "state=open",
+                                "-f", "per_page=100",
+                                "--paginate",
+                                "--jq", ".[] | .labels[]?.name | @json",
+                            ],
+                            this.cwd,
+                        );
+                        if (hasSquadPrefixedLabel(labels)) return repository;
+                    } catch {
+                        // Artifact discovery can still identify this repository.
+                    }
                     try {
                         const results = await this.runJson(
                             [
@@ -188,19 +212,14 @@ export class GitHubGlobalActivity {
             );
             for (const repository of artifactRepositories) {
                 if (!repository) continue;
-                const key = repository.nameWithOwner.toLowerCase();
-                const normalized = registryRepository(
-                    {
-                        ...repository,
-                        issues: { totalCount: 1 },
-                    },
-                    previous.get(key),
-                );
-                repositories.push(normalized);
+                addRepository({
+                    ...repository,
+                    issues: { totalCount: 1 },
+                });
             }
 
             this.registry.viewer = viewer;
-            this.registry.repositories = repositories;
+            this.registry.repositories = [...repositories.values()];
             this.registry.discoveredAt = new Date().toISOString();
             this.registry.rateLimit = rateLimit;
             this.registry.discoveryError = "";
