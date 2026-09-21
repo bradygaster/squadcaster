@@ -1080,6 +1080,10 @@ export function renderHtml() {
       .goal-details-body { grid-template-columns: 1fr; }
       .mission-layout { grid-template-columns: 1fr; }
       .activity-panel { position: static; }
+      .pipeline {
+        grid-template-columns: repeat(5, minmax(122px, 1fr));
+        min-width: 650px;
+      }
       .run-row { grid-template-columns: 18px minmax(0, 1fr); }
       .run-side { grid-column: 2; min-width: 0; text-align: left; }
     }
@@ -1113,6 +1117,35 @@ export function renderHtml() {
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
     }
+    @media (forced-colors: active) {
+      :root {
+        --bg: Canvas;
+        --surface: Canvas;
+        --soft: Canvas;
+        --soft-strong: Canvas;
+        --border: CanvasText;
+        --border-strong: CanvasText;
+        --text: CanvasText;
+        --muted: CanvasText;
+        --focus: Highlight;
+        --accent: Highlight;
+        --accent-soft: Canvas;
+        --success: CanvasText;
+        --warning: CanvasText;
+        --danger: CanvasText;
+      }
+      .filter.selected, .stage-card.selected {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+      }
+      .drawer-scrim { background: Canvas; opacity: .55; }
+      .legend-dot, .activity-marker, .run-indicator {
+        forced-color-adjust: none;
+        background: Highlight;
+        border-color: Highlight;
+        color: HighlightText;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1142,6 +1175,7 @@ export function renderHtml() {
     let selectedGoalId = "";
     let drawerReturnSelector = "";
     let filtersOpen = false;
+    let searchAnnouncementTimer = null;
 
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
@@ -1161,6 +1195,22 @@ export function renderHtml() {
       requestAnimationFrame(() => {
         liveStatus.textContent = message;
       });
+    }
+
+    function visibleGoals() {
+      return (state?.activity?.goals || []).filter(goalMatchesFilter).filter(goalMatchesScope);
+    }
+
+    function filterAnnouncement() {
+      const goals = visibleGoals();
+      const filters = [
+        phaseFilter !== "all" ? phaseFilter : "",
+        ownerFilter !== "all" ? ownerFilter : "",
+        repositoryFilter !== "all" ? repositoryFilter === "current" ? "current repository" : repositoryFilter : "",
+        goalSearch ? \`search “\${goalSearch}”\` : "",
+        activeRepositoriesOnly ? "active repositories" : "",
+      ].filter(Boolean);
+      return \`Showing \${goals.length} goal\${goals.length === 1 ? "" : "s"}\${filters.length ? " filtered by " + filters.join(", ") : ""}.\`;
     }
 
     function initials(name) {
@@ -2047,6 +2097,12 @@ export function renderHtml() {
 
     function render(focusSelector = "") {
       const drawerWasFocused = Boolean(document.activeElement?.closest?.(".goal-drawer"));
+      const drawerGoalMissing = Boolean(selectedGoalId && !goalById(selectedGoalId));
+      if (drawerGoalMissing) {
+        selectedGoalId = "";
+        drawerReturnSelector = "";
+        focusSelector = ".pipeline-scroll";
+      }
       updateHeader();
       if (!state) {
         app.innerHTML = '<div class="operation"><span class="spinner"></span><div>Loading Squad activity…</div></div>';
@@ -2063,11 +2119,16 @@ export function renderHtml() {
       if (!selectedMemberId && state.members.length) selectedMemberId = state.members[0].id;
       app.innerHTML = activeHtml();
       document.body.style.overflow = selectedGoalId ? "hidden" : "";
+      document.querySelector(".topbar")?.toggleAttribute("inert", Boolean(selectedGoalId));
+      for (const element of document.querySelectorAll("#app > section > :not(.drawer-scrim):not(.goal-drawer)")) {
+        element.toggleAttribute("inert", Boolean(selectedGoalId));
+      }
       if (focusSelector) {
         document.querySelector(focusSelector)?.focus({ preventScroll: true });
       } else if (selectedGoalId && drawerWasFocused) {
         document.querySelector(".drawer-close")?.focus({ preventScroll: true });
       }
+      if (drawerGoalMissing) announce("The selected goal is no longer visible. Goal details closed.");
     }
 
     async function refresh() {
@@ -2080,6 +2141,7 @@ export function renderHtml() {
       const target = event.target.closest("[data-action]");
       if (!target) return;
       const action = target.dataset.action;
+      if (target.closest(".filter-disclosure")) filtersOpen = true;
       try {
         if (action === "select-member") {
           selectedMemberId = target.dataset.id;
@@ -2087,14 +2149,20 @@ export function renderHtml() {
         } else if (action === "phase-filter") {
           phaseFilter = target.dataset.phase || "active";
           render();
+          announce(filterAnnouncement());
         } else if (action === "expand-stage") {
           const phase = target.dataset.phase || "";
           expandedStage = expandedStage === phase ? "" : phase;
           render(expandedStage ? "#stage-detail-title" : \`[data-action="expand-stage"][data-phase="\${CSS.escape(phase)}"]\`);
+          const count = visibleGoals().filter(goal => goal.phase === phase).length;
+          announce(expandedStage
+            ? \`\${phase[0].toUpperCase() + phase.slice(1)} stage expanded; \${count} goal\${count === 1 ? "" : "s"} visible.\`
+            : \`\${phase[0].toUpperCase() + phase.slice(1)} stage collapsed.\`);
         } else if (action === "close-stage") {
           const phase = expandedStage;
           expandedStage = "";
           render(\`[data-action="expand-stage"][data-phase="\${CSS.escape(phase)}"]\`);
+          announce(\`\${phase[0].toUpperCase() + phase.slice(1)} stage collapsed.\`);
         } else if (action === "open-goal") {
           selectedGoalId = target.dataset.goalId || "";
           drawerReturnSelector = \`[data-action="open-goal"][data-goal-id="\${CSS.escape(selectedGoalId)}"]\`;
@@ -2157,7 +2225,7 @@ export function renderHtml() {
     });
 
     document.addEventListener("toggle", event => {
-      if (!event.target.matches?.(".filter-disclosure")) return;
+      if (event.target !== document.querySelector(".filter-disclosure")) return;
       filtersOpen = event.target.open;
     }, true);
 
@@ -2190,20 +2258,24 @@ export function renderHtml() {
 
     document.addEventListener("change", async event => {
       const action = event.target.dataset.action;
+      if (event.target.closest(".filter-disclosure")) filtersOpen = true;
       if (action === "owner-filter") {
         ownerFilter = event.target.value;
         repositoryFilter = "all";
         render();
+        announce(filterAnnouncement());
         return;
       }
       if (action === "repository-filter") {
         repositoryFilter = event.target.value;
         render();
+        announce(filterAnnouncement());
         return;
       }
       if (action === "active-repositories") {
         activeRepositoriesOnly = event.target.checked;
         render();
+        announce(filterAnnouncement());
         return;
       }
       if (action === "repository-included") {
@@ -2232,6 +2304,7 @@ export function renderHtml() {
 
     document.addEventListener("input", event => {
       if (event.target.dataset.action !== "goal-search") return;
+      filtersOpen = true;
       goalSearch = event.target.value;
       const cursor = event.target.selectionStart;
       render();
@@ -2240,6 +2313,8 @@ export function renderHtml() {
         input.focus();
         input.setSelectionRange(cursor, cursor);
       }
+      clearTimeout(searchAnnouncementTimer);
+      searchAnnouncementTimer = setTimeout(() => announce(filterAnnouncement()), 250);
     });
 
     document.addEventListener("submit", async event => {

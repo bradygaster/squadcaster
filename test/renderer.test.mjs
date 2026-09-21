@@ -25,5 +25,9 @@ test("includes accessible drawer, stage, and reduced-motion behavior", () => {
     assert.match(html, /animation: none !important/);
     assert.match(html, /prefers-color-scheme: dark/);
     assert.match(html, /color-scheme: light dark/);
+    assert.match(html, /forced-colors: active/);
+    assert.match(html, /toggleAttribute\("inert"/);
+    assert.match(html, /stage expanded/);
+    assert.match(html, /filtered by/);
     assert.match(html, /Canvas connection interrupted/);
 });

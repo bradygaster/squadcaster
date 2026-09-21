@@ -95,16 +95,34 @@ normalized model, correlation rules, adapter boundary, and CAO findings.
 
 ## Development
 
-The project has no package-manager dependency or build step. Validate it with:
+The extension has no build step. Node's built-in test runner covers the data and
+renderer contracts, and Playwright provides focused Chromium regression coverage
+for the browser-only responsive, theme, motion, keyboard, and accessibility behavior.
+
+Install the test dependency and Chromium once:
 
 ```bash
-node --check activity-model.mjs
-node --check github-activity.mjs
-node --check global-activity.mjs
-node --check extension.mjs
-node --check renderer.mjs
-node --test test/*.test.mjs
+npm install
+npx playwright install chromium
 ```
+
+Run all checks:
+
+```bash
+npm run test:all
+```
+
+The browser suite covers 320px, 375px, 768px, and desktop layouts; document and
+pipeline overflow; OS light/dark defaults; reduced motion; forced colors; stage
+expansion; filters and live-region updates; drawer focus containment, Escape close,
+and focus return; and supported UI state across server-sent rerenders.
+
+Screen-reader behavior still requires periodic manual verification with VoiceOver
+and Safari plus NVDA with Firefox or Chrome. Confirm heading and region navigation,
+stage-button announcements, concise live updates, horizontal pipeline discoverability,
+and the goal drawer's dialog announcement and complete focus cycle. Also verify 200%
+text enlargement because browser automation cannot substitute for assistive-technology
+speech output or user-specific zoom and font settings.
 
 ## How it is organized
 
