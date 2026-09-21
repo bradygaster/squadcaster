@@ -10,11 +10,15 @@ import {
     createCanvas,
     joinSession,
 } from "@github/copilot-sdk/extension";
+import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
+import { GitHubGlobalActivity, normalizeRegistry } from "./global-activity.mjs";
 import { renderHtml } from "./renderer.mjs";
 
 const execFileAsync = promisify(execFile);
 const servers = new Map();
 let session;
+let sharedRegistry = null;
+let registryQueue = Promise.resolve();
 
 const TOOL_PROPOSAL = "squadcaster_publish_proposal";
 const TOOL_MISSION = "squadcaster_publish_mission_plan";
@@ -161,17 +165,46 @@ async function statePathFor(repoRoot, workingDirectory) {
     if (!(await exists(statePath)) && await exists(legacyPath)) {
         await fs.copyFile(legacyPath, statePath);
     }
+
     return statePath;
+}
+
+async function registryPath() {
+    const root = storageRoot("squadcaster");
+    await fs.mkdir(root, { recursive: true });
+    return path.join(root, "repository-registry.json");
 }
 
 async function readPersistedState(statePath) {
     if (!(await exists(statePath))) return null;
     try {
         const parsed = JSON.parse(await fs.readFile(statePath, "utf8"));
-        return parsed && parsed.version === 1 ? parsed : null;
+        return parsed && [1, 2].includes(parsed.version) ? parsed : null;
     } catch {
         return null;
     }
+}
+
+async function readRegistry(filePath) {
+    if (!(await exists(filePath))) return normalizeRegistry();
+    try {
+        return normalizeRegistry(JSON.parse(await fs.readFile(filePath, "utf8")));
+    } catch {
+        return normalizeRegistry();
+    }
+}
+
+function withRegistryLock(operation) {
+    const queued = registryQueue
+        .catch(() => undefined)
+        .then(() => operation());
+    registryQueue = queued.catch(() => {});
+    return queued;
+}
+
+function shareRegistry(registry) {
+    sharedRegistry = registry;
+    for (const entry of servers.values()) entry.registry = registry;
 }
 
 async function loadState(workingDirectory) {
@@ -201,6 +234,10 @@ async function loadState(workingDirectory) {
 
     const actualMembers = await parseTeam(repoRoot);
     const initialized = actualMembers.length > 0;
+    const workflowsInstalled = await Promise.all([
+        exists(path.join(repoRoot, ".github", "workflows", "squad.md")),
+        exists(path.join(repoRoot, ".github", "workflows", "squad.lock.yml")),
+    ]).then((values) => values.some(Boolean));
     let members = initialized ? actualMembers : normalizeMembers(persisted?.members);
 
     if (initialized && persisted?.members?.length) {
@@ -221,7 +258,7 @@ async function loadState(workingDirectory) {
     return {
         statePath,
         state: {
-            version: 1,
+            version: 2,
             mode: initialized ? "active" : "setup",
             workingDirectory,
             repoRoot,
@@ -238,6 +275,20 @@ async function loadState(workingDirectory) {
                 cast: persisted?.onboarding?.cast || null,
                 syncError: "",
             },
+            squad: {
+                installed: initialized || workflowsInstalled,
+                rosterAvailable: initialized,
+                memberCount: members.length,
+            },
+            activity: persisted?.activity?.schemaVersion === 2 ? persisted.activity : {
+                schemaVersion: 2,
+                fetchedAt: null,
+                repository: {},
+                repositories: [],
+                summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+                goals: [],
+                errors: [],
+            },
         },
     };
 }
@@ -247,6 +298,12 @@ async function persist(entry) {
     const temporary = `${entry.statePath}.tmp`;
     await fs.writeFile(temporary, `${JSON.stringify(entry.state, null, 2)}\n`, "utf8");
     await fs.rename(temporary, entry.statePath);
+}
+
+async function persistRegistry(filePath, registry) {
+    const temporary = `${filePath}.tmp`;
+    await fs.writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+    await fs.rename(temporary, filePath);
 }
 
 function broadcast(entry) {
@@ -508,45 +565,61 @@ async function inspectAutomationPullRequest(repoRoot) {
 }
 
 async function refreshRemoteState(entry, { force = false } = {}) {
-    if (!entry.state.repoRoot || entry.state.mode !== "setup") return;
+    if (!entry.state.repoRoot) return;
     if (!force && Date.now() - (entry.lastRemoteCheckAt || 0) < 10000) return;
     if (entry.remoteCheckPromise) return entry.remoteCheckPromise;
 
     entry.lastRemoteCheckAt = Date.now();
     entry.remoteCheckPromise = (async () => {
         try {
-            const automation = await inspectAutomationPullRequest(entry.state.repoRoot);
-            const previous = JSON.stringify(entry.state.onboarding?.automation || null);
-            const next = JSON.stringify(automation);
-            const hadError = Boolean(entry.state.onboarding?.syncError);
-            if (previous === next && !hadError) return;
-
+            const currentAdapter = new GitHubSquadActivityAdapter({
+                runJson: runGhJson,
+                cwd: entry.state.repoRoot,
+            });
+            const currentRepository = entry.state.activity?.currentRepository ||
+                entry.state.activity?.repository?.nameWithOwner ||
+                "";
+            const currentPrevious = entry.registry.snapshots?.[currentRepository.toLowerCase()] ||
+                (entry.state.activity?.scope === "user" ? null : entry.state.activity);
+            const currentSnapshot = await currentAdapter.discover({
+                members: entry.state.members,
+                previous: currentPrevious,
+            });
+            const nameWithOwner = currentSnapshot.repository?.nameWithOwner || currentRepository;
+            const activity = await withRegistryLock(async () => {
+                const global = new GitHubGlobalActivity({
+                    runJson: runGhJson,
+                    cwd: entry.state.repoRoot,
+                    registry: sharedRegistry || entry.registry,
+                });
+                const aggregated = await global.refresh({
+                    currentRepository: nameWithOwner,
+                    currentSnapshot,
+                    currentMembers: entry.state.members,
+                    currentSquadDetected: entry.state.squad?.installed,
+                    forceDiscovery: force,
+                    forceAll: entry.forceAllRefresh,
+                });
+                shareRegistry(global.registry);
+                await persistRegistry(entry.registryPath, global.registry);
+                return aggregated;
+            });
+            entry.forceAllRefresh = false;
             await updateState(entry, (state) => {
-                state.onboarding ||= { automation: null, cast: null, syncError: "" };
-                state.onboarding.automation = automation;
-                state.onboarding.syncError = "";
-                if (!automation) return;
-                state.pullRequest = {
-                    url: automation.url,
-                    createdAt: state.pullRequest?.createdAt || new Date().toISOString(),
-                    kind: "automation-pr",
-                    status: automation.status,
-                    mergedAt: automation.mergedAt,
-                };
-                state.operation = {
-                    kind: "automation-pr",
-                    status: "complete",
-                    message: automation.status === "merged"
-                        ? "Automation pull request merged. Ready to cast your Squad."
-                        : "Automation pull request created. Review and merge it on GitHub.",
-                };
+                state.activity = activity;
             });
         } catch (error) {
             const message = cleanText(error?.message || error, 1200);
-            if (entry.state.onboarding?.syncError === message) return;
             await updateState(entry, (state) => {
-                state.onboarding ||= { automation: null, cast: null, syncError: "" };
-                state.onboarding.syncError = message;
+                state.activity ||= {
+                    schemaVersion: 2,
+                    repositories: [],
+                    summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+                    goals: [],
+                    errors: [],
+                };
+                state.activity.errors = [{ source: "GitHub", message }];
+                state.activity.stale = true;
             });
         } finally {
             entry.remoteCheckPromise = null;
@@ -757,130 +830,66 @@ async function handleRequest(entry, req, res) {
         return;
     }
 
-    if (req.method !== "POST") {
+    if (req.method === "POST" && url.pathname === "/api/repositories") {
+        const body = await parseBody(req);
+        if (entry.remoteCheckPromise) await entry.remoteCheckPromise;
+        const changed = await withRegistryLock(async () => {
+            const global = new GitHubGlobalActivity({
+                runJson: runGhJson,
+                cwd: entry.state.repoRoot,
+                registry: sharedRegistry || entry.registry,
+            });
+            if (!global.setIncluded(cleanText(body.nameWithOwner, 300), body.included)) return false;
+            shareRegistry(global.registry);
+            await persistRegistry(entry.registryPath, global.registry);
+            return true;
+        });
+        if (!changed) {
+            sendJson(res, 404, { error: "Repository not found in the Squad registry." });
+            return;
+        }
+        entry.lastRemoteCheckAt = 0;
+        await refreshRemoteState(entry, { force: false });
+        sendJson(res, 200, entry.state);
+        return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/refresh") {
+        if (entry.remoteCheckPromise) await entry.remoteCheckPromise;
+        entry.forceAllRefresh = true;
+        entry.lastRemoteCheckAt = 0;
+        await refreshRemoteState(entry, { force: true });
+        sendJson(res, 200, entry.state);
+        return;
+    }
+    if (req.method === "POST") {
         sendJson(res, 404, { error: "Not found." });
         return;
     }
-
-    const body = await parseBody(req);
-    switch (url.pathname) {
-        case "/api/analyze": {
-            if (entry.state.mode !== "setup") {
-                sendJson(res, 409, { error: "This repository already has a Squad." });
-                return;
-            }
-            void runAgentOperation(entry, "analyze", proposalPrompt(entry));
-            sendJson(res, 202, { accepted: true });
-            return;
-        }
-        case "/api/member": {
-            const member = entry.state.members.find((candidate) => candidate.id === body.id);
-            if (!member) {
-                sendJson(res, 404, { error: "Member not found." });
-                return;
-            }
-            await updateState(entry, () => {
-                member.draftRole = cleanText(body.role || member.role, 120);
-                member.draftCharter = cleanText(body.charter || member.charter, 12000);
-                member.dirty = member.draftRole !== member.role || member.draftCharter !== member.charter;
-            });
-            sendJson(res, 200, entry.state);
-            return;
-        }
-        case "/api/create-automation-pr": {
-            if (entry.state.mode !== "setup" || entry.state.members.length === 0) {
-                sendJson(res, 409, { error: "Analyze and confirm the team first." });
-                return;
-            }
-            void runAgentOperation(entry, "automation-pr", automationPullRequestPrompt(entry));
-            sendJson(res, 202, { accepted: true });
-            return;
-        }
-        case "/api/create-cast-issue": {
-            if (
-                entry.state.mode !== "setup" ||
-                entry.state.members.length === 0 ||
-                entry.state.onboarding?.automation?.status !== "merged"
-            ) {
-                sendJson(res, 409, { error: "Merge the automation pull request before casting the Squad." });
-                return;
-            }
-            void createCastIssue(entry);
-            sendJson(res, 202, { accepted: true });
-            return;
-        }
-        case "/api/create-charter-pr": {
-            if (!entry.state.members.some((member) => member.dirty)) {
-                sendJson(res, 409, { error: "No charter changes are pending." });
-                return;
-            }
-            void runAgentOperation(entry, "charter-pr", charterPullRequestPrompt(entry));
-            sendJson(res, 202, { accepted: true });
-            return;
-        }
-        case "/api/plan-mission": {
-            const goal = cleanText(body.goal, 4000);
-            if (entry.state.mode !== "active" || !goal) {
-                sendJson(res, 400, { error: "A goal is required in an active Squad repository." });
-                return;
-            }
-            await updateState(entry, (state) => {
-                state.mission = { goal, summary: "", tasks: [], status: "planning" };
-            });
-            void runAgentOperation(entry, "plan", missionPrompt(entry, goal));
-            sendJson(res, 202, { accepted: true });
-            return;
-        }
-        case "/api/task-owner": {
-            const task = entry.state.mission?.tasks?.find((candidate) => candidate.id === body.taskId);
-            const owner = entry.state.members.find((member) => member.id === body.ownerId);
-            if (!task || !owner) {
-                sendJson(res, 404, { error: "Task or owner not found." });
-                return;
-            }
-            await updateState(entry, () => {
-                task.ownerId = owner.id;
-                task.overridden = true;
-            });
-            sendJson(res, 200, entry.state);
-            return;
-        }
-        case "/api/start-mission": {
-            if (!entry.state.mission?.tasks?.length) {
-                sendJson(res, 409, { error: "Plan the mission first." });
-                return;
-            }
-            void runAgentOperation(entry, "mission-pr", executeMissionPrompt(entry));
-            sendJson(res, 202, { accepted: true });
-            return;
-        }
-        case "/api/clear-mission": {
-            await updateState(entry, (state) => {
-                state.mission = null;
-                state.operation = null;
-                state.pullRequest = null;
-            });
-            sendJson(res, 200, entry.state);
-            return;
-        }
-        default:
-            sendJson(res, 404, { error: "Not found." });
+    if (req.method !== "GET") {
+        sendJson(res, 405, { error: "Squadcaster is read-only." });
+        return;
     }
+    sendJson(res, 404, { error: "Not found." });
 }
 
 async function startServer(ctx) {
     const workingDirectory =
         cleanText(ctx.input?.workingDirectory || ctx.session?.workingDirectory || "", 1000);
     const { state, statePath } = await loadState(workingDirectory);
+    const userRegistryPath = await registryPath();
+    if (!sharedRegistry) sharedRegistry = await readRegistry(userRegistryPath);
     const entry = {
         instanceId: ctx.instanceId,
         state,
         statePath,
+        registryPath: userRegistryPath,
+        registry: sharedRegistry,
         clients: new Set(),
         server: null,
         url: "",
         lastRemoteCheckAt: 0,
         remoteCheckPromise: null,
+        forceAllRefresh: false,
     };
     const server = createServer((req, res) => {
         handleRequest(entry, req, res).catch((error) => {
@@ -908,7 +917,7 @@ async function refreshEntry(entry) {
 const canvas = createCanvas({
     id: "squadcaster",
     displayName: "Squadcaster",
-    description: "Analyze a repository, shape its Squad cast, and guide the team through reviewed onboarding pull requests.",
+    description: "Observe Squad goals, issues, pull requests, workflow runs, checks, blockers, and evidence.",
     inputSchema: {
         type: "object",
         properties: {
@@ -922,7 +931,7 @@ const canvas = createCanvas({
     actions: [
         {
             name: "get_state",
-            description: "Return the current repository, team, mission, and pull-request state.",
+            description: "Return user-wide Squad activity and the current repository context.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
                 if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
@@ -932,7 +941,7 @@ const canvas = createCanvas({
         },
         {
             name: "refresh",
-            description: "Reload Squad configuration from the current repository.",
+            description: "Rediscover and refresh user-wide Squad activity.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
                 if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
@@ -945,8 +954,10 @@ const canvas = createCanvas({
         let entry = servers.get(ctx.instanceId);
         if (!entry) entry = await startServer(ctx);
         return {
-            title: entry.state.repoName ? `Squadcaster · ${entry.state.repoName}` : "Squadcaster",
-            status: entry.state.mode === "active" ? "Active" : "Setup",
+            title: entry.state.repoName ? `All Squads · ${entry.state.repoName}` : "All Squads",
+            status: entry.state.activity?.summary?.active
+                ? `${entry.state.activity.summary.active} active`
+                : "Watching",
             url: entry.url,
         };
     },
@@ -961,106 +972,5 @@ const canvas = createCanvas({
 
 session = await joinSession({
     canvases: [canvas],
-    tools: [
-        {
-            name: TOOL_PROPOSAL,
-            description: "Publish a repository analysis and proposed Squad to an open Squadcaster canvas.",
-            parameters: {
-                type: "object",
-                properties: {
-                    instanceId: { type: "string" },
-                    repositoryName: { type: "string" },
-                    summary: { type: "string" },
-                    signals: { type: "array", items: { type: "string" }, maxItems: 12 },
-                    members: {
-                        type: "array",
-                        minItems: 2,
-                        maxItems: 24,
-                        items: {
-                            type: "object",
-                            properties: {
-                                id: { type: "string" },
-                                name: { type: "string" },
-                                role: { type: "string" },
-                                rationale: { type: "string" },
-                                charter: { type: "string" },
-                                lead: { type: "boolean" },
-                                reviewer: { type: "boolean" },
-                            },
-                            required: ["name", "role", "rationale", "charter"],
-                        },
-                    },
-                },
-                required: ["instanceId", "repositoryName", "summary", "signals", "members"],
-            },
-            handler: async (args) => {
-                const entry = servers.get(args.instanceId);
-                if (!entry) return { textResultForLlm: "Squadcaster instance not found.", resultType: "failure" };
-                const members = normalizeMembers(args.members);
-                if (!members.some((member) => member.lead) || !members.some((member) => member.reviewer)) {
-                    return {
-                        textResultForLlm: "Proposal must include one lead and one independent reviewer.",
-                        resultType: "failure",
-                    };
-                }
-                await updateState(entry, (state) => {
-                    state.summary = cleanText(args.summary, 1800);
-                    state.signals = (args.signals || []).map((signal) => cleanText(signal, 240)).filter(Boolean);
-                    state.members = members;
-                    state.operation = { kind: "analyze", status: "complete", message: "Team proposal ready." };
-                });
-                return "Squad proposal published to Squadcaster.";
-            },
-        },
-        {
-            name: TOOL_MISSION,
-            description: "Publish a Squad-generated mission plan and proposed task ownership to an open Squadcaster canvas.",
-            parameters: {
-                type: "object",
-                properties: {
-                    instanceId: { type: "string" },
-                    goal: { type: "string" },
-                    summary: { type: "string" },
-                    tasks: {
-                        type: "array",
-                        minItems: 1,
-                        maxItems: 40,
-                        items: {
-                            type: "object",
-                            properties: {
-                                id: { type: "string" },
-                                title: { type: "string" },
-                                description: { type: "string" },
-                                ownerId: { type: "string" },
-                                rationale: { type: "string" },
-                            },
-                            required: ["title", "ownerId", "rationale"],
-                        },
-                    },
-                },
-                required: ["instanceId", "goal", "summary", "tasks"],
-            },
-            handler: async (args) => {
-                const entry = servers.get(args.instanceId);
-                if (!entry) return { textResultForLlm: "Squadcaster instance not found.", resultType: "failure" };
-                const tasks = normalizeTasks(args.tasks, entry.state.members.map((member) => member.id));
-                if (tasks.some((task) => !task.ownerId)) {
-                    return {
-                        textResultForLlm: "Every mission task must use an ownerId from the authorized roster.",
-                        resultType: "failure",
-                    };
-                }
-                await updateState(entry, (state) => {
-                    state.mission = {
-                        goal: cleanText(args.goal, 4000),
-                        summary: cleanText(args.summary, 1800),
-                        status: "ready",
-                        tasks,
-                    };
-                    state.operation = { kind: "plan", status: "complete", message: "Mission plan ready." };
-                });
-                return "Mission plan published to Squadcaster.";
-            },
-        },
-    ],
+    tools: [],
 });
