@@ -62,7 +62,10 @@ baseline, so a phase difference spanning the exclusion window is not recorded
 as if Squadcaster had observed the transition. Registry version 1 and malformed
 history migrate to an empty version 2 history. Persisted baselines and
 transitions survive extension and process restarts; missing pre-feature history
-remains explicitly incomplete.
+remains explicitly incomplete. If a previously tracked goal is absent from an
+eligible observation, its baseline is invalidated; a later reappearance
+establishes a new baseline while preserving transitions recorded before the
+gap.
 
 ## Correlation rules
 

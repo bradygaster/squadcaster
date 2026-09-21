@@ -71,6 +71,7 @@ function normalizedGoal(value, repository) {
         currentPhase: PHASES.has(currentPhase) ? currentPhase : "",
         firstObservedAt: timestamp(value?.firstObservedAt),
         lastObservedAt: timestamp(value?.lastObservedAt),
+        needsBaseline: Boolean(value?.needsBaseline),
         incompleteBeforeFirstObservation: true,
         transitions,
     };
@@ -207,25 +208,29 @@ export function observeLifecycleSnapshot(lifecycleHistory, snapshot, { included 
     }
 
     const appended = [];
+    const seenGoalIds = new Set();
     for (const goal of Array.isArray(snapshot?.goals) ? snapshot.goals : []) {
         const phase = text(goal?.phase, 40).toLowerCase();
         if (!PHASES.has(phase)) continue;
         const id = goalKey(repositoryName, goal);
+        seenGoalIds.add(id);
         const prior = repository.goals[id];
-        if (!prior || repository.needsBaseline) {
+        if (!prior || prior.needsBaseline || repository.needsBaseline) {
             repository.goals[id] = {
                 repository: repositoryName,
                 goalId: text(goal?.id, 500),
                 issueNumber: Number(goal?.issue?.number) || null,
                 currentPhase: phase,
-                firstObservedAt: observedAt,
+                firstObservedAt: prior?.firstObservedAt || observedAt,
                 lastObservedAt: observedAt,
+                needsBaseline: false,
                 incompleteBeforeFirstObservation: true,
                 transitions: prior?.transitions || [],
             };
             continue;
         }
         prior.lastObservedAt = observedAt;
+        prior.needsBaseline = false;
         if (prior.currentPhase === phase) continue;
         const transition = {
             repository: repositoryName,
@@ -239,6 +244,9 @@ export function observeLifecycleSnapshot(lifecycleHistory, snapshot, { included 
         prior.currentPhase = phase;
         prior.transitions = [...prior.transitions, transition].slice(-MAX_TRANSITIONS_PER_GOAL);
         appended.push(transition);
+    }
+    for (const [id, storedGoal] of Object.entries(repository.goals)) {
+        if (!seenGoalIds.has(id)) storedGoal.needsBaseline = true;
     }
     repository.needsBaseline = false;
     repository.lastObservedAt = observedAt;

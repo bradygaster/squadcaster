@@ -144,6 +144,38 @@ test("exclusion and re-enablement establish a new baseline without filling the g
     assert.equal(later.appended[0].to, "completed");
 });
 
+test("goal disappearance requires a new baseline when it reappears", () => {
+    const first = observeLifecycleSnapshot({}, snapshot("queued"));
+    const absent = observeLifecycleSnapshot(first.lifecycleHistory, {
+        ...snapshot("queued", { fetchedAt: "2026-09-21T12:01:00Z" }),
+        goals: [],
+    });
+    assert.deepEqual(absent.appended, []);
+    assert.equal(
+        absent.lifecycleHistory.repositories["octodemo/demo"]
+            .goals["octodemo/demo#43"].needsBaseline,
+        true,
+    );
+
+    const reappeared = observeLifecycleSnapshot(
+        absent.lifecycleHistory,
+        snapshot("completed", { fetchedAt: "2026-09-21T12:02:00Z" }),
+    );
+    assert.deepEqual(reappeared.appended, []);
+    assert.deepEqual(reappeared.snapshot.goals[0].lifecycleHistory.transitions, []);
+    assert.equal(
+        reappeared.snapshot.goals[0].lifecycleHistory.firstObservedAt,
+        "2026-09-21T12:00:00.000Z",
+    );
+
+    const later = observeLifecycleSnapshot(
+        reappeared.lifecycleHistory,
+        snapshot("queued", { fetchedAt: "2026-09-21T12:03:00Z" }),
+    );
+    assert.equal(later.appended[0].from, "completed");
+    assert.equal(later.appended[0].to, "queued");
+});
+
 test("keeps observation order monotonic when the local clock moves backward", () => {
     const first = observeLifecycleSnapshot({}, snapshot("queued"));
     const changed = observeLifecycleSnapshot(
