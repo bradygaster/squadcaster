@@ -373,6 +373,64 @@ test("opens blocked goals from the Needs attention section", async ({ page }) =>
     await expect(page.getByRole("dialog")).toContainText("Resolve upstream contract blocker");
 });
 
+test("distinguishes observed and inferred correlation evidence", async ({ page }) => {
+    const state = fixture.state();
+    const reviewingGoal = state.activity.goals.find((item) => item.phase === "reviewing");
+    reviewingGoal.evidence = [
+        {
+            kind: "pull-request",
+            title: "PR #26 linked by closing reference",
+            timestamp: reviewingGoal.updatedAt,
+            confidence: "observed",
+            url: reviewingGoal.pullRequests[0].url,
+        },
+        {
+            kind: "pull-request",
+            title: "PR #28 linked by Squad marker",
+            timestamp: reviewingGoal.updatedAt,
+            confidence: "observed",
+            url: "https://github.com/octodemo/frontend/pull/28",
+        },
+        {
+            kind: "pull-request",
+            title: "PR #27 linked by implementation branch",
+            timestamp: reviewingGoal.updatedAt,
+            confidence: "inferred",
+            url: "https://github.com/octodemo/frontend/pull/27",
+        },
+    ];
+    fixture.emit(state);
+
+    await expect(page.locator(".activity-item").filter({
+        hasText: "PR #26 linked by closing reference",
+    })).toContainText("Observed correlation");
+    await expect(page.locator(".activity-item").filter({
+        hasText: "PR #28 linked by Squad marker",
+    })).toContainText("Observed correlation");
+    await expect(page.locator(".activity-item").filter({
+        hasText: "PR #27 linked by implementation branch",
+    })).toContainText("Inferred correlation");
+
+    await page.getByText("Browse goals").click();
+    await page.locator('[data-action="expand-stage"][data-phase="reviewing"]').click();
+    await page.getByRole("button", { name: /Review keyboard drawer behavior/ }).click();
+
+    const dialog = page.getByRole("dialog", { name: /Review keyboard drawer behavior/ });
+    await expect(dialog.getByText("Observed correlation")).toHaveCount(2);
+    await expect(dialog.getByText("Inferred correlation")).toBeVisible();
+    await expect(dialog).toContainText("PR #26 linked by closing reference");
+    await expect(dialog).toContainText("PR #28 linked by Squad marker");
+    await expect(dialog).toContainText("PR #27 linked by implementation branch");
+
+    const rerendered = structuredClone(state);
+    rerendered.activity.fetchedAt = "2026-09-20T18:01:00Z";
+    fixture.emit(rerendered);
+
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("Observed correlation")).toHaveCount(2);
+    await expect(dialog.getByText("Inferred correlation")).toBeVisible();
+});
+
 test("labels partial refresh attempts separately from successful syncs", async ({ page }) => {
     await expect(page.locator("#repo-header")).toContainText(/synced/);
 

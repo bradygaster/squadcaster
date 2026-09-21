@@ -148,3 +148,68 @@ test("drops unvalidated stable agent identity recursively from persisted activit
     assert.equal(normalized.activity.goals[0].pullRequests[0].reviews[0].actor.login, "octocat");
     assert.equal(normalized.activity.goals[0].workflowRuns[0].id, 77);
 });
+
+test("recursively drops unvalidated implementation session provenance from persisted goals", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            ...emptyActivity(),
+            goals: [{
+                id: "octodemo/demo#12",
+                sessionId: "candidate-session",
+                implementationSessionId: "candidate-implementation-session",
+                implementationSession: { id: "candidate-record" },
+                implementationSessions: [{ id: "candidate-record" }],
+                sessionProvenance: { source: "candidate" },
+                implementationSessionProvenance: { source: "candidate" },
+                issue: {
+                    number: 12,
+                    legacy_session_id: "nested-issue-session",
+                },
+                owner: {
+                    name: "Owner",
+                    session: { id: "nested-owner-session" },
+                },
+                evidence: [{
+                    title: "Observed",
+                    producerSessionMetadata: { id: "nested-evidence-session" },
+                }],
+                pullRequests: [{
+                    number: 44,
+                    implementation_session_ref: "nested-pr-session",
+                }],
+                workflowRuns: [{
+                    id: 77,
+                    deeply: {
+                        nested: {
+                            sessionIdentifier: "nested-run-session",
+                        },
+                    },
+                }],
+                supportedFutureField: "preserved",
+            }],
+        },
+    });
+
+    const goal = normalized.activity.goals[0];
+    for (const field of [
+        "sessionId",
+        "implementationSessionId",
+        "implementationSession",
+        "implementationSessions",
+        "sessionProvenance",
+        "implementationSessionProvenance",
+    ]) {
+        assert.equal(field in goal, false, field);
+    }
+    assert.equal(goal.supportedFutureField, "preserved");
+    assert.equal("legacy_session_id" in goal.issue, false);
+    assert.equal("session" in goal.owner, false);
+    assert.equal("producerSessionMetadata" in goal.evidence[0], false);
+    assert.equal("implementation_session_ref" in goal.pullRequests[0], false);
+    assert.equal("sessionIdentifier" in goal.workflowRuns[0].deeply.nested, false);
+    assert.equal(goal.issue.number, 12);
+    assert.equal(goal.owner.name, "Owner");
+    assert.equal(goal.evidence[0].title, "Observed");
+    assert.equal(goal.pullRequests[0].number, 44);
+    assert.equal(goal.workflowRuns[0].id, 77);
+});

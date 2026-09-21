@@ -1078,7 +1078,7 @@ export function renderHtml() {
           \${goal.evidence.map(item => \`
             <li>
               <a href="\${esc(item.url || goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
-              <small>\${esc(item.kind)} · \${esc(formatTime(item.timestamp))} · \${esc(item.confidence || "observed")}</small>
+              <small>\${esc(item.kind)} · \${esc(formatTime(item.timestamp))} · \${item.confidence === "inferred" ? "Inferred correlation" : "Observed correlation"}</small>
             </li>\`).join("")}
         </ol>\`;
     }
@@ -1274,7 +1274,7 @@ export function renderHtml() {
           \${activityMarkerHtml(item)}
           <div>
             <a href="\${esc(item.url || item.goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
-            <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))}\${item.confidence === "inferred" ? " · inferred" : ""}</small>
+            <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))} · \${item.confidence === "inferred" ? "Inferred correlation" : "Observed correlation"}</small>
           </div>
         </li>\`).join("");
       return \`

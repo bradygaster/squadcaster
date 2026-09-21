@@ -149,25 +149,53 @@ function closingReferenceRepository(reference, currentRepository) {
     ).toLowerCase();
 }
 
-function linkedIssueKeys(pullRequest, currentRepository) {
-    const keys = new Set(
-        (Array.isArray(pullRequest?.closingIssuesReferences) ? pullRequest.closingIssuesReferences : [])
-            .map((reference) => issueKey(
+function linkedIssueLinks(pullRequest, currentRepository) {
+    const links = new Map();
+    const addLink = (key, method, confidence) => {
+        if (!key) return;
+        const existing = links.get(key);
+        if (!existing || (existing.confidence === "inferred" && confidence === "observed")) {
+            links.set(key, { key, method, confidence });
+        }
+    };
+    for (const reference of Array.isArray(pullRequest?.closingIssuesReferences)
+        ? pullRequest.closingIssuesReferences
+        : []) {
+        addLink(
+            issueKey(
                 closingReferenceRepository(reference, currentRepository),
                 reference?.number,
-            ))
-            .filter(Boolean),
-    );
+            ),
+            "closing-reference",
+            "observed",
+        );
+    }
     for (const match of String(pullRequest?.body || "").matchAll(
         /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#([1-9][0-9]*)\b/gi,
     )) {
-        keys.add(issueKey(match[1] || currentRepository, match[2]));
+        addLink(
+            issueKey(match[1] || currentRepository, match[2]),
+            "closing-keyword",
+            "observed",
+        );
     }
     const marker = String(pullRequest?.body || "").match(/<!--\s*squad:implement\s+issue=([1-9][0-9]*)\s+run=/i);
-    if (marker) keys.add(issueKey(currentRepository, marker[1]));
+    if (marker) {
+        addLink(
+            issueKey(currentRepository, marker[1]),
+            "squad-implement-marker",
+            "observed",
+        );
+    }
     const branch = String(pullRequest?.headRefName || "").match(/^squad\/implement-([1-9][0-9]*)-/i);
-    if (branch) keys.add(issueKey(currentRepository, branch[1]));
-    return [...keys].filter(Boolean);
+    if (branch) {
+        addLink(
+            issueKey(currentRepository, branch[1]),
+            "implementation-branch",
+            "inferred",
+        );
+    }
+    return [...links.values()];
 }
 
 function linkedRunNumbers(run) {
@@ -309,7 +337,7 @@ function nextActionFor(phase, pullRequests, workflowRuns, artifacts) {
     return "Await the next GitHub event.";
 }
 
-function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner) {
+function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner, pullRequestLinks = new Map()) {
     const evidence = [{
         kind: "issue",
         title: `Issue #${issue.number} is ${text(issue.state || "unknown").toLowerCase()}`,
@@ -345,12 +373,13 @@ function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner) {
         });
     }
     for (const pullRequest of pullRequests) {
+        const link = pullRequestLinks.get(pullRequest.number);
         evidence.push({
             kind: "pull-request",
             title: `PR #${pullRequest.number}: ${pullRequest.state}${pullRequest.draft ? " (draft)" : ""}`,
             url: pullRequest.url,
             timestamp: pullRequest.mergedAt || pullRequest.updatedAt || pullRequest.createdAt,
-            confidence: "observed",
+            confidence: link?.confidence || "inferred",
         });
         for (const check of pullRequest.checks) {
             evidence.push({
@@ -389,7 +418,7 @@ export function buildActivitySnapshot({
     const normalizedPullRequests = pullRequests.map((pullRequest) => ({
         source: pullRequest,
         value: normalizePullRequest(pullRequest),
-        issueKeys: linkedIssueKeys(pullRequest, repositoryKey),
+        issueLinks: linkedIssueLinks(pullRequest, repositoryKey),
     }));
     const normalizedRuns = workflowRuns.map((run) => ({
         source: run,
@@ -403,9 +432,17 @@ export function buildActivitySnapshot({
         if (!isSquadGoal(issue, artifacts)) continue;
         const number = Number(issue?.number);
         const goalKey = issueKey(repositoryKey, number);
-        const relatedPullRequests = normalizedPullRequests
-            .filter((pullRequest) => pullRequest.issueKeys.includes(goalKey))
-            .map((pullRequest) => pullRequest.value);
+        const relatedPullRequestMatches = normalizedPullRequests
+            .map((pullRequest) => ({
+                value: pullRequest.value,
+                link: pullRequest.issueLinks.find((link) => link.key === goalKey),
+            }))
+            .filter((pullRequest) => pullRequest.link);
+        const relatedPullRequests = relatedPullRequestMatches.map((pullRequest) => pullRequest.value);
+        const pullRequestLinks = new Map(relatedPullRequestMatches.map((pullRequest) => [
+            pullRequest.value.number,
+            pullRequest.link,
+        ]));
         const relatedRuns = normalizedRuns
             .filter((run) => run.issueNumbers.includes(number) ||
                 relatedPullRequests.some((pullRequest) => pullRequest.branch && pullRequest.branch === run.value.branch))
@@ -480,7 +517,14 @@ export function buildActivitySnapshot({
             dependencies,
             blockers,
             nextAction: nextActionFor(phase, relatedPullRequests, relatedRuns, artifacts),
-            evidence: evidenceFor(issue, relatedPullRequests, relatedRuns, artifacts, owner),
+            evidence: evidenceFor(
+                issue,
+                relatedPullRequests,
+                relatedRuns,
+                artifacts,
+                owner,
+                pullRequestLinks,
+            ),
             updatedAt: [
                 timestamp(issue?.updatedAt),
                 ...relatedPullRequests.map((pullRequest) => pullRequest.updatedAt),

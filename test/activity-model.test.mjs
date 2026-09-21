@@ -374,6 +374,52 @@ test("correlates qualified and unqualified closing references in the pull reques
         [47, 48, 49],
     );
     assert.equal(snapshot.goals[0].phase, "reviewing");
+    assert.ok(snapshot.goals[0].evidence
+        .filter((item) => item.kind === "pull-request")
+        .every((item) => item.confidence === "observed"));
+});
+
+test("preserves explicit marker correlation as observed", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        pullRequests: [{
+            number: 50,
+            title: "Squad implementation",
+            body: "<!-- squad:implement issue=12 run=77 -->",
+            state: "OPEN",
+            url: "https://github.com/octodemo/demo/pull/50",
+            headRefName: "feature-without-issue-number",
+        }],
+    });
+
+    assert.equal(snapshot.goals[0].pullRequests[0].number, 50);
+    assert.equal(
+        snapshot.goals[0].evidence.find((item) => item.kind === "pull-request").confidence,
+        "observed",
+    );
+});
+
+test("labels branch-only pull request correlation inferred", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        pullRequests: [{
+            number: 51,
+            title: "Squad implementation",
+            body: "",
+            state: "OPEN",
+            url: "https://github.com/octodemo/demo/pull/51",
+            headRefName: "squad/implement-12-dashboard",
+        }],
+    });
+
+    assert.equal(snapshot.goals[0].pullRequests[0].number, 51);
+    assert.equal(
+        snapshot.goals[0].evidence.find((item) => item.kind === "pull-request").confidence,
+        "inferred",
+    );
+    assert.equal("sessionId" in snapshot.goals[0], false);
 });
 
 test("uses only the latest run outcome for the same workflow branch", () => {

@@ -27,16 +27,6 @@ function recordArray(value) {
     return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
-function stripReservedIdentity(value) {
-    if (Array.isArray(value)) return value.map(stripReservedIdentity);
-    if (!isRecord(value)) return value;
-    return Object.fromEntries(
-        Object.entries(value)
-            .filter(([key]) => key !== "agentIdentity")
-            .map(([key, nested]) => [key, stripReservedIdentity(nested)]),
-    );
-}
-
 function normalizeRepository(repository) {
     return {
         ...repository,
@@ -44,10 +34,30 @@ function normalizeRepository(repository) {
     };
 }
 
+function isUnvalidatedProvenanceField(key) {
+    const normalized = String(key).replace(/[^a-z0-9]/gi, "").toLowerCase();
+    return normalized === "agentidentity" || normalized.includes("session");
+}
+
+function withoutUnvalidatedProvenance(value) {
+    if (Array.isArray(value)) return value.map(withoutUnvalidatedProvenance);
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([key]) => !isUnvalidatedProvenanceField(key))
+            .map(([key, nestedValue]) => [
+                key,
+                withoutUnvalidatedProvenance(nestedValue),
+            ]),
+    );
+}
+
 function normalizeGoal(goal) {
     return {
         ...goal,
-        repository: isRecord(goal.repository) ? normalizeRepository(goal.repository) : {},
+        repository: isRecord(goal.repository)
+            ? normalizeRepository(goal.repository)
+            : {},
         issue: isRecord(goal.issue) ? goal.issue : {},
         owner: isRecord(goal.owner) ? goal.owner : null,
         blockers: recordArray(goal.blockers),
@@ -74,6 +84,6 @@ export function normalizePersistedState(value) {
     const source = isRecord(value) ? value : {};
     return {
         version: 3,
-        activity: normalizeActivity(stripReservedIdentity(source.activity)),
+        activity: normalizeActivity(withoutUnvalidatedProvenance(source.activity)),
     };
 }
