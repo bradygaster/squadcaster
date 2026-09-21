@@ -112,6 +112,18 @@ function normalizedRestRateLimit(value) {
     };
 }
 
+function workflowJobsBudget(rateLimit) {
+    const remaining = Number(rateLimit?.remaining);
+    return {
+        remaining: Number.isFinite(remaining) ? remaining : REST_RATE_LIMIT_RESERVE,
+        reserve: REST_RATE_LIMIT_RESERVE,
+    };
+}
+
+function rateLimitCore(response) {
+    return normalizedRestRateLimit(response?.resources?.core || {});
+}
+
 async function probeSquadPrefixedLabels({
     runJson,
     cwd,
@@ -326,10 +338,32 @@ export async function discoverCurrentRepositoryActivity({
         return { snapshot: resolvedPrevious, refreshed: false };
     }
 
+    let restRateLimit = normalized.restRateLimit;
+    let jobsBudget = null;
+    const getWorkflowJobsRestBudget = async () => {
+        if (jobsBudget) return jobsBudget;
+        if (!Number.isFinite(Number(restRateLimit.remaining))) {
+            try {
+                restRateLimit = rateLimitCore(await runJson(["api", "rate_limit"], cwd));
+            } catch (error) {
+                restRateLimit = normalizedRestRateLimit({ error: message(error) });
+            }
+        }
+        jobsBudget = workflowJobsBudget(restRateLimit);
+        return jobsBudget;
+    };
     const adapter = new GitHubSquadActivityAdapter({ runJson, cwd });
     return {
-        snapshot: await adapter.discover({ members, previous: resolvedPrevious }),
+        snapshot: await adapter.discover({
+            members,
+            previous: resolvedPrevious,
+            workflowJobsRestBudget: getWorkflowJobsRestBudget,
+        }),
         refreshed: true,
+        restRateLimit: {
+            ...restRateLimit,
+            remaining: jobsBudget ? jobsBudget.remaining : restRateLimit.remaining,
+        },
     };
 }
 
@@ -624,6 +658,27 @@ export class GitHubGlobalActivity {
             const snapshot = this.registry.snapshots[repository.nameWithOwner.toLowerCase()];
             return forceAll || repositoryRefreshDue(repository, snapshot, currentRepository, now);
         });
+        let jobsBudget = null;
+        let jobsBudgetPromise = null;
+        const getWorkflowJobsRestBudget = async () => {
+            if (jobsBudget) return jobsBudget;
+            if (!jobsBudgetPromise) {
+                jobsBudgetPromise = (async () => {
+                    let rateLimit = normalizedRestRateLimit(this.registry.restRateLimit);
+                    if (!Number.isFinite(Number(rateLimit.remaining))) {
+                        try {
+                            rateLimit = rateLimitCore(await this.runJson(["api", "rate_limit"], this.cwd));
+                        } catch (error) {
+                            rateLimit = normalizedRestRateLimit({ error: message(error) });
+                        }
+                    }
+                    this.registry.restRateLimit = rateLimit;
+                    jobsBudget = workflowJobsBudget(rateLimit);
+                    return jobsBudget;
+                })();
+            }
+            return jobsBudgetPromise;
+        };
 
         await mapConcurrent(candidates, MAX_CONCURRENCY, async (repository) => {
             const key = repository.nameWithOwner.toLowerCase();
@@ -652,6 +707,7 @@ export class GitHubGlobalActivity {
                         ["partial", "stale", "unavailable"].includes(
                             previous?.sourceState?.workflowJobs?.status,
                         ),
+                    workflowJobsRestBudget: getWorkflowJobsRestBudget,
                 }), roster);
                 this.registry.snapshots[key] = snapshot;
                 observedKeys.add(key);
@@ -671,6 +727,12 @@ export class GitHubGlobalActivity {
                 repository.stale = Boolean(previous);
             }
         });
+        if (jobsBudget) {
+            this.registry.restRateLimit = {
+                ...normalizedRestRateLimit(this.registry.restRateLimit),
+                remaining: jobsBudget.remaining,
+            };
+        }
 
         const included = this.registry.repositories.filter((repository) => repository.included);
         let snapshots = included

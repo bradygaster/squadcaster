@@ -29,6 +29,7 @@ const JOB_RUNS_PER_GOAL = 2;
 const JOB_RUNS_PER_REPOSITORY = 20;
 const JOBS_PAGE_SIZE = 100;
 const JOBS_MAX_PAGES = 10;
+const WORKFLOW_JOBS_MAX_REQUESTS = JOB_RUNS_PER_REPOSITORY * JOBS_MAX_PAGES;
 
 function errorMessage(error) {
     return String(error?.message || error || "Unknown GitHub error").trim().slice(0, 800);
@@ -209,13 +210,33 @@ export function selectWorkflowJobRuns(snapshot) {
         .slice(0, JOB_RUNS_PER_REPOSITORY);
 }
 
-async function fetchRunJobs(runJson, cwd, repository, runId) {
+function reserveRestRequest(restBudget) {
+    if (!restBudget) return true;
+    const remaining = Number(restBudget.remaining);
+    const reserve = Number(restBudget.reserve);
+    if (!Number.isFinite(remaining) || !Number.isFinite(reserve) || remaining <= reserve) {
+        return false;
+    }
+    restBudget.remaining = remaining - 1;
+    return true;
+}
+
+function restBudgetError(jobs = []) {
+    const error = new Error("Workflow jobs REST budget exhausted before the next page request.");
+    error.partialJobs = jobs;
+    return error;
+}
+
+async function fetchRunJobs(runJson, cwd, repository, runId, restBudget) {
     const jobs = [];
+    const seenJobIds = new Set();
     let totalCount = null;
     for (let page = 1; page <= JOBS_MAX_PAGES; page += 1) {
+        if (!reserveRestRequest(restBudget)) throw restBudgetError(jobs);
         const response = await runJson([
             "api", `repos/${repository}/actions/runs/${runId}/jobs`,
             "--method", "GET",
+            "-f", "filter=latest",
             "-f", `per_page=${JOBS_PAGE_SIZE}`,
             "-f", `page=${page}`,
         ], cwd);
@@ -224,10 +245,19 @@ async function fetchRunJobs(runJson, cwd, repository, runId) {
         }
         const observedTotal = Number(response.total_count);
         if (Number.isFinite(observedTotal) && observedTotal >= 0) totalCount = observedTotal;
-        jobs.push(...response.jobs);
-        if (response.jobs.length < JOBS_PAGE_SIZE ||
-            (totalCount !== null && jobs.length >= totalCount)) {
+        for (const job of response.jobs) {
+            const jobId = Number(job?.id);
+            if (Number.isInteger(jobId) && jobId > 0) {
+                if (seenJobIds.has(jobId)) continue;
+                seenJobIds.add(jobId);
+            }
+            jobs.push(job);
+        }
+        if (totalCount !== null && jobs.length >= totalCount) {
             return { jobs, truncated: false };
+        }
+        if (response.jobs.length < JOBS_PAGE_SIZE) {
+            return { jobs, truncated: totalCount !== null && jobs.length < totalCount };
         }
     }
     return {
@@ -243,6 +273,7 @@ async function workflowJobsSource({
     selectedRuns,
     previous,
     attemptedAt,
+    restBudget,
 }) {
     if (selectedRuns.length === 0) {
         return {
@@ -255,8 +286,6 @@ async function workflowJobsSource({
     const priorByRunId = new Map((previous?.data || [])
         .map((entry) => [Number(entry?.runId), entry])
         .filter(([runId]) => Number.isInteger(runId) && runId > 0));
-    const results = await Promise.allSettled(selectedRuns.map((run) =>
-        fetchRunJobs(runJson, cwd, repository, Number(run.id))));
     const data = [];
     const errors = [];
     let freshCount = 0;
@@ -264,53 +293,66 @@ async function workflowJobsSource({
     let unavailableCount = 0;
     let partialCount = 0;
 
-    results.forEach((result, index) => {
-        const runId = Number(selectedRuns[index].id);
-        if (result.status === "fulfilled") {
+    for (const run of selectedRuns) {
+        const runId = Number(run.id);
+        try {
+            const result = await fetchRunJobs(runJson, cwd, repository, runId, restBudget);
             freshCount += 1;
-            if (result.value.truncated) partialCount += 1;
+            if (result.truncated) partialCount += 1;
             data.push({
                 runId,
-                jobs: result.value.jobs,
+                jobs: result.jobs,
                 fetchedAt: attemptedAt,
-                status: result.value.truncated ? "partial" : "fresh",
-                error: result.value.truncated
+                status: result.truncated ? "partial" : "fresh",
+                error: result.truncated
                     ? `Workflow jobs exceeded the ${JOBS_MAX_PAGES * JOBS_PAGE_SIZE}-job pagination bound.`
                     : "",
-                truncated: result.value.truncated,
+                truncated: result.truncated,
             });
-            if (result.value.truncated) errors.push(`run ${runId}: pagination bound reached`);
-            return;
+            if (result.truncated) errors.push(`run ${runId}: pagination bound reached`);
+        } catch (error) {
+            const message = errorMessage(error);
+            const prior = priorByRunId.get(runId);
+            if (prior?.fetchedAt && Array.isArray(prior.jobs)) {
+                staleCount += 1;
+                data.push({
+                    ...prior,
+                    runId,
+                    status: "stale",
+                    error: message,
+                });
+            } else if (Array.isArray(error?.partialJobs) && error.partialJobs.length > 0) {
+                partialCount += 1;
+                data.push({
+                    runId,
+                    jobs: error.partialJobs,
+                    fetchedAt: attemptedAt,
+                    status: "partial",
+                    error: message,
+                    truncated: true,
+                });
+            } else {
+                unavailableCount += 1;
+                data.push({
+                    runId,
+                    jobs: null,
+                    fetchedAt: null,
+                    status: "unavailable",
+                    error: message,
+                    truncated: false,
+                });
+            }
+            errors.push(`run ${runId}: ${message}`);
         }
-        const message = errorMessage(result.reason);
-        const prior = priorByRunId.get(runId);
-        if (prior?.fetchedAt && Array.isArray(prior.jobs)) {
-            staleCount += 1;
-            data.push({
-                ...prior,
-                runId,
-                status: "stale",
-                error: message,
-            });
-        } else {
-            unavailableCount += 1;
-            data.push({
-                runId,
-                jobs: null,
-                fetchedAt: null,
-                status: "unavailable",
-                error: message,
-                truncated: false,
-            });
-        }
-        errors.push(`run ${runId}: ${message}`);
-    });
+    }
 
     const status = staleCount > 0
         ? "stale"
-        : unavailableCount > 0 || partialCount > 0
-            ? freshCount > 0 ? "partial" : "unavailable"
-            : "fresh";
+        : partialCount > 0
+            ? "partial"
+            : unavailableCount > 0
+                ? freshCount > 0 ? "partial" : "unavailable"
+                : "fresh";
     return {
         data,
         fetchedAt: freshCount > 0 ? attemptedAt : previous?.fetchedAt || null,
@@ -326,7 +368,12 @@ export class GitHubSquadActivityAdapter {
         this.repository = repository;
     }
 
-    async discover({ members = [], previous = null, includeWorkflowRuns = true } = {}) {
+    async discover({
+        members = [],
+        previous = null,
+        includeWorkflowRuns = true,
+        workflowJobsRestBudget = null,
+    } = {}) {
         let repository = previous?.repository || {};
         const repositoryErrors = [];
         try {
@@ -402,6 +449,9 @@ export class GitHubSquadActivityAdapter {
         });
         if (includeWorkflowRuns) {
             const selectedRuns = selectWorkflowJobRuns(provisional);
+            const restBudget = selectedRuns.length > 0 && typeof workflowJobsRestBudget === "function"
+                ? await workflowJobsRestBudget()
+                : workflowJobsRestBudget;
             sourceState.workflowJobs = await workflowJobsSource({
                 runJson: this.runJson,
                 cwd: this.cwd,
@@ -409,6 +459,7 @@ export class GitHubSquadActivityAdapter {
                 selectedRuns,
                 previous: previousSource(previous, "workflowJobs"),
                 attemptedAt,
+                restBudget,
             });
         }
 
@@ -434,3 +485,11 @@ export class GitHubSquadActivityAdapter {
         });
     }
 }
+
+export const workflowJobsPolicy = {
+    runsPerGoal: JOB_RUNS_PER_GOAL,
+    runsPerRepository: JOB_RUNS_PER_REPOSITORY,
+    pageSize: JOBS_PAGE_SIZE,
+    maxPages: JOBS_MAX_PAGES,
+    maxRequests: WORKFLOW_JOBS_MAX_REQUESTS,
+};

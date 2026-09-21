@@ -1812,3 +1812,69 @@ test("background refresh retries stale workflow sources for inactive repositorie
     assert.equal(recovered.stale, false);
     assert.notEqual(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
 });
+
+test("repository refresh shares the observed REST budget and never crosses the reserve", async () => {
+    const previous = buildActivitySnapshot({
+        repository: repository("octodemo/backend"),
+        issues: [issue("octodemo/backend", 57)],
+        workflowRuns: [
+            {
+                databaseId: 79,
+                workflowName: "Squad Implement Worker",
+                displayTitle: "Implement #57",
+                status: "completed",
+                conclusion: "success",
+                headBranch: "squad/implement-57-dashboard",
+                updatedAt: "2026-09-20T13:00:00Z",
+            },
+            {
+                databaseId: 78,
+                workflowName: "Squad Implement Worker",
+                displayTitle: "Implement #57",
+                status: "completed",
+                conclusion: "failure",
+                headBranch: "squad/implement-57-dashboard",
+                updatedAt: "2026-09-20T12:00:00Z",
+            },
+        ],
+    });
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            restRateLimit: {
+                remaining: 101,
+                resetAt: "2099-09-21T14:00:00.000Z",
+            },
+            repositories: [{
+                ...repository("octodemo/backend"),
+                owner: "octodemo",
+                included: true,
+            }],
+            snapshots: { "octodemo/backend": previous },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository("octodemo/backend");
+            if (args[0] === "issue") return [issue("octodemo/backend", 57)];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return previous.sourceState.workflowRuns.data;
+            if (args[0] === "api") return { total_count: 0, jobs: [] };
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    const aggregate = await global.refresh({
+        currentRepository: "octodemo/frontend",
+        forceAll: true,
+    });
+
+    assert.equal(calls.filter((args) => args[0] === "api").length, 1);
+    assert.equal(global.registry.restRateLimit.remaining, 100);
+    assert.equal(aggregate.partial, true);
+    assert.equal(
+        global.registry.snapshots["octodemo/backend"].sourceState.workflowJobs.status,
+        "partial",
+    );
+});

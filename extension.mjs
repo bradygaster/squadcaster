@@ -277,6 +277,9 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                     registry,
                     currentRepository,
                 });
+                if (currentActivity.restRateLimit) {
+                    registry.restRateLimit = currentActivity.restRateLimit;
+                }
                 const currentSnapshot = currentActivity.snapshot;
                 const nameWithOwner = currentSnapshot?.repository?.nameWithOwner || currentRepository;
                 const global = new GitHubGlobalActivity({

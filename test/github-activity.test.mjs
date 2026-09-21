@@ -273,20 +273,23 @@ test("paginates selected workflow jobs and preserves only observed job and step 
             });
             return workflowJobs({
                 total_count: 101,
-                jobs: [{
-                    id: 1100,
-                    name: "final-job",
-                    status: "completed",
-                    conclusion: "failure",
-                    started_at: "invalid",
-                    completed_at: null,
-                    steps: [{
-                        number: 1,
-                        name: "Observed failure",
+                jobs: [
+                    firstPageJobs[0],
+                    {
+                        id: 1100,
+                        name: "final-job",
                         status: "completed",
                         conclusion: "failure",
-                    }],
-                }],
+                        started_at: "invalid",
+                        completed_at: null,
+                        steps: [{
+                            number: 1,
+                            name: "Observed failure",
+                            status: "completed",
+                            conclusion: "failure",
+                        }],
+                    },
+                ],
             });
         },
     });
@@ -314,8 +317,115 @@ test("paginates selected workflow jobs and preserves only observed job and step 
             completedAt: null,
         }],
     });
-    assert.equal(calls.filter((args) => args[0] === "api").length, 2);
+    const apiCalls = calls.filter((args) => args[0] === "api");
+    assert.equal(apiCalls.length, 2);
+    assert.ok(apiCalls.every((args) => args.includes("filter=latest")));
     assert.ok(calls.every((args) => !args.some((arg) => String(arg).includes("logs"))));
+});
+
+test("a successful latest-attempt response replaces cached jobs for the run", async () => {
+    const previous = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        workflowRuns: [workflowRun()],
+        workflowJobs: [{
+            runId: 78,
+            fetchedAt: "2026-09-20T11:00:00Z",
+            status: "fresh",
+            jobs: [{ id: 800, name: "old attempt" }],
+        }],
+    });
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [workflowRun()];
+            return workflowJobs({
+                jobs: [{ id: 901, name: "latest attempt" }],
+            });
+        },
+    });
+
+    const result = await adapter.discover({ previous });
+
+    assert.deepEqual(result.goals[0].workflowRuns[0].jobs.map((job) => job.name), ["latest attempt"]);
+});
+
+test("stops at the REST reserve and marks uncached selected runs partial or unavailable", async () => {
+    const calls = [];
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [
+                workflowRun({ databaseId: 79, updatedAt: "2026-09-20T13:00:00Z" }),
+                workflowRun(),
+            ];
+            return {
+                total_count: 200,
+                jobs: Array.from({ length: 100 }, (_, index) => ({
+                    id: 1000 + index,
+                    name: `job-${index}`,
+                })),
+            };
+        },
+    });
+    const budget = { remaining: 101, reserve: 100 };
+
+    const partial = await adapter.discover({ workflowJobsRestBudget: budget });
+    const runs = partial.goals[0].workflowRuns;
+
+    assert.equal(calls.filter((args) => args[0] === "api").length, 1);
+    assert.equal(budget.remaining, 100);
+    assert.equal(partial.sourceState.workflowJobs.status, "partial");
+    assert.equal(runs.find((run) => run.id === 79).jobsState.status, "partial");
+    assert.equal(runs.find((run) => run.id === 79).jobs.length, 100);
+    assert.equal(runs.find((run) => run.id === 78).jobsState.status, "unavailable");
+});
+
+test("budget exhaustion preserves cached jobs and a later refresh replaces stale data", async () => {
+    const previous = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        workflowRuns: [workflowRun()],
+        workflowJobs: [{
+            runId: 78,
+            fetchedAt: "2026-09-20T11:00:00Z",
+            status: "fresh",
+            jobs: [{ id: 800, name: "cached job" }],
+        }],
+    });
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [workflowRun()];
+            return workflowJobs({
+                jobs: [{ id: 901, name: "recovered job" }],
+            });
+        },
+    });
+
+    const stale = await adapter.discover({
+        previous,
+        workflowJobsRestBudget: { remaining: 100, reserve: 100 },
+    });
+    assert.equal(stale.sourceState.workflowJobs.status, "stale");
+    assert.equal(stale.goals[0].workflowRuns[0].jobs[0].name, "cached job");
+
+    const recovered = await adapter.discover({
+        previous: stale,
+        workflowJobsRestBudget: { remaining: 101, reserve: 100 },
+    });
+    assert.equal(recovered.sourceState.workflowJobs.status, "fresh");
+    assert.equal(recovered.goals[0].workflowRuns[0].jobs[0].name, "recovered job");
 });
 
 test("distinguishes a successful empty jobs response from unavailable jobs", async () => {

@@ -39,10 +39,19 @@ this contract slice.
 Selected workflow runs add an independent `workflowJobs` source. Before making
 jobs requests, the adapter selects the two newest correlated runs per goal,
 deduplicates them, and caps the repository at 20 runs. Each run uses at most 10
-pages of 100 jobs from GitHub's run-jobs REST endpoint. Runs outside the bound
-are explicitly not selected. The cache is per run: failures retain the last
+pages of 100 jobs from GitHub's run-jobs REST endpoint with `filter=latest`.
+Positive job IDs are deduplicated across pages. Runs outside the bound are
+explicitly not selected. The cache is per run: failures retain the last
 successful jobs for that run without staling issue, pull-request, or run data.
 A successful empty jobs response remains distinct from unavailable data.
+
+Job pagination shares an explicit REST core budget across the refresh. Each
+page reserves one request before querying, and polling stops at the
+100-request reserve. The jobs slice therefore makes at most
+`min(200, max(0, observedRemaining - 100))` requests. Budget exhaustion marks
+affected runs partial, stale, or unavailable according to whether an observed
+prefix or successful cache exists; it does not allow later selected runs to
+cross the reserve.
 
 The renderer keeps workflow-run summaries and workflow job/step drill-down in
 separate sections. It shows only GitHub-observed names, statuses, conclusions,
