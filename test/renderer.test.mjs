@@ -107,6 +107,10 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /Some GitHub data is from an earlier sync/);
     assert.match(html, /Latest reviews:/);
     assert.match(html, /Requested reviewers:/);
+    assert.match(html, /Latest reviews unavailable/);
+    assert.match(html, /No latest reviews reported/);
+    assert.match(html, /Review requests unavailable/);
+    assert.match(html, /No pending review requests/);
     assert.match(html, /last fully synced/);
     assert.match(html, /refresh attempted/);
     assert.doesNotMatch(html, /Last successful snapshot/);

@@ -95,12 +95,20 @@ function priorPullRequests(previous) {
                 isDraft: pullRequest.draft,
                 headRefName: pullRequest.branch,
                 reviewDecision: pullRequest.reviewDecision,
-                latestReviews: (pullRequest.reviews || []).map((review) => ({
-                    author: review.actor,
-                    state: review.state,
-                    submittedAt: review.submittedAt,
-                })),
-                reviewRequests: (pullRequest.reviewRequests || []).map((request) => request.actor),
+                ...(Array.isArray(pullRequest.reviews)
+                    ? {
+                        latestReviews: pullRequest.reviews.map((review) => ({
+                            author: review.actor,
+                            state: review.state,
+                            submittedAt: review.submittedAt,
+                        })),
+                    }
+                    : {}),
+                ...(Array.isArray(pullRequest.reviewRequests)
+                    ? {
+                        reviewRequests: pullRequest.reviewRequests.map((request) => request.actor),
+                    }
+                    : {}),
                 createdAt: pullRequest.createdAt,
                 updatedAt: pullRequest.updatedAt,
                 mergedAt: pullRequest.mergedAt,

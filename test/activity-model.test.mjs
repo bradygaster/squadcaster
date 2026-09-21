@@ -98,7 +98,7 @@ test("correlates durable worker provenance, checks, and workflow runs", () => {
     assert.ok(goal.evidence.some((item) => item.kind === "workflow" && item.confidence === "inferred"));
 });
 
-test("normalizes authoritative pull request review participants and requests", () => {
+test("normalizes authoritative pull request review states and requests", () => {
     const snapshot = buildActivitySnapshot({
         repository,
         issues: [issue({ body: "" })],
@@ -109,11 +109,27 @@ test("normalizes authoritative pull request review participants and requests", (
             state: "OPEN",
             url: "https://github.com/octodemo/demo/pull/44",
             reviewDecision: "CHANGES_REQUESTED",
-            latestReviews: [{
-                author: { login: "reviewer" },
-                state: "CHANGES_REQUESTED",
-                submittedAt: "2026-09-20T12:30:00Z",
-            }],
+            latestReviews: [
+                {
+                    author: { login: "approver" },
+                    state: "APPROVED",
+                    submittedAt: "2026-09-20T12:30:00Z",
+                },
+                {
+                    author: { login: "former-reviewer" },
+                    state: "DISMISSED",
+                    submittedAt: "2026-09-20T12:20:00Z",
+                },
+                {
+                    author: { login: "pending-reviewer" },
+                    state: "PENDING",
+                },
+                {
+                    author: { login: "changes-requester" },
+                    state: "CHANGES_REQUESTED",
+                    submittedAt: "2026-09-20T12:40:00Z",
+                },
+            ],
             reviewRequests: [{
                 __typename: "Team",
                 name: "maintainers",
@@ -124,14 +140,61 @@ test("normalizes authoritative pull request review participants and requests", (
     const pullRequest = snapshot.goals[0].pullRequests[0];
     assert.equal(snapshot.schemaVersion, 2);
     assert.equal(pullRequest.reviewDecision, "changes_requested");
-    assert.deepEqual(pullRequest.reviews, [{
-        actor: { login: "reviewer", type: "unknown" },
-        state: "changes_requested",
-        submittedAt: "2026-09-20T12:30:00.000Z",
-    }]);
+    assert.deepEqual(pullRequest.reviews, [
+        {
+            actor: { login: "approver", type: "unknown" },
+            state: "approved",
+            submittedAt: "2026-09-20T12:30:00.000Z",
+        },
+        {
+            actor: { login: "former-reviewer", type: "unknown" },
+            state: "dismissed",
+            submittedAt: "2026-09-20T12:20:00.000Z",
+        },
+        {
+            actor: { login: "pending-reviewer", type: "unknown" },
+            state: "pending",
+            submittedAt: null,
+        },
+        {
+            actor: { login: "changes-requester", type: "unknown" },
+            state: "changes_requested",
+            submittedAt: "2026-09-20T12:40:00.000Z",
+        },
+    ]);
     assert.deepEqual(pullRequest.reviewRequests, [{
         actor: { login: "maintainers", type: "team" },
     }]);
+});
+
+test("distinguishes successful empty review connections from unavailable legacy data", () => {
+    const successful = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        pullRequests: [{
+            number: 44,
+            title: "Implement #12",
+            body: "Closes #12",
+            state: "OPEN",
+            latestReviews: [],
+            reviewRequests: [],
+        }],
+    }).goals[0].pullRequests[0];
+    const legacy = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        pullRequests: [{
+            number: 44,
+            title: "Implement #12",
+            body: "Closes #12",
+            state: "OPEN",
+        }],
+    }).goals[0].pullRequests[0];
+
+    assert.deepEqual(successful.reviews, []);
+    assert.deepEqual(successful.reviewRequests, []);
+    assert.equal(legacy.reviews, null);
+    assert.equal(legacy.reviewRequests, null);
 });
 
 test("surfaces failed automation before review state", () => {

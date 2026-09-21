@@ -12,7 +12,7 @@ contract's additive pull-request shape.
 pullRequest: {
   // Existing v1 fields remain unchanged.
   reviewDecision: "approved" | "changes_requested" | "review_required" | "unknown",
-  reviews: [{
+  reviews: null | [{
     actor: {
       login: string,
       type: "user" | "team" | "bot" | "mannequin" | "organization" | "unknown"
@@ -20,7 +20,7 @@ pullRequest: {
     state: string,
     submittedAt: string | null
   }],
-  reviewRequests: [{
+  reviewRequests: null | [{
     actor: {
       login: string,
       type: "user" | "team" | "bot" | "mannequin" | "organization" | "unknown"
@@ -32,25 +32,40 @@ pullRequest: {
 `reviews` is sourced from GitHub's `latestReviews` connection, not reconstructed
 from comments or timeline events. `reviewRequests` is sourced from GitHub's
 current review requests. An empty array means GitHub returned no entries. A
-missing login, type, or timestamp remains empty, `unknown`, or `null`; the
-adapter does not infer it. These actors are pull-request participants, not
-Squad agents and not goal owners.
+`null` connection means the field was absent from legacy cached data or has
+never been fetched successfully. A missing login, type, or timestamp remains
+empty, `unknown`, or `null`; the adapter does not infer it. These actors are
+pull-request participants, not Squad agents and not goal owners.
 
 ## Source, cost, permissions, and cache behavior
 
 The implemented review fields are added to the existing `gh pr list` GraphQL
 query. They do not add per-pull-request requests or a new polling loop. They
-use the same repository read permission and GraphQL budget as pull-request
-discovery. The added nested connections can increase the cost and response
-size of that existing query, but preserve its one-query-per-refresh shape.
+use the same repository read permission as pull-request discovery. The
+generated `gh` query adds `latestReviews(first: 100)` and
+`reviewRequests(first: 100)` to every pull-request page. A measurement against
+the current repository increased one page from 1 to 2 GraphQL points. The
+exact cost remains GitHub-calculated and data-dependent.
+
+The existing limit is 1,000 pull requests, fetched in pages of up to 100. At the
+measured cost, a full 1,000-PR refresh is approximately 20 points instead of
+10. The current repository can refresh every 10 seconds, which is approximately
+720 points/hour for the PR source at that measured cost. Each additional active
+repository refreshed every minute is approximately 120 points/hour; each
+inactive repository refreshed every ten minutes is approximately 12
+points/hour. The existing combined rate-limit guard pauses background refresh
+when the GraphQL budget is low. This slice keeps the established bounds and
+polling policy; it does not claim budget neutrality.
 
 Review data belongs to the `pullRequests` source. If that query fails, the
 adapter retains the last successful pull-request payload, including review
 details, marks the source `stale`, and exposes the source-specific error. If no
 pull-request query has ever succeeded, review data is unavailable rather than
-represented as current empty arrays. The renderer displays only returned
-participants and never derives approval, identity, or pending-review state from
-comments, checks, authorship, assignees, or goal ownership.
+represented as current empty arrays. Legacy cached pull requests also normalize
+both review connections to `null`. The renderer distinguishes unavailable
+connections from successful empty arrays, displays only returned participants,
+and never derives approval, identity, or pending-review state from comments,
+checks, authorship, assignees, or goal ownership.
 
 ## Candidate field audit
 

@@ -196,6 +196,66 @@ test("keeps a never-successful source unavailable across repeated failures", asy
     assert.deepEqual(second.staleSources, []);
 });
 
+test("keeps review connections unavailable when pull request discovery has never succeeded", async () => {
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue()];
+            if (args[0] === "pr") throw new Error("pull request access denied");
+            return [];
+        },
+    });
+
+    const result = await adapter.discover();
+    assert.equal(result.sourceState.pullRequests.status, "unavailable");
+    assert.equal(result.goals[0].pullRequests.length, 0);
+});
+
+test("preserves unavailable legacy review connections while stale and populates them after recovery", async () => {
+    const previous = buildActivitySnapshot({
+        repository,
+        issues: [issue()],
+        pullRequests: [pullRequest({
+            latestReviews: undefined,
+            reviewRequests: undefined,
+        })],
+    });
+    delete previous.sourceState;
+
+    const failingAdapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue()];
+            if (args[0] === "pr") throw new Error("temporary pull request failure");
+            return [];
+        },
+    });
+    const stale = await failingAdapter.discover({ previous });
+    assert.equal(stale.goals[0].pullRequests[0].reviews, null);
+    assert.equal(stale.goals[0].pullRequests[0].reviewRequests, null);
+    assert.equal(stale.sourceState.pullRequests.status, "stale");
+
+    const recoveredAdapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue()];
+            if (args[0] === "pr") return [pullRequest({
+                reviewDecision: "",
+                latestReviews: [],
+                reviewRequests: [],
+            })];
+            return [];
+        },
+    });
+    const recovered = await recoveredAdapter.discover({ previous: stale });
+    assert.deepEqual(recovered.goals[0].pullRequests[0].reviews, []);
+    assert.deepEqual(recovered.goals[0].pullRequests[0].reviewRequests, []);
+    assert.equal(recovered.sourceState.pullRequests.status, "fresh");
+});
+
 test("legacy snapshot recovery preserves pull requests linked to multiple goals", async () => {
     const secondIssue = issue({
         number: 13,

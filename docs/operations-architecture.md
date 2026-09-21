@@ -16,7 +16,8 @@ latest review exposed by GitHub for each reviewer, with the observed review
 state and submission timestamp. `reviewRequests` contains the currently
 requested GitHub users or teams. Actor identity is limited to the login or team
 name and an observed GraphQL type when available; it is not treated as Squad
-agent identity.
+agent identity. A successful response with no entries is `[]`; legacy or
+unavailable review connections are `null`.
 
 The supported lifecycle is `queued`, `researching`, `implementing`, `reviewing`,
 `blocked`, `completed`, and `failed`. GitHub state has precedence over inferred

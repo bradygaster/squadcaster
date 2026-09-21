@@ -216,10 +216,12 @@ function normalizeReviewRequest(request) {
 function normalizePullRequest(pullRequest) {
     const checks = (Array.isArray(pullRequest?.statusCheckRollup) ? pullRequest.statusCheckRollup : [])
         .map(normalizeCheck);
-    const reviews = (Array.isArray(pullRequest?.latestReviews) ? pullRequest.latestReviews : [])
-        .map(normalizeReview);
-    const reviewRequests = (Array.isArray(pullRequest?.reviewRequests) ? pullRequest.reviewRequests : [])
-        .map(normalizeReviewRequest);
+    const reviews = Array.isArray(pullRequest?.latestReviews)
+        ? pullRequest.latestReviews.map(normalizeReview)
+        : null;
+    const reviewRequests = Array.isArray(pullRequest?.reviewRequests)
+        ? pullRequest.reviewRequests.map(normalizeReviewRequest)
+        : null;
     const state = pullRequest?.mergedAt
         ? "merged"
         : text(pullRequest?.state || "unknown", 40).toLowerCase();
