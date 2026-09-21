@@ -70,15 +70,6 @@ function sourceFailure(previous, message) {
     };
 }
 
-function flattenPages(value, key = "") {
-    if (!Array.isArray(value)) return null;
-    if (value.length === 0) return [];
-    const items = value.every(Array.isArray) ? value.flat() : value;
-    if (!key) return items;
-    if (!items.every((item) => Array.isArray(item?.[key]))) return null;
-    return items.flatMap((item) => item[key]);
-}
-
 function retryDelay(error, attempt, { now, maxDelayMs }) {
     const message = errorMessage(error);
     if (/(?:\b429\b|rate limit|secondary limit)/i.test(message)) {
@@ -96,15 +87,6 @@ function retryDelay(error, attempt, { now, maxDelayMs }) {
         return Math.min(250 * (2 ** attempt), maxDelayMs);
     }
     return null;
-}
-
-function apiArgs(repository, endpoint) {
-    return [
-        "api",
-        `repos/${repository}/${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100`,
-        "--paginate",
-        "--slurp",
-    ];
 }
 
 async function retry(operation, { attempts, sleep, now, maxDelayMs }) {
@@ -497,12 +479,35 @@ export class GitHubSquadActivityAdapter {
         });
     }
 
+    async fetchBootstrapPages({ repositoryName, endpoint, pageKey = "", restBudget }) {
+        const items = [];
+        for (let page = 1; ; page += 1) {
+            const response = await this.retry(() => {
+                if (!reserveRestRequest(restBudget)) {
+                    throw new Error("Bootstrap REST budget exhausted before the next page request.");
+                }
+                return this.runJson([
+                    "api",
+                    `repos/${repositoryName}/${endpoint}${endpoint.includes("?") ? "&" : "?"}` +
+                        `per_page=100&page=${page}`,
+                ], this.cwd);
+            });
+            const pageItems = pageKey ? response?.[pageKey] : response;
+            if (!Array.isArray(pageItems)) {
+                throw new Error("GitHub returned an unexpected bootstrap page.");
+            }
+            items.push(...pageItems);
+            if (pageItems.length < 100) return items;
+        }
+    }
+
     async discoverWorkflowRuns({
         repositoryName,
         workflows,
         previous,
         defaultBranch,
         attemptedAt,
+        restBudget,
     }) {
         const canonical = workflows.filter((workflow) =>
             workflow.name === BOOTSTRAP_IDENTIFIERS.workflow &&
@@ -542,10 +547,18 @@ export class GitHubSquadActivityAdapter {
             let exhausted = false;
             const workflowRuns = [];
             while (true) {
-                const response = await this.retry(() => this.runJson([
-                    "api",
-                    `repos/${repositoryName}/actions/workflows/${workflowId}/runs?per_page=100&page=${page}`,
-                ], this.cwd));
+                const response = await this.retry(() => {
+                    if (!reserveRestRequest(restBudget)) {
+                        throw new Error(
+                            "Bootstrap workflow-runs REST budget exhausted before the next page request.",
+                        );
+                    }
+                    return this.runJson([
+                        "api",
+                        `repos/${repositoryName}/actions/workflows/${workflowId}/runs?` +
+                            `per_page=100&page=${page}`,
+                    ], this.cwd);
+                });
                 const runs = Array.isArray(response?.workflow_runs) ? response.workflow_runs : null;
                 if (!runs) throw new Error("GitHub returned an unexpected workflow-runs page.");
                 discovered.push(...runs);
@@ -596,7 +609,7 @@ export class GitHubSquadActivityAdapter {
         };
     }
 
-    async discoverBootstrap({ repository, previous, attemptedAt }) {
+    async discoverBootstrap({ repository, previous, attemptedAt, restBudget }) {
         const repositoryName = repository?.nameWithOwner || this.repository;
         const defaultBranch = repository?.defaultBranchRef?.name || repository?.defaultBranch;
         const previousSources = Object.fromEntries(
@@ -619,14 +632,18 @@ export class GitHubSquadActivityAdapter {
             },
         ];
         const results = await Promise.allSettled(definitions.map((definition) =>
-            this.retry(() => this.runJson(apiArgs(repositoryName, definition.endpoint), this.cwd))));
+            this.fetchBootstrapPages({
+                repositoryName,
+                endpoint: definition.endpoint,
+                pageKey: definition.pageKey,
+                restBudget,
+            })));
         const sourceState = { ...previousSources };
         results.forEach((result, index) => {
             const definition = definitions[index];
             if (result.status === "fulfilled") {
-                const flattened = flattenPages(result.value, definition.pageKey);
-                if (flattened) {
-                    let data = definition.transform ? definition.transform(flattened) : flattened;
+                if (Array.isArray(result.value)) {
+                    let data = definition.transform ? definition.transform(result.value) : result.value;
                     if (definition.key === "workflows") {
                         const observedAt = new Map(previousSources.workflows.data.map((workflow) => [
                             `${workflow.name || ""}:${workflow.path || ""}`,
@@ -666,6 +683,7 @@ export class GitHubSquadActivityAdapter {
                     previous: previousSources.workflowRuns,
                     defaultBranch,
                     attemptedAt,
+                    restBudget,
                 });
             } catch (error) {
                 sourceState.workflowRuns = sourceFailure(
@@ -694,15 +712,11 @@ export class GitHubSquadActivityAdapter {
             };
         } else {
             try {
-                const response = await this.retry(() => this.runJson(
-                    apiArgs(
-                        repositoryName,
-                        `issues/${selected.canonicalResearchIssue.number}/comments`,
-                    ),
-                    this.cwd,
-                ));
-                const comments = flattenPages(response);
-                if (!comments) throw new Error("GitHub returned an unexpected paginated response.");
+                const comments = await this.fetchBootstrapPages({
+                    repositoryName,
+                    endpoint: `issues/${selected.canonicalResearchIssue.number}/comments`,
+                    restBudget,
+                });
                 sourceState.comments = {
                     data: comments,
                     fetchedAt: attemptedAt,
@@ -859,11 +873,11 @@ export class GitHubSquadActivityAdapter {
             errors: repositoryErrors,
             fetchedAt: attemptedAt,
         });
+        const restBudget = typeof workflowJobsRestBudget === "function"
+            ? await workflowJobsRestBudget()
+            : workflowJobsRestBudget;
         if (includeWorkflowRuns) {
             const selectedRuns = selectWorkflowJobRuns(provisional);
-            const restBudget = selectedRuns.length > 0 && typeof workflowJobsRestBudget === "function"
-                ? await workflowJobsRestBudget()
-                : workflowJobsRestBudget;
             sourceState.workflowJobs = await workflowJobsSource({
                 runJson: this.runJson,
                 cwd: this.cwd,
@@ -912,6 +926,7 @@ export class GitHubSquadActivityAdapter {
             repository,
             previous,
             attemptedAt,
+            restBudget,
         });
         snapshot.bootstrap = bootstrap.bootstrap;
         snapshot.sourceState.bootstrap = bootstrap.sourceState;

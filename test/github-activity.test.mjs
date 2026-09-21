@@ -97,9 +97,9 @@ function workflowJobs(overrides = {}) {
 
 function bootstrapApi(args) {
     const endpoint = args[1];
-    if (endpoint.includes("/actions/workflows?")) return [{ workflows: [] }];
-    if (endpoint.includes("/actions/runs?")) return [{ workflow_runs: [] }];
-    return [[]];
+    if (endpoint.includes("/actions/workflows?")) return { workflows: [] };
+    if (endpoint.includes("/actions/runs?")) return { workflow_runs: [] };
+    return [];
 }
 
 function workflowJobsApi(args, response = workflowJobs()) {
@@ -903,9 +903,9 @@ function bootstrapRepository() {
 
 function bootstrapResponses(overrides = {}) {
     return {
-        "actions/workflows?": [{
+        "actions/workflows?": {
             workflows: [bootstrapWorkflow({ id: 42 })],
-        }],
+        },
         "actions/workflows/42/runs?": {
             workflow_runs: [
                 bootstrapWorkflowRun({
@@ -919,31 +919,33 @@ function bootstrapResponses(overrides = {}) {
                 }),
             ],
         },
-        "pulls?state=all": [[bootstrapCastPullRequest()], [{
+        "pulls?state=all": [bootstrapCastPullRequest(), {
             number: 4,
             title: "Unrelated",
             head: { ref: "feature" },
             base: { ref: "main" },
             state: "open",
-        }]],
-        "issues?state=all": [[researchIssue()], [{
+        }],
+        "issues?state=all": [researchIssue(), {
             number: 7,
             title: "Unrelated",
             body: "",
             state: "open",
-        }]],
-        "issues/6/comments?": [[researchComment()]],
+        }],
+        "issues/6/comments?": [researchComment()],
         ...overrides,
     };
 }
 
 test("discovers exhaustive paginated bootstrap evidence with bounded API cost", async () => {
     const calls = [];
+    const restBudget = { remaining: 105, reserve: 100 };
     const adapter = bootstrapDiscoveryAdapter(bootstrapResponses(), calls);
     const result = await adapter.discoverBootstrap({
         repository: bootstrapRepository(),
         previous: null,
         attemptedAt: "2026-09-21T12:00:00.000Z",
+        restBudget,
     });
 
     assert.equal(result.bootstrap.status, "complete");
@@ -951,15 +953,16 @@ test("discovers exhaustive paginated bootstrap evidence with bounded API cost", 
     assert.equal(result.sourceState.pullRequests.data.length, 2);
     assert.equal(result.sourceState.issues.data.length, 2);
     assert.equal(calls.length, 5);
+    assert.equal(restBudget.remaining, restBudget.reserve);
     assert.equal(calls.filter((args) => args[1].includes("/comments?")).length, 1);
     const runCall = calls.find((args) => args[1].includes("/actions/workflows/42/runs?"));
     assert.equal(runCall[1].includes("branch="), false);
     assert.equal(runCall.includes("--paginate"), false);
-    for (const args of calls.filter((item) => item !== runCall)) {
+    for (const args of calls) {
         assert.equal(args[0], "api");
-        assert.ok(args.includes("--paginate"));
-        assert.ok(args.includes("--slurp"));
         assert.match(args[1], /per_page=100/);
+        assert.match(args[1], /page=1/);
+        assert.equal(args.includes("--paginate"), false);
     }
 });
 
@@ -967,7 +970,7 @@ test("fetches comments only for the unique canonical research issue", async () =
     const calls = [];
     const duplicateIssue = researchIssue({ number: 7 });
     const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
-        "issues?state=all": [[researchIssue(), duplicateIssue]],
+        "issues?state=all": [researchIssue(), duplicateIssue],
     }), calls);
     const result = await adapter.discoverBootstrap({
         repository: bootstrapRepository(),
@@ -1058,12 +1061,12 @@ test("retries transient bootstrap source failures and records recovered freshnes
 
 test("preserves first workflow observation time so installed bootstrap can become delayed", async () => {
     const responses = bootstrapResponses({
-        "actions/workflows?": [{
+        "actions/workflows?": {
             workflows: [bootstrapWorkflow({ id: 42, observedAt: undefined })],
-        }],
+        },
         "actions/workflows/42/runs?": { workflow_runs: [] },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     });
     const firstAdapter = bootstrapDiscoveryAdapter(responses);
     const first = await firstAdapter.discoverBootstrap({
@@ -1103,21 +1106,28 @@ test("exhausts more than one thousand canonical workflow runs without a filtered
             const start = (page - 1) * 100;
             return { workflow_runs: runs.slice(start, start + 100) };
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     }), calls);
+    const restBudget = { remaining: 114, reserve: 100 };
     const result = await adapter.discoverBootstrap({
         repository: bootstrapRepository(),
         previous: null,
         attemptedAt: "2026-09-21T12:00:00.000Z",
+        restBudget,
     });
 
     assert.equal(result.sourceState.workflowRuns.data.length, 1002);
     assert.equal(result.bootstrap.workflowAttempts.length, 1001);
-    assert.equal(
-        calls.filter((args) => args[1].includes("/actions/workflows/42/runs?")).length,
-        11,
+    const runCalls = calls.filter((args) => args[1].includes("/actions/workflows/42/runs?"));
+    assert.equal(runCalls.length, 11);
+    assert.deepEqual(
+        runCalls.map((args) => Number(new URL(`https://api.github.test/${args[1]}`)
+            .searchParams.get("page"))),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     );
+    assert.equal(runCalls.some((args) => args.includes("--paginate") || args.includes("--slurp")), false);
+    assert.equal(restBudget.remaining, restBudget.reserve);
 });
 
 test("uses cached workflow history to bound repeated refresh cost", async () => {
@@ -1130,8 +1140,8 @@ test("uses cached workflow history to bound repeated refresh cost", async () => 
                 .searchParams.get("page"));
             return { workflow_runs: runs.slice((page - 1) * 100, page * 100) };
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     });
     const first = await bootstrapDiscoveryAdapter(responses).discoverBootstrap({
         repository: bootstrapRepository(),
@@ -1158,8 +1168,8 @@ test("uses cached workflow history to bound repeated refresh cost", async () => 
 
 test("invalidates workflow-run cache when canonical workflow identity changes", async () => {
     const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     })).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: null,
@@ -1170,14 +1180,14 @@ test("invalidates workflow-run cache when canonical workflow identity changes", 
     }));
     const calls = [];
     const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
-        "actions/workflows?": [{ workflows: [bootstrapWorkflow({ id: 43 })] }],
+        "actions/workflows?": { workflows: [bootstrapWorkflow({ id: 43 })] },
         "actions/workflows/43/runs?": ({ args }) => {
             const page = Number(new URL(`https://api.github.test/?${args[1].split("?")[1]}`)
                 .searchParams.get("page"));
             return { workflow_runs: replacementRuns.slice((page - 1) * 100, page * 100) };
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     }), calls).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: {
@@ -1220,7 +1230,7 @@ test("honors primary and secondary rate-limit reset delays with a maximum bound"
         const delays = [];
         const adapter = bootstrapDiscoveryAdapter(bootstrapResponses({
             "pulls?state=all": {
-                attempts: [new Error(message), [[bootstrapCastPullRequest()]]],
+                attempts: [new Error(message), [bootstrapCastPullRequest()]],
             },
         }), [], {
             sleep: async (milliseconds) => delays.push(milliseconds),
@@ -1259,8 +1269,8 @@ test("audits replace deleted and rewritten recent runs while retaining older his
         "actions/workflows/42/runs?": {
             workflow_runs: [deletedFailure, rerunBefore, olderHistory],
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     })).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: null,
@@ -1278,8 +1288,8 @@ test("audits replace deleted and rewritten recent runs while retaining older his
                 .searchParams.get("page"));
             return { workflow_runs: currentWindow.slice((page - 1) * 100, page * 100) };
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     }), calls).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: {
@@ -1310,8 +1320,8 @@ test("an exhausted first page immediately evicts absent cached runs", async () =
                 bootstrapWorkflowRun({ databaseId: 802, conclusion: "success" }),
             ],
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     })).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: null,
@@ -1321,8 +1331,8 @@ test("an exhausted first page immediately evicts absent cached runs", async () =
         "actions/workflows/42/runs?": {
             workflow_runs: [bootstrapWorkflowRun({ databaseId: 802, conclusion: "success" })],
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     })).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: {
@@ -1343,8 +1353,8 @@ test("failed workflow-run audits preserve cached history as stale", async () => 
         "actions/workflows/42/runs?": {
             workflow_runs: [bootstrapWorkflowRun({ conclusion: "failure" })],
         },
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     })).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: null,
@@ -1352,8 +1362,8 @@ test("failed workflow-run audits preserve cached history as stale", async () => 
     });
     const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
         "actions/workflows/42/runs?": new Error("HTTP 403: audit unavailable"),
-        "pulls?state=all": [[]],
-        "issues?state=all": [[]],
+        "pulls?state=all": [],
+        "issues?state=all": [],
     })).discoverBootstrap({
         repository: bootstrapRepository(),
         previous: {
