@@ -6,6 +6,8 @@ test("renders the read-only mission control prototype surfaces", () => {
     const html = renderHtml();
 
     assert.match(html, /Squad mission control/);
+    assert.doesNotMatch(html, />Squadcaster</);
+    assert.doesNotMatch(html, />SC</);
     assert.match(html, /Goal lifecycle/);
     assert.match(html, /Recent activity/);
     assert.match(html, /Needs attention/);

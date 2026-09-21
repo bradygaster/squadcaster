@@ -221,7 +221,7 @@ async function loadState(workingDirectory) {
                 workingDirectory: workingDirectory || "",
                 repoRoot: "",
                 repoName: "",
-                message: "Open Squadcaster from a Copilot project session.",
+                message: "Open this canvas from a Copilot project session.",
                 signals: [],
                 members: [],
                 mission: null,
@@ -866,7 +866,7 @@ async function handleRequest(entry, req, res) {
         return;
     }
     if (req.method !== "GET") {
-        sendJson(res, 405, { error: "Squadcaster is read-only." });
+        sendJson(res, 405, { error: "This canvas is read-only." });
         return;
     }
     sendJson(res, 404, { error: "Not found." });
@@ -916,7 +916,7 @@ async function refreshEntry(entry) {
 
 const canvas = createCanvas({
     id: "squadcaster",
-    displayName: "Squadcaster",
+    displayName: "All Squads",
     description: "Observe Squad goals, issues, pull requests, workflow runs, checks, blockers, and evidence.",
     inputSchema: {
         type: "object",
@@ -934,7 +934,7 @@ const canvas = createCanvas({
             description: "Return user-wide Squad activity and the current repository context.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
-                if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
+                if (!entry) throw new CanvasError("squadcaster_not_open", "The Squad activity canvas is not open.");
                 await refreshRemoteState(entry, { force: true });
                 return entry.state;
             },
@@ -944,7 +944,7 @@ const canvas = createCanvas({
             description: "Rediscover and refresh user-wide Squad activity.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
-                if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
+                if (!entry) throw new CanvasError("squadcaster_not_open", "The Squad activity canvas is not open.");
                 await refreshEntry(entry);
                 return entry.state;
             },

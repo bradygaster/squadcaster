@@ -4,7 +4,7 @@ export function renderHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Squadcaster</title>
+  <title>All Squads</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -977,7 +977,7 @@ export function renderHtml() {
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><span class="mark">SC</span><span>Squadcaster</span></div>
+      <div class="brand"><span>All Squads</span></div>
       <div class="repo" id="repo-header"></div>
     </header>
     <main id="app"></main>
@@ -1113,7 +1113,7 @@ export function renderHtml() {
       const active = state.activity?.summary?.active || 0;
       const repositories = (state.activity?.repositories || []).filter(repository => repository.included).length;
       const mode = active ? \`\${active} active goal\${active === 1 ? "" : "s"}\` : "Operations";
-      repoHeader.innerHTML = \`<strong>All Squads</strong><span class="mode">\${repositories} repos · \${mode}</span>\`;
+      repoHeader.innerHTML = \`<span class="mode">\${repositories} repos · \${mode}</span>\`;
     }
 
     function memberBadge(member) {
@@ -1805,7 +1805,7 @@ export function renderHtml() {
               \${goals.length ? "" : \`
                 <section class="empty" style="margin-top:14px">
                   <h2>\${phaseFilter === "all" ? "No goals found." : "No " + esc(phaseFilter) + " goals found."}</h2>
-                  <p>Squadcaster recognizes issues carrying <code>squad</code> or <code>squad:*</code> labels, Squad commands, or structured Squad artifacts.</p>
+                  <p>Goals are recognized from issues carrying <code>squad</code> or <code>squad:*</code> labels, Squad commands, or structured Squad artifacts.</p>
                 </section>\`}
             </div>
             \${recentActivityHtml(goals)}
@@ -1819,14 +1819,14 @@ export function renderHtml() {
       const drawerWasFocused = Boolean(document.activeElement?.closest?.(".goal-drawer"));
       updateHeader();
       if (!state) {
-        app.innerHTML = '<div class="operation"><span class="spinner"></span><div>Loading Squadcaster…</div></div>';
+        app.innerHTML = '<div class="operation"><span class="spinner"></span><div>Loading Squad activity…</div></div>';
         return;
       }
       if (state.mode === "unavailable") {
         app.innerHTML = \`
           <section class="empty">
-            <h1>Open Squadcaster from a project session.</h1>
-            <p>The canvas needs the app’s active repository worktree. Open or create a Copilot project session, then launch Squadcaster again.</p>
+            <h1>Open this canvas from a project session.</h1>
+            <p>The canvas needs the app’s active repository worktree. Open or create a Copilot project session, then reopen this canvas.</p>
           </section>\`;
         return;
       }
@@ -2041,15 +2041,15 @@ export function renderHtml() {
     });
     events.onerror = () => {
       if (state) {
-        state.operation = { status: "error", message: "Canvas connection interrupted. Reopen Squadcaster to reconnect." };
+        state.operation = { status: "error", message: "Canvas connection interrupted. Reopen the canvas to reconnect." };
         render();
-        announce("Canvas connection interrupted. Reopen Squadcaster to reconnect.");
+        announce("Canvas connection interrupted. Reopen the canvas to reconnect.");
       }
     };
 
     refresh();
     setInterval(() => {
-      refresh().catch(error => console.error("Unable to refresh Squadcaster onboarding state.", error));
+      refresh().catch(error => console.error("Unable to refresh Squad activity state.", error));
     }, 15000);
   </script>
 </body>
