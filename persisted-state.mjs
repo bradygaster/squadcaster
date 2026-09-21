@@ -34,16 +34,36 @@ function normalizeRepository(repository) {
     };
 }
 
+function isUnvalidatedSessionProvenanceField(key) {
+    return String(key).replace(/[^a-z0-9]/gi, "").toLowerCase().includes("session");
+}
+
+function withoutUnvalidatedSessionProvenance(value) {
+    if (Array.isArray(value)) return value.map(withoutUnvalidatedSessionProvenance);
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([key]) => !isUnvalidatedSessionProvenanceField(key))
+            .map(([key, nestedValue]) => [
+                key,
+                withoutUnvalidatedSessionProvenance(nestedValue),
+            ]),
+    );
+}
+
 function normalizeGoal(goal) {
+    const supportedGoal = withoutUnvalidatedSessionProvenance(goal);
     return {
-        ...goal,
-        repository: isRecord(goal.repository) ? normalizeRepository(goal.repository) : {},
-        issue: isRecord(goal.issue) ? goal.issue : {},
-        owner: isRecord(goal.owner) ? goal.owner : null,
-        blockers: recordArray(goal.blockers),
-        evidence: recordArray(goal.evidence),
-        pullRequests: recordArray(goal.pullRequests),
-        workflowRuns: recordArray(goal.workflowRuns),
+        ...supportedGoal,
+        repository: isRecord(supportedGoal.repository)
+            ? normalizeRepository(supportedGoal.repository)
+            : {},
+        issue: isRecord(supportedGoal.issue) ? supportedGoal.issue : {},
+        owner: isRecord(supportedGoal.owner) ? supportedGoal.owner : null,
+        blockers: recordArray(supportedGoal.blockers),
+        evidence: recordArray(supportedGoal.evidence),
+        pullRequests: recordArray(supportedGoal.pullRequests),
+        workflowRuns: recordArray(supportedGoal.workflowRuns),
     };
 }
 

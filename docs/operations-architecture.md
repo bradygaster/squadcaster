@@ -153,3 +153,5 @@ the authoritative state model, evidence mapping, and renderer decision.
   the last complete successful synchronization. Partial or stale snapshots do
   not advance the successful timestamp.
 - Unknown relationships are not promoted to observed facts.
+- Candidate implementation-session provenance fields are discarded from
+  persisted activity until the producer contract is validated.

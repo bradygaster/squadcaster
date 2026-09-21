@@ -110,3 +110,7 @@ The renderer will:
 
 No parser, cache entry, normalized session field, or renderer surface should be
 added from this design document alone.
+
+Persisted schema-v2 activity also fails closed: candidate goal-level
+implementation-session identifiers or provenance objects are discarded during
+normalization until a validated producer contract versions and activates them.
