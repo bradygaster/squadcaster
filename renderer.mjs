@@ -2512,8 +2512,11 @@ export function renderHtml() {
       const lifecycle = ["queued", "researching", "implementing", "reviewing", "completed"];
       const repositories = (activity.repositories || []).filter(repository => repository.included).length;
       const inProgress = (summary.queued || 0) + (summary.researching || 0) + (summary.implementing || 0);
-      const bootstrapAttention = repositoryBootstrapEntries().filter(entry =>
-        ["delayed", "partial", "failed", "ambiguous", "malformed"].includes(entry.bootstrap?.status)).length;
+      const bootstrapAttention = repositoryBootstrapEntries()
+        .filter(bootstrapEntryMatchesScope)
+        .filter(entry =>
+          ["delayed", "partial", "failed", "ambiguous", "malformed"].includes(entry.bootstrap?.status))
+        .length;
       const needsAttention = (summary.blocked || 0) + (summary.failed || 0) + bootstrapAttention;
       return \`
         <section>

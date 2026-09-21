@@ -1120,6 +1120,8 @@ test("active repository scope hides completed-only bootstrap diagnostics", async
     await page.getByRole("checkbox", { name: "Only repositories with active work" }).check();
     await expect(summary).toHaveCount(0);
     await expect(page.locator("#attention-bootstrap")).toHaveCount(0);
+    await expect(page.locator(".metric").filter({ hasText: "Needs attention" }).locator(".metric-value strong"))
+        .toHaveText("1");
 });
 
 test("bootstrap drawer restores focus to the activating attention control", async ({ page }) => {
