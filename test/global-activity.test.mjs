@@ -1801,6 +1801,7 @@ test("background refresh retries stale workflow sources for inactive repositorie
             calls.push(args);
             if (args[0] === "repo") return repository("octodemo/frontend");
             if (args[0] === "issue") return [issue("octodemo/frontend", 57, "", "CLOSED")];
+            if (args[0] === "api") return { total_count: 0, jobs: [] };
             return [];
         },
     });

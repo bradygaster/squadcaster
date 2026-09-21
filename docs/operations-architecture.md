@@ -36,6 +36,19 @@ list their repository input days, and the renderer distinguishes retained or
 mixed-day data from the aggregate observation day. No daily metric is part of
 this contract slice.
 
+Selected workflow runs add an independent `workflowJobs` source. Before making
+jobs requests, the adapter selects the two newest correlated runs per goal,
+deduplicates them, and caps the repository at 20 runs. Each run uses at most 10
+pages of 100 jobs from GitHub's run-jobs REST endpoint. Runs outside the bound
+are explicitly not selected. The cache is per run: failures retain the last
+successful jobs for that run without staling issue, pull-request, or run data.
+A successful empty jobs response remains distinct from unavailable data.
+
+The renderer keeps workflow-run summaries and workflow job/step drill-down in
+separate sections. It shows only GitHub-observed names, statuses, conclusions,
+URLs, and timestamps. It does not infer progress, duration, failure reason, or
+causality, and the polling path never downloads logs.
+
 The supported lifecycle is `queued`, `researching`, `implementing`, `reviewing`,
 `blocked`, `completed`, and `failed`. GitHub state has precedence over inferred
 planning state: closed or merged work is complete; unresolved dependencies are
@@ -201,7 +214,8 @@ the authoritative state model, evidence mapping, and renderer decision.
 - Renderer output is escaped before insertion.
 - Independent API failures appear in the canvas.
 - Each failed activity source retains its last-known evidence while successful
-  issue, pull-request, and workflow sources continue to update.
+  issue, pull-request, workflow-run, and workflow-job sources continue to
+  update independently.
 - Partial snapshots expose source-specific errors and identify retained evidence
   as stale until that source refreshes successfully.
 - Repository and aggregate refresh metadata distinguish the latest attempt from

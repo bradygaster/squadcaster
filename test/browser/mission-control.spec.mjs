@@ -60,6 +60,29 @@ function goal({
             url: `https://github.com/${repository}/actions/runs/${300 + number}`,
             createdAt: timestamp,
             updatedAt: timestamp,
+            jobsState: {
+                status: "fresh",
+                fetchedAt: timestamp,
+                error: "",
+                truncated: false,
+            },
+            jobs: [{
+                id: 900 + number,
+                name: "Browser validation",
+                status: "completed",
+                conclusion: "success",
+                url: `https://github.com/${repository}/actions/runs/${300 + number}/job/${900 + number}`,
+                startedAt: timestamp,
+                completedAt: timestamp,
+                steps: [{
+                    number: 1,
+                    name: "Run browser tests",
+                    status: "completed",
+                    conclusion: "success",
+                    startedAt: timestamp,
+                    completedAt: timestamp,
+                }],
+            }],
         }] : [],
         evidence: [{
             kind: phase === "reviewing" ? "pull-request" : "issue",
@@ -346,6 +369,9 @@ test("supports stage expansion and a contained modal focus cycle", async ({ page
     await expect(close).toBeFocused();
     await expect(page.locator("body")).toHaveCSS("overflow", "hidden");
     await expect(page.locator(".topbar")).toHaveAttribute("inert", "");
+    await expect(dialog.getByRole("heading", { name: "Workflow jobs and steps" })).toBeVisible();
+    await expect(dialog.getByText("Browser validation")).toBeVisible();
+    await expect(dialog.getByText("Run browser tests")).toBeVisible();
 
     await page.keyboard.press("Shift+Tab");
     await expect(dialog.getByRole("link").last()).toBeFocused();

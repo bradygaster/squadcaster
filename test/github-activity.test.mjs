@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildActivitySnapshot } from "../activity-model.mjs";
-import { GitHubSquadActivityAdapter } from "../github-activity.mjs";
+import {
+    GitHubSquadActivityAdapter,
+    selectWorkflowJobRuns,
+} from "../github-activity.mjs";
 
 const repository = {
     name: "demo",
@@ -57,6 +60,30 @@ function workflowRun(overrides = {}) {
         url: "https://github.com/octodemo/demo/actions/runs/78",
         headBranch: "squad/implement-12-dashboard",
         updatedAt: "2026-09-20T12:00:00Z",
+        ...overrides,
+    };
+}
+
+function workflowJobs(overrides = {}) {
+    return {
+        total_count: 1,
+        jobs: [{
+            id: 901,
+            name: "test",
+            status: "completed",
+            conclusion: "success",
+            html_url: "https://github.com/octodemo/demo/actions/runs/78/job/901",
+            started_at: "2026-09-20T12:00:00Z",
+            completed_at: "2026-09-20T12:01:00Z",
+            steps: [{
+                number: 1,
+                name: "Run tests",
+                status: "completed",
+                conclusion: "success",
+                started_at: "2026-09-20T12:00:00Z",
+                completed_at: "2026-09-20T12:01:00Z",
+            }],
+        }],
         ...overrides,
     };
 }
@@ -162,6 +189,7 @@ test("preserves failed workflow evidence and recovers on a later successful refr
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue({ title: "Recovered work", body: "" })];
             if (args[0] === "pr") return [];
+            if (args[0] === "api") return workflowJobs();
             return [workflowRun({
                 databaseId: 79,
                 conclusion: "success",
@@ -177,6 +205,224 @@ test("preserves failed workflow evidence and recovers on a later successful refr
     assert.deepEqual(recovered.staleSources, []);
     assert.deepEqual(recovered.errors, []);
     assert.equal(recovered.sourceState.workflowRuns.data[0].databaseId, 79);
+});
+
+test("selects the two newest correlated runs per goal and caps the repository at twenty", () => {
+    const goals = Array.from({ length: 12 }, (_, goalIndex) => ({
+        workflowRuns: Array.from({ length: 3 }, (_, runIndex) => ({
+            id: goalIndex * 10 + runIndex + 1,
+            updatedAt: `2026-09-${String(20 - goalIndex).padStart(2, "0")}T1${runIndex}:00:00Z`,
+        })),
+    }));
+
+    const selected = selectWorkflowJobRuns({ goals });
+
+    assert.equal(selected.length, 20);
+    assert.ok(selected.every((run) => run.id % 10 !== 1));
+    assert.deepEqual(selected.slice(0, 2).map((run) => run.id), [3, 2]);
+});
+
+test("orders selected runs by updated time, created time, then run id", () => {
+    const selected = selectWorkflowJobRuns({
+        goals: [{
+            workflowRuns: [
+                {
+                    id: 9,
+                    updatedAt: "2026-09-20T12:00:00Z",
+                    createdAt: "2026-09-20T10:00:00Z",
+                },
+                {
+                    id: 7,
+                    updatedAt: "2026-09-20T12:00:00Z",
+                    createdAt: "2026-09-20T11:00:00Z",
+                },
+                {
+                    id: 8,
+                    updatedAt: "2026-09-20T12:00:00Z",
+                    createdAt: "2026-09-20T11:00:00Z",
+                },
+            ],
+        }],
+    });
+
+    assert.deepEqual(selected.map((run) => run.id), [8, 7]);
+});
+
+test("paginates selected workflow jobs and preserves only observed job and step fields", async () => {
+    const calls = [];
+    const firstPageJobs = Array.from({ length: 100 }, (_, index) => ({
+        id: 1000 + index,
+        name: `job-${index}`,
+        status: "completed",
+        conclusion: "success",
+        started_at: "2026-09-20T12:00:00Z",
+        completed_at: "2026-09-20T12:01:00Z",
+        steps: [],
+    }));
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [workflowRun()];
+            if (args.includes("page=1")) return workflowJobs({
+                total_count: 101,
+                jobs: firstPageJobs,
+            });
+            return workflowJobs({
+                total_count: 101,
+                jobs: [{
+                    id: 1100,
+                    name: "final-job",
+                    status: "completed",
+                    conclusion: "failure",
+                    started_at: "invalid",
+                    completed_at: null,
+                    steps: [{
+                        number: 1,
+                        name: "Observed failure",
+                        status: "completed",
+                        conclusion: "failure",
+                    }],
+                }],
+            });
+        },
+    });
+
+    const result = await adapter.discover();
+    const run = result.goals[0].workflowRuns[0];
+
+    assert.equal(result.sourceState.workflowJobs.status, "fresh");
+    assert.equal(run.jobsState.status, "fresh");
+    assert.equal(run.jobs.length, 101);
+    assert.deepEqual(run.jobs.at(-1), {
+        id: 1100,
+        name: "final-job",
+        status: "completed",
+        conclusion: "failure",
+        url: "",
+        startedAt: null,
+        completedAt: null,
+        steps: [{
+            number: 1,
+            name: "Observed failure",
+            status: "completed",
+            conclusion: "failure",
+            startedAt: null,
+            completedAt: null,
+        }],
+    });
+    assert.equal(calls.filter((args) => args[0] === "api").length, 2);
+    assert.ok(calls.every((args) => !args.some((arg) => String(arg).includes("logs"))));
+});
+
+test("distinguishes a successful empty jobs response from unavailable jobs", async () => {
+    const emptyAdapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [workflowRun()];
+            return { total_count: 0, jobs: [] };
+        },
+    });
+    const empty = await emptyAdapter.discover();
+    assert.equal(empty.goals[0].workflowRuns[0].jobsState.status, "fresh");
+    assert.deepEqual(empty.goals[0].workflowRuns[0].jobs, []);
+
+    const deniedAdapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [workflowRun()];
+            throw new Error("HTTP 403: Resource not accessible by integration");
+        },
+    });
+    const denied = await deniedAdapter.discover();
+    assert.equal(denied.sourceState.workflowJobs.status, "unavailable");
+    assert.equal(denied.goals[0].workflowRuns[0].jobsState.status, "unavailable");
+    assert.equal(denied.goals[0].workflowRuns[0].jobs, null);
+    assert.equal(denied.partial, true);
+    assert.equal(denied.stale, false);
+    assert.equal(denied.errors.at(-1).source, "workflow jobs");
+});
+
+test("preserves each selected run's last successful jobs when only the jobs source fails", async () => {
+    const previous = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        workflowRuns: [workflowRun()],
+        sourceState: {
+            issues: { data: [issue({ body: "" })], status: "fresh" },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [workflowRun()], status: "fresh" },
+            workflowJobs: {
+                data: [{
+                    runId: 78,
+                    fetchedAt: "2026-09-20T12:02:00Z",
+                    status: "fresh",
+                    error: "",
+                    truncated: false,
+                    jobs: workflowJobs().jobs,
+                }],
+                fetchedAt: "2026-09-20T12:02:00Z",
+                status: "fresh",
+                error: "",
+            },
+        },
+    });
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ title: "Updated", body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [workflowRun({ conclusion: "success" })];
+            throw new Error("workflow jobs permission denied");
+        },
+    });
+
+    const result = await adapter.discover({ previous });
+    const run = result.goals[0].workflowRuns[0];
+
+    assert.equal(result.goals[0].issue.title, "Updated");
+    assert.equal(result.sourceState.issues.status, "fresh");
+    assert.equal(result.sourceState.workflowRuns.status, "fresh");
+    assert.equal(result.sourceState.workflowJobs.status, "stale");
+    assert.deepEqual(result.staleSources, ["workflowJobs"]);
+    assert.equal(run.jobsState.status, "stale");
+    assert.equal(run.jobs[0].name, "test");
+});
+
+test("marks the jobs source partial when the pagination ceiling is reached", async () => {
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue({ body: "" })];
+            if (args[0] === "pr") return [];
+            if (args[0] === "run") return [workflowRun()];
+            return {
+                total_count: 1001,
+                jobs: Array.from({ length: 100 }, (_, index) => ({
+                    id: Number(args.find((arg) => String(arg).startsWith("page=")).split("=")[1]) * 1000 + index,
+                    name: `job-${index}`,
+                })),
+            };
+        },
+    });
+
+    const result = await adapter.discover();
+
+    assert.equal(result.sourceState.workflowJobs.status, "partial");
+    assert.equal(result.goals[0].workflowRuns[0].jobsState.truncated, true);
+    assert.equal(result.goals[0].workflowRuns[0].jobs.length, 1000);
+    assert.equal(result.partial, true);
 });
 
 test("keeps a never-successful source unavailable across repeated failures", async () => {

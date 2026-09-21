@@ -647,7 +647,11 @@ export class GitHubGlobalActivity {
                     includeWorkflowRuns: key === currentKey ||
                         Number(previous?.summary?.active || 0) > 0 ||
                         Boolean(previous?.sourceState?.workflowRuns?.error) ||
-                        ["stale", "unavailable"].includes(previous?.sourceState?.workflowRuns?.status),
+                        ["stale", "unavailable"].includes(previous?.sourceState?.workflowRuns?.status) ||
+                        Boolean(previous?.sourceState?.workflowJobs?.error) ||
+                        ["partial", "stale", "unavailable"].includes(
+                            previous?.sourceState?.workflowJobs?.status,
+                        ),
                 }), roster);
                 this.registry.snapshots[key] = snapshot;
                 observedKeys.add(key);
