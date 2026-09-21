@@ -114,11 +114,19 @@ function validateBinding(raw, repository, issueByNumber) {
     }
     if (
         typeof raw.task !== "string" ||
+        raw.task.trim().length === 0 ||
+        raw.task.trim().length > 80 ||
         typeof raw.epic !== "string" ||
+        raw.epic.trim().length === 0 ||
+        raw.epic.trim().length > 80 ||
         typeof raw.agent !== "string" ||
+        raw.agent.trim().length === 0 ||
+        raw.agent.trim().length > 160 ||
         !Array.isArray(raw.epic_agents) ||
         !raw.epic_agents.every((value) =>
-            typeof value === "string" && value.trim()) ||
+            typeof value === "string" &&
+            value.trim().length > 0 &&
+            value.trim().length <= 160) ||
         !["label", "epic_label", "omission_reason", "epic_omission_reason"]
             .every((field) =>
                 raw[field] === undefined ||
@@ -142,7 +150,9 @@ function validateBinding(raw, repository, issueByNumber) {
     const task = clean(raw.task, 80);
     const epic = clean(raw.epic, 80);
     const agent = clean(raw.agent, 160);
-    const epicAgents = raw.epic_agents.map((value) => normalized(value)).filter(Boolean);
+    const epicAgents = raw.epic_agents
+        .map((value) => clean(value, 160).toLowerCase())
+        .filter(Boolean);
     if (!task) return { error: `Activation binding for #${number} has no task identifier.` };
     if (!epic) return { error: `Activation binding for #${number} has no epic identifier.` };
     if (!agent) return { error: `Activation binding for #${number} has no agent.` };

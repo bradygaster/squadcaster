@@ -146,6 +146,8 @@ test("preserves normalized read-only handoff readiness across cache migration", 
                         epic: "2.1",
                         agent: "Kint",
                         epicAgents: ["kint"],
+                        label: "squad:kint",
+                        epicLabel: "squad:kint",
                         rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
                         artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
                     },
@@ -606,6 +608,75 @@ test("rejects cached activation with coerced identity fields", () => {
                         epic: "2.1",
                         agent: 7,
                         epicAgents: [7],
+                        rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
+                        artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
+                    },
+                    acceptanceCriteria: [{ text: "Works" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [],
+                },
+            }],
+        },
+    });
+    const handoff = normalized.activity.goals[0].handoff;
+
+    assert.equal(handoff.activation, null);
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.equal(handoff.readiness.automatedHandoffAvailable, false);
+});
+
+test("rejects cached activation without ownership provenance", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#12",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 12 },
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: true,
+                    },
+                    activation: {
+                        schemaVersion: "1",
+                        artifactKind: "activated",
+                        issue: "octodemo/demo#12",
+                        issueNumber: 12,
+                        epicIssue: "octodemo/demo#11",
+                        epicIssueNumber: 11,
+                        rootIssue: "octodemo/demo#10",
+                        rootIssueNumber: 10,
+                        task: "3",
+                        epic: "2.1",
+                        agent: "Kint",
+                        epicAgents: ["kint"],
                         rootIssueUrl: "https://github.com/octodemo/demo/issues/10",
                         artifactUrl: "https://github.com/octodemo/demo/issues/10#issuecomment-100",
                     },

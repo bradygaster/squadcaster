@@ -510,6 +510,18 @@ test("activation identity collisions fail the whole envelope closed", () => {
 
         assert.equal(evidence.get(12).activation, null);
         assert.match(evidence.get(12).errors.join(" "), /must be strings/i);
+
+        const oversized = "x".repeat(200);
+        issues[0].comments = [activationComment([binding({
+            agent: oversized,
+            epic_agents: [oversized],
+        })])];
+        const oversizedEvidence = parseActivationEvidence({
+            issues,
+            repository: "octodemo/demo",
+        });
+        assert.equal(oversizedEvidence.get(12).activation, null);
+        assert.match(oversizedEvidence.get(12).errors.join(" "), /must be strings/i);
     });
 
     assert.equal(taskEvidence.get(12).activation, null);

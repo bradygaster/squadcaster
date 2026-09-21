@@ -973,6 +973,27 @@ test("links generated implementation goals only from validated activation bindin
     assert.ok(numericReference.evidence.some((item) =>
         item.kind === "bootstrap-diagnostic" &&
         item.code === "invalid-activation-binding"));
+
+    const oversizedIdentity = "x".repeat(200);
+    const oversizedIdentityRoot = goalIssue(6, root.title, [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("activated", {
+            bindings: [{
+                ...bindings[0],
+                agent: oversizedIdentity,
+                epic_agents: [oversizedIdentity],
+            }],
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const oversized = snapshotWithBootstrap({
+        issues: [oversizedIdentityRoot, epic, taskIssue],
+        bootstrap: snapshot.bootstrap,
+    }).goals.find((goal) => goal.issue.number === 6);
+    assert.deepEqual(oversized.bootstrap.generatedGoals, []);
+    assert.ok(oversized.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "invalid-activation-binding"));
 });
 
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {

@@ -757,11 +757,19 @@ function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
         }
         if (
             typeof binding.task !== "string" ||
+            binding.task.trim().length === 0 ||
+            binding.task.trim().length > 80 ||
             typeof binding.epic !== "string" ||
+            binding.epic.trim().length === 0 ||
+            binding.epic.trim().length > 80 ||
             typeof binding.agent !== "string" ||
+            binding.agent.trim().length === 0 ||
+            binding.agent.trim().length > 160 ||
             !Array.isArray(binding.epic_agents) ||
             !binding.epic_agents.every((value) =>
-                typeof value === "string" && value.trim()) ||
+                typeof value === "string" &&
+                value.trim().length > 0 &&
+                value.trim().length <= 160) ||
             !["label", "epic_label", "omission_reason", "epic_omission_reason"]
                 .every((field) =>
                     binding[field] === undefined ||

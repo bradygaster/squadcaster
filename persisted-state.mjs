@@ -112,14 +112,27 @@ function normalizeActivation(value, expectedRepository, expectedIssueNumber) {
     const rootIssueNumber = value.rootIssueNumber;
     const identityFieldsAreStrings = ["task", "epic", "agent"]
         .every((field) => typeof value[field] === "string" && value[field].trim());
+    const identityLengthsAreValid = identityFieldsAreStrings &&
+        value.task.trim().length <= 80 &&
+        value.epic.trim().length <= 80 &&
+        value.agent.trim().length <= 160;
     const epicAgents = Array.isArray(value.epicAgents) &&
-        value.epicAgents.every((agent) => typeof agent === "string" && agent.trim())
+        value.epicAgents.every((agent) =>
+            typeof agent === "string" &&
+            agent.trim().length > 0 &&
+            agent.trim().length <= 160)
         ? value.epicAgents.map((agent) => agent.trim())
         : [];
     const normalizedAgent = typeof value.agent === "string"
         ? value.agent.trim().toLowerCase()
         : "";
     const normalizedEpicAgents = epicAgents.map((agent) => agent.toLowerCase());
+    const ownershipIsValid = (label, omission) => (
+        typeof label === "string" && label.trim().length > 0
+    ) || (
+        typeof omission === "string" &&
+        ["multi-owner", "non-roster"].includes(omission.trim().toLowerCase())
+    );
     const valid = value.schemaVersion === "1" &&
         ["activated", "phases-activated", "plan-accepted", "phases-accepted"]
             .includes(value.artifactKind) &&
@@ -135,10 +148,13 @@ function normalizeActivation(value, expectedRepository, expectedIssueNumber) {
         qualifiedIssueMatches(value.epicIssue, expectedRepository, epicIssueNumber) &&
         qualifiedIssueMatches(value.rootIssue, expectedRepository, rootIssueNumber) &&
         identityFieldsAreStrings &&
+        identityLengthsAreValid &&
         Boolean(normalizedAgent) &&
         epicAgents.length > 0 &&
         new Set(normalizedEpicAgents).size === epicAgents.length &&
         normalizedEpicAgents.includes(normalizedAgent) &&
+        ownershipIsValid(value.label, value.omissionReason) &&
+        ownershipIsValid(value.epicLabel, value.epicOmissionReason) &&
         Boolean(String(value.rootIssueUrl || "").trim()) &&
         Boolean(String(value.artifactUrl || "").trim());
     return valid
