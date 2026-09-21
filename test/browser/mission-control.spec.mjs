@@ -296,8 +296,34 @@ function fixtureState() {
 async function startFixtureServer() {
     let state = fixtureState();
     let handoffProbeCount = 0;
+    let refreshSseTiming = "none";
     const requests = [];
     const clients = new Set();
+    function emitState() {
+        for (const client of clients) {
+            client.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`);
+        }
+    }
+    function probedState(goalId) {
+        const nextState = structuredClone(state);
+        const item = nextState.activity.goals.find(goal => goal.id === goalId);
+        if (!item?.handoff) return nextState;
+        item.handoff.mechanisms = [
+            { kind: "local-session", availability: "available", reasons: [] },
+            {
+                kind: "copilot-cloud-agent",
+                availability: item.issue.number === 1 ? "policy-blocked" : "available",
+                reasons: item.issue.number === 1
+                    ? ["Copilot cloud agent is disabled by repository policy."]
+                    : [],
+            },
+            { kind: "squad-implement", availability: "available", reasons: [] },
+            { kind: "manual", availability: "available", reasons: [] },
+        ];
+        item.handoff.readiness.automatedHandoffAvailable =
+            item.handoff.readiness.state === "ready";
+        return nextState;
+    }
     const server = createServer((request, response) => {
         const url = new URL(request.url, "http://127.0.0.1");
         requests.push({ method: request.method, pathname: url.pathname, search: url.search });
@@ -308,8 +334,11 @@ async function startFixtureServer() {
         }
         if (request.method === "GET" && url.pathname === "/api/state") {
             if (url.searchParams.has("handoff")) handoffProbeCount += 1;
+            const responseState = url.searchParams.has("handoff")
+                ? probedState(url.searchParams.get("handoff"))
+                : state;
             response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-            response.end(JSON.stringify(state));
+            response.end(JSON.stringify(responseState));
             return;
         }
         if (request.method === "GET" && url.pathname === "/events") {
@@ -324,8 +353,11 @@ async function startFixtureServer() {
             return;
         }
         if (request.method === "POST" && url.pathname === "/api/refresh") {
+            if (refreshSseTiming === "before-response") emitState();
             response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
             response.end("{}");
+            if (refreshSseTiming === "after-response") setTimeout(emitState, 10);
+            refreshSseTiming = "none";
             return;
         }
         response.writeHead(404);
@@ -338,9 +370,14 @@ async function startFixtureServer() {
         url: `http://127.0.0.1:${port}/`,
         emit(nextState = state) {
             state = nextState;
-            for (const client of clients) {
-                client.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`);
-            }
+            emitState();
+        },
+        replace(nextState) {
+            state = nextState;
+        },
+        emitOnRefresh(nextState, timing) {
+            state = nextState;
+            refreshSseTiming = timing;
         },
         state() {
             return structuredClone(state);
@@ -573,6 +610,102 @@ test("renders read-only handoff readiness and probes availability only after ope
     expect(containment.documentOverflow).toBeLessThanOrEqual(0);
 
     await expect(drawer.getByRole("button", { name: /Create|Assign|Dispatch|Launch|Post/i })).toHaveCount(0);
+});
+
+test("retains a verified handoff overlay across refresh SSE ordering and ordinary polls", async ({ page }) => {
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
+    const drawer = page.getByRole("dialog");
+    const localStatus = drawer.locator('[data-mechanism="local-session"] .mechanism-status');
+    const refreshButton = drawer.getByRole("button", { name: "Refresh" });
+    await expect(localStatus).toHaveText("available");
+
+    for (const timing of ["before-response", "after-response"]) {
+        const normalizedState = fixture.state();
+        const item = normalizedState.activity.goals.find(goal => goal.id === "octodemo/frontend#1");
+        item.handoff.mechanisms = [];
+        item.handoff.readiness.automatedHandoffAvailable = false;
+        fixture.emitOnRefresh(normalizedState, timing);
+        await refreshButton.click();
+        await expect(localStatus).toHaveText("available");
+        await expect(refreshButton).toBeFocused();
+    }
+
+    const polledState = fixture.state();
+    const polledGoal = polledState.activity.goals.find(goal => goal.id === "octodemo/frontend#1");
+    polledGoal.handoff.mechanisms = [];
+    polledGoal.handoff.readiness.automatedHandoffAvailable = false;
+    fixture.replace(polledState);
+    await page.evaluate(() => refresh());
+    await expect(localStatus).toHaveText("available");
+    await expect(drawer).toBeVisible();
+});
+
+test("invalidates handoff availability on relevant revision changes and repository exclusion", async ({ page }) => {
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer.locator('[data-mechanism="local-session"] .mechanism-status')).toHaveText("available");
+
+    const revisedState = fixture.state();
+    const revisedGoal = revisedState.activity.goals.find(goal => goal.id === "octodemo/frontend#1");
+    revisedGoal.handoff.issueRevision = "2026-09-20T23:59:00Z";
+    revisedGoal.handoff.readiness.state = "blocked";
+    revisedGoal.handoff.readiness.reasons = ["A newer dependency observation blocks handoff."];
+    fixture.emit(revisedState);
+
+    await expect(drawer.getByLabel("Handoff readiness: blocked")).toBeVisible();
+    await expect(drawer.getByText("Availability will be checked when these goal details open.")).toBeVisible();
+
+    await drawer.getByRole("button", { name: "Refresh" }).click();
+    await expect(drawer.locator('[data-mechanism="local-session"] .mechanism-status')).toHaveText("available");
+
+    const excludedState = fixture.state();
+    const repository = excludedState.activity.repositories.find(item => item.nameWithOwner === "octodemo/frontend");
+    repository.included = false;
+    fixture.emit(excludedState);
+    await expect(drawer.getByText("Availability will be checked when these goal details open.")).toBeVisible();
+    await expect(drawer).toBeVisible();
+});
+
+test("prevents an older concurrent handoff probe from replacing a newer result", async ({ page }) => {
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer.locator('[data-mechanism="local-session"] .mechanism-status')).toHaveText("available");
+
+    let requestCount = 0;
+    let releaseOlder;
+    const olderGate = new Promise(resolve => {
+        releaseOlder = resolve;
+    });
+    await page.route("**/api/state?handoff=*&refresh=1", async route => {
+        requestCount += 1;
+        const responseState = fixture.state();
+        const item = responseState.activity.goals.find(goal => goal.id === "octodemo/frontend#1");
+        const local = item.handoff.mechanisms.find(mechanism => mechanism.kind === "local-session");
+        if (requestCount === 1) {
+            local.availability = "unavailable";
+            local.reasons = ["Older result."];
+            await olderGate;
+        } else {
+            local.availability = "policy-blocked";
+            local.reasons = ["Newer result."];
+        }
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(responseState),
+        });
+    });
+
+    await drawer.getByRole("button", { name: "Refresh" }).click({ noWaitAfter: true });
+    await expect.poll(() => requestCount).toBe(1);
+    await drawer.getByRole("button", { name: "Refresh" }).click({ noWaitAfter: true });
+    await expect.poll(() => requestCount).toBe(2);
+    await expect(drawer.locator('[data-mechanism="local-session"] .mechanism-status')).toHaveText("policy blocked");
+    releaseOlder();
+    await expect(drawer.locator('[data-mechanism="local-session"] .mechanism-status')).toHaveText("policy blocked");
 });
 
 test("keeps incomplete and existing-work states fail closed with open-existing actions", async ({ page }) => {

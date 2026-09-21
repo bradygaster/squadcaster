@@ -1107,7 +1107,8 @@ export function renderHtml() {
     let handoffProbePending = false;
     let handoffProbeComplete = false;
     let handoffProbeToken = 0;
-    let stateEpoch = 0;
+    let handoffOverlay = null;
+    let handoffOverlayTimer = null;
     let filtersOpen = false;
     let activityKindFilter = "all";
     let activityPageState = {};
@@ -1853,11 +1854,98 @@ export function renderHtml() {
       };
     }
 
-    function applyHandoffProbe(nextState, goalId) {
+    function repositoryIsIncluded(snapshot, goal) {
+      const nameWithOwner = String(goal?.repository?.nameWithOwner || "").toLowerCase();
+      const repository = (snapshot?.activity?.repositories || []).find(item =>
+        String(item.nameWithOwner || "").toLowerCase() === nameWithOwner);
+      return repository?.included !== false;
+    }
+
+    function handoffRevision(goal, snapshot) {
+      if (!goal?.handoff || !repositoryIsIncluded(snapshot, goal)) return "";
+      const readiness = goal.handoff.readiness || {};
+      return JSON.stringify({
+        goalId: goal.id,
+        issueState: goal.issue?.state || "",
+        issueRevision: goal.handoff.issueRevision || "",
+        readiness: {
+          state: readiness.state || "",
+          reasons: readiness.reasons || [],
+          sourceStates: readiness.sourceStates || {},
+        },
+        activation: goal.handoff.activation || null,
+        acceptanceCriteria: goal.handoff.acceptanceCriteria || [],
+        acceptanceCriteriaComplete: goal.handoff.acceptanceCriteriaComplete === true,
+        existingImplementation: goal.handoff.existingImplementation || null,
+      });
+    }
+
+    function clearHandoffOverlay({ cancelPending = false } = {}) {
+      if (handoffOverlayTimer) clearTimeout(handoffOverlayTimer);
+      handoffOverlayTimer = null;
+      handoffOverlay = null;
+      handoffProbeComplete = false;
+      if (cancelPending) {
+        handoffProbePending = false;
+        handoffProbeToken += 1;
+      }
+    }
+
+    function applyOverlayToGoal(goal, overlay) {
+      if (!goal?.handoff || !overlay) return false;
+      goal.handoff.mechanisms = structuredClone(overlay.mechanisms);
+      goal.handoff.readiness = {
+        ...goal.handoff.readiness,
+        automatedHandoffAvailable: overlay.automatedHandoffAvailable,
+      };
+      return true;
+    }
+
+    function retainHandoffOverlay(nextState) {
+      if (!handoffOverlay) {
+        if (selectedGoalId && !handoffProbePending) handoffProbeComplete = false;
+        return nextState;
+      }
+      const nextGoal = (nextState?.activity?.goals || []).find(goal => goal.id === handoffOverlay.goalId);
+      const valid = Date.now() < handoffOverlay.expiresAt
+        && handoffRevision(nextGoal, nextState) === handoffOverlay.revision;
+      if (!valid) {
+        clearHandoffOverlay({
+          cancelPending: handoffProbePending && handoffProbeGoalId === handoffOverlay.goalId,
+        });
+        return nextState;
+      }
+      applyOverlayToGoal(nextGoal, handoffOverlay);
+      handoffProbeComplete = selectedGoalId === handoffOverlay.goalId;
+      return nextState;
+    }
+
+    function replaceState(nextState) {
+      state = retainHandoffOverlay(nextState);
+    }
+
+    function applyHandoffProbe(nextState, goalId, probeToken) {
       const probedGoal = (nextState?.activity?.goals || []).find(goal => goal.id === goalId);
       const currentGoal = goalById(goalId);
-      if (!probedGoal || !currentGoal) return false;
-      currentGoal.handoff = probedGoal.handoff || null;
+      const probedRevision = handoffRevision(probedGoal, nextState);
+      const currentRevision = handoffRevision(currentGoal, state);
+      if (probeToken !== handoffProbeToken || !probedGoal || !currentGoal
+          || !probedRevision || probedRevision !== currentRevision) return false;
+      if (handoffOverlayTimer) clearTimeout(handoffOverlayTimer);
+      handoffOverlay = {
+        goalId,
+        revision: currentRevision,
+        mechanisms: structuredClone(probedGoal.handoff?.mechanisms || []),
+        automatedHandoffAvailable: probedGoal.handoff?.readiness?.automatedHandoffAvailable === true,
+        expiresAt: Date.now() + 60000,
+        token: probeToken,
+      };
+      applyOverlayToGoal(currentGoal, handoffOverlay);
+      handoffOverlayTimer = setTimeout(() => {
+        if (handoffOverlay?.token !== probeToken || handoffOverlay.goalId !== goalId) return;
+        clearHandoffOverlay();
+        if (selectedGoalId === goalId) render();
+      }, 60000);
       return true;
     }
 
@@ -2193,8 +2281,7 @@ export function renderHtml() {
       const response = await fetch("/api/state", { cache: "no-store" });
       const nextState = await response.json();
       const message = describeActivityDelta(state?.activity, nextState?.activity);
-      state = nextState;
-      stateEpoch += 1;
+      replaceState(nextState);
       render();
       announce(message);
     }
@@ -2251,22 +2338,21 @@ export function renderHtml() {
           handoffProbeComplete = false;
           const probeGoalId = selectedGoalId;
           const probeToken = ++handoffProbeToken;
-          const probeEpoch = stateEpoch;
+          clearHandoffOverlay();
+          handoffProbeGoalId = probeGoalId;
+          handoffProbePending = true;
           drawerReturnSelector = \`[data-action="open-goal"][data-goal-id="\${CSS.escape(selectedGoalId)}"]\`;
           render(".drawer-close");
           try {
             const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(probeGoalId)}\`, { cache: "no-store" });
             const nextState = await response.json();
             if (!response.ok) throw new Error(nextState.error || "Availability probe failed.");
-            if (probeToken === handoffProbeToken && selectedGoalId === probeGoalId && probeEpoch === stateEpoch) {
-              handoffProbeComplete = applyHandoffProbe(nextState, probeGoalId);
+            if (probeToken === handoffProbeToken && selectedGoalId === probeGoalId) {
+              handoffProbeComplete = applyHandoffProbe(nextState, probeGoalId, probeToken);
             }
           } finally {
             if (probeToken === handoffProbeToken) {
               handoffProbePending = false;
-              if (selectedGoalId === probeGoalId && probeEpoch !== stateEpoch) {
-                handoffProbeComplete = Boolean(goalById(probeGoalId)?.handoff);
-              }
               if (selectedGoalId === probeGoalId) render();
             }
           }
@@ -2278,11 +2364,12 @@ export function renderHtml() {
           handoffProbePending = false;
           handoffProbeComplete = false;
           handoffProbeToken += 1;
+          clearHandoffOverlay();
           render(returnSelector);
         } else if (action === "refresh-handoff") {
           const probeGoalId = selectedGoalId;
           const probeToken = ++handoffProbeToken;
-          const probeEpoch = stateEpoch;
+          handoffProbeGoalId = probeGoalId;
           handoffProbePending = true;
           render();
           try {
@@ -2290,16 +2377,13 @@ export function renderHtml() {
             const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(probeGoalId)}&refresh=1\`, { cache: "no-store" });
             const nextState = await response.json();
             if (!response.ok) throw new Error(nextState.error || "Handoff refresh failed.");
-            if (probeToken === handoffProbeToken && selectedGoalId === probeGoalId && probeEpoch === stateEpoch) {
-              handoffProbeComplete = applyHandoffProbe(nextState, probeGoalId);
-              announce("Handoff readiness refreshed.");
+            if (probeToken === handoffProbeToken && selectedGoalId === probeGoalId) {
+              handoffProbeComplete = applyHandoffProbe(nextState, probeGoalId, probeToken);
+              if (handoffProbeComplete) announce("Handoff readiness refreshed.");
             }
           } finally {
             if (probeToken === handoffProbeToken) {
               handoffProbePending = false;
-              if (selectedGoalId === probeGoalId && probeEpoch !== stateEpoch) {
-                handoffProbeComplete = Boolean(goalById(probeGoalId)?.handoff);
-              }
               render();
             }
           }
@@ -2355,6 +2439,7 @@ export function renderHtml() {
         handoffProbePending = false;
         handoffProbeComplete = false;
         handoffProbeToken += 1;
+        clearHandoffOverlay();
         render(returnSelector);
         return;
       }
@@ -2433,8 +2518,7 @@ export function renderHtml() {
     events.addEventListener("state", event => {
       const nextState = JSON.parse(event.data);
       const message = describeActivityDelta(state?.activity, nextState?.activity);
-      state = nextState;
-      stateEpoch += 1;
+      replaceState(nextState);
       render();
       announce(message);
     });
