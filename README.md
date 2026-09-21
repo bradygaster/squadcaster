@@ -116,6 +116,11 @@ while the current repository continues refreshing.
 
 See [the operations architecture](docs/operations-architecture.md) for the
 normalized model, correlation rules, adapter boundary, and compatibility notes.
+The
+[automatic-bootstrap observability decision](docs/automatic-bootstrap-observability.md)
+defines the fail-closed state model for Squad's deterministic Cast pull request,
+research-proposals issue, workflow attempts, and downstream research-to-
+activation journey.
 
 ## Development
 

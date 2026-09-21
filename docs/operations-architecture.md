@@ -103,6 +103,16 @@ supports state/events, refresh, and local repository inclusion preferences.
 Legacy persisted state is normalized on load so obsolete onboarding or mission
 fields are ignored rather than restored.
 
+Automatic bootstrap is a repository-level, read-only status facet rather than
+a new goal lifecycle phase. The canonical research-proposals issue remains the
+goal; the deterministic Cast pull request and bootstrap workflow attempts are
+attached as bootstrap evidence without pretending the Cast pull request closes
+the issue. Candidate validation is exact and fail-closed, closed-unmerged Cast
+pull requests are explicit human opt-outs, and stale sources retain the last
+complete classification. See
+[Automatic-bootstrap observability](automatic-bootstrap-observability.md) for
+the authoritative state model, evidence mapping, and renderer decision.
+
 ## Security and failure behavior
 
 - Discovery is read-only.
