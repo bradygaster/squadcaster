@@ -28,11 +28,14 @@ A goal is an issue with at least one of:
 - structured data containing a `squad_artifact`
 - a Squad-prefixed title
 
-Pull requests correlate through GitHub closing references, closing keywords,
-the standalone `squad:implement issue={number} run={number}` marker, or the
-`squad/implement-{issue}-*` branch convention. Workflow runs correlate through
-an issue reference or an already-correlated implementation branch. Branch/run
-correlation is marked as inferred in the evidence timeline.
+Pull requests correlate through repository-qualified GitHub closing references
+and closing keywords, with unqualified references resolved against the pull
+request repository. Correlation requires an exact repository and issue-number
+match. The standalone `squad:implement issue={number} run={number}` marker and
+the `squad/implement-{issue}-*` branch convention are local to that repository.
+Workflow runs correlate through an issue reference or an already-correlated
+implementation branch. Branch/run correlation is marked as inferred in the
+evidence timeline.
 
 Only the newest run for a workflow and branch affects failure state. Historical
 failed attempts remain visible as evidence but do not override a successful
