@@ -1,5 +1,6 @@
 import { aggregateActivitySnapshots, isCompleteActivitySnapshot } from "./activity-model.mjs";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
+import { normalizeMembers, parseTeamMarkdown } from "./squad-roster.mjs";
 
 const DISCOVERY_TTL = 15 * 60 * 1000;
 const ACTIVE_TTL = 60 * 1000;
@@ -189,6 +190,7 @@ function registryRepository(repository, previous = {}) {
         stale: Boolean(previous.stale),
         staleSources: Array.isArray(previous.staleSources) ? previous.staleSources : [],
         error: previous.error || "",
+        squadTeamOid: clean(repository?.squadTeam?.oid, 160),
     };
 }
 
@@ -232,8 +234,33 @@ export function normalizeRegistry(value = {}) {
                 ]),
             )
             : {},
+        rosters: value.rosters && typeof value.rosters === "object" ? value.rosters : {},
         discoveryError: clean(value.discoveryError, 800),
     };
+}
+
+function rosterError(snapshot, roster) {
+    if (!roster?.error) return snapshot;
+    snapshot.sourceState = {
+        ...snapshot.sourceState,
+        roster: {
+            status: roster.status,
+            fetchedAt: roster.fetchedAt || null,
+            blobOid: roster.blobOid || "",
+            observedOid: roster.observedOid || "",
+            error: roster.error,
+        },
+    };
+    snapshot.errors = [
+        ...(snapshot.errors || []).filter((error) => error.source !== "roster"),
+        { source: "roster", message: roster.error },
+    ];
+    snapshot.partial = true;
+    if (roster.status === "stale") {
+        snapshot.stale = true;
+        snapshot.staleSources = [...new Set([...(snapshot.staleSources || []), "roster"])];
+    }
+    return snapshot;
 }
 
 export class GitHubGlobalActivity {
@@ -241,6 +268,65 @@ export class GitHubGlobalActivity {
         this.runJson = runJson;
         this.cwd = cwd;
         this.registry = normalizeRegistry(registry);
+    }
+
+    async loadRoster(repository) {
+        const key = repository.nameWithOwner.toLowerCase();
+        const observedOid = clean(repository.squadTeamOid, 160);
+        const cached = this.registry.rosters[key];
+        if (!observedOid) {
+            const missing = {
+                blobOid: "",
+                observedOid: "",
+                members: [],
+                status: "missing",
+                fetchedAt: new Date().toISOString(),
+                error: "The repository does not contain .squad/team.md.",
+            };
+            this.registry.rosters[key] = missing;
+            return missing;
+        }
+        if (cached?.observedOid === observedOid && cached.status === "fresh") {
+            return {
+                ...cached,
+                members: normalizeMembers(cached.members),
+            };
+        }
+
+        const fetchedAt = new Date().toISOString();
+        try {
+            const blob = await this.runJson(
+                ["api", `repos/${repository.nameWithOwner}/git/blobs/${observedOid}`],
+                this.cwd,
+            );
+            if (blob?.encoding !== "base64" || typeof blob?.content !== "string") {
+                throw new Error("GitHub returned an invalid Squad roster blob.");
+            }
+            const content = Buffer.from(blob.content.replace(/\s/g, ""), "base64").toString("utf8");
+            const members = await parseTeamMarkdown(content);
+            const loaded = {
+                blobOid: observedOid,
+                observedOid,
+                members,
+                status: "fresh",
+                fetchedAt,
+                error: "",
+            };
+            this.registry.rosters[key] = loaded;
+            return loaded;
+        } catch (error) {
+            const priorMembers = normalizeMembers(cached?.members);
+            const failed = {
+                blobOid: clean(cached?.blobOid, 160),
+                observedOid,
+                members: priorMembers,
+                status: priorMembers.length ? "stale" : "unavailable",
+                fetchedAt: cached?.fetchedAt || null,
+                error: message(error),
+            };
+            this.registry.rosters[key] = failed;
+            return failed;
+        }
     }
 
     async discoverRepositories({ force = false } = {}) {
@@ -459,19 +545,24 @@ export class GitHubGlobalActivity {
             repository.lastAttemptedRefresh = new Date().toISOString();
             const previous = this.registry.snapshots[key] || null;
             try {
+                const roster = key === currentKey
+                    ? { members: currentMembers, status: "fresh", error: "" }
+                    : repository.squadDetected
+                        ? await this.loadRoster(repository)
+                        : { members: [], status: "skipped", error: "" };
                 const adapter = new GitHubSquadActivityAdapter({
                     runJson: this.runJson,
                     cwd: this.cwd,
                     repository: repository.nameWithOwner,
                 });
-                const snapshot = await adapter.discover({
-                    members: key === currentKey ? currentMembers : [],
+                const snapshot = rosterError(await adapter.discover({
+                    members: roster.members,
                     previous,
                     includeWorkflowRuns: key === currentKey ||
                         Number(previous?.summary?.active || 0) > 0 ||
                         Boolean(previous?.sourceState?.workflowRuns?.error) ||
                         ["stale", "unavailable"].includes(previous?.sourceState?.workflowRuns?.status),
-                });
+                }), roster);
                 this.registry.snapshots[key] = snapshot;
                 if (isCompleteActivitySnapshot(snapshot)) {
                     repository.lastSuccessfulRefresh = snapshot.fetchedAt;

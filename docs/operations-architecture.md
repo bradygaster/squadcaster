@@ -60,6 +60,17 @@ keeps prior positive signals when a refresh is inconclusive, and is followed by
 the repository-scoped structured-artifact fallback. These paths never add a
 repository outside the affiliated set and deduplicate identities
 case-insensitively. Roster-file content loading is a separate refresh concern.
+Discovery also records each repository's `.squad/team.md` blob OID. Non-current
+repository refreshes load and parse that blob inside the existing bounded
+three-worker pool, then pass the repository-specific members into activity
+normalization so `squad:<member>` labels resolve correctly.
+
+Parsed rosters are persisted by repository and observed blob OID. An unchanged
+OID reuses the cached roster without another download; a changed OID is fetched
+once and replaces the cache only after successful parsing. Missing rosters
+surface an unavailable source and use assignee/Unknown ownership fallback.
+Malformed or permission-denied replacements preserve the last valid roster,
+mark it stale, and expose the failure in the aggregate errors.
 
 The repository used to open the canvas is refreshed every 10 seconds. Other
 repositories with active work refresh every minute, and inactive repositories

@@ -21,6 +21,37 @@ const issue = (repositoryName, number, body = "", state = "OPEN") => ({
     updatedAt: "2026-09-20T12:00:00Z",
 });
 
+const teamMarkdown = (name, role) => `
+# Squad Team
+
+## Members
+
+| Name | Role | Charter | Status |
+| --- | --- | --- | --- |
+| **${name}** | ${role} | \`.squad/agents/${name.toLowerCase()}.md\` | Active |
+`;
+
+function remoteActivityRunJson({ rosterByOid = {}, issues = [] } = {}) {
+    const blobCalls = [];
+    const runJson = async (args) => {
+        if (args[0] === "api") {
+            const oid = args[1].split("/").at(-1);
+            blobCalls.push(oid);
+            const configured = rosterByOid[oid];
+            const roster = Array.isArray(configured) ? configured.shift() : configured;
+            if (roster instanceof Error) throw roster;
+            return {
+                encoding: "base64",
+                content: Buffer.from(roster || "").toString("base64"),
+            };
+        }
+        if (args[0] === "repo") return repository("octodemo/backend");
+        if (args[0] === "issue") return issues;
+        return [];
+    };
+    return { blobCalls, runJson };
+}
+
 test("resolves repository-qualified dependencies across snapshots", () => {
     const backend = buildActivitySnapshot({
         repository: repository("octodemo/backend"),
@@ -257,6 +288,7 @@ test("repository discovery preserves exclusions and ignores non-Squad repositori
                                 ...repository("octodemo/squad"),
                                 viewerPermission: "WRITE",
                                 squadSource: { oid: "abc" },
+                                squadTeam: { oid: "team-abc" },
                                 issues: { totalCount: 0 },
                                 pullRequests: { totalCount: 0 },
                             },
@@ -278,6 +310,7 @@ test("repository discovery preserves exclusions and ignores non-Squad repositori
     assert.equal(global.registry.viewer, "octocat");
     assert.equal(global.registry.repositories.length, 1);
     assert.equal(global.registry.repositories[0].included, false);
+    assert.equal(global.registry.repositories[0].squadTeamOid, "team-abc");
     assert.equal(global.registry.rateLimit.remaining, 4999);
 });
 
@@ -836,6 +869,189 @@ test("combined rate-limit guard reports the later limiting reset", async () => {
 
     assert.equal(calls.length, 0);
     assert.match(aggregate.errors[0].message, /2099-09-21T14:00:00.000Z/);
+});
+
+test("loads and reuses a non-current repository roster for squad ownership", async () => {
+    const remoteIssue = {
+        ...issue("octodemo/backend", 41),
+        labels: [{ name: "squad" }, { name: "squad:frontend" }],
+    };
+    const { blobCalls, runJson } = remoteActivityRunJson({
+        rosterByOid: { "oid-a": teamMarkdown("Frontend", "Frontend Lead") },
+        issues: [remoteIssue],
+    });
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/backend"),
+                owner: "octodemo",
+                included: true,
+                squadDetected: true,
+                squadTeamOid: "oid-a",
+            }],
+        },
+        runJson,
+    });
+
+    const first = await global.refresh({ currentRepository: "octodemo/frontend", forceAll: true });
+    const second = await global.refresh({ currentRepository: "octodemo/frontend", forceAll: true });
+
+    assert.equal(first.goals[0].owner.name, "Frontend");
+    assert.equal(first.goals[0].owner.source, "squad-label");
+    assert.equal(second.goals[0].owner.name, "Frontend");
+    assert.deepEqual(blobCalls, ["oid-a"]);
+});
+
+test("reloads a remote roster when its discovered blob OID changes", async () => {
+    const remoteIssue = {
+        ...issue("octodemo/backend", 41),
+        labels: [{ name: "squad" }, { name: "squad:backend" }],
+    };
+    const { blobCalls, runJson } = remoteActivityRunJson({
+        rosterByOid: {
+            "oid-a": teamMarkdown("Frontend", "Frontend Lead"),
+            "oid-b": teamMarkdown("Backend", "Backend Lead"),
+        },
+        issues: [remoteIssue],
+    });
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/backend"),
+                owner: "octodemo",
+                included: true,
+                squadDetected: true,
+                squadTeamOid: "oid-a",
+            }],
+        },
+        runJson,
+    });
+
+    await global.refresh({ forceAll: true });
+    global.registry.repositories[0].squadTeamOid = "oid-b";
+    const refreshed = await global.refresh({ forceAll: true });
+
+    assert.deepEqual(blobCalls, ["oid-a", "oid-b"]);
+    assert.equal(refreshed.goals[0].owner.name, "Backend");
+});
+
+test("surfaces a malformed remote roster and keeps Unknown fallback", async () => {
+    const { runJson } = remoteActivityRunJson({
+        rosterByOid: { malformed: "# No members table" },
+        issues: [issue("octodemo/backend", 41)],
+    });
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/backend"),
+                included: true,
+                squadDetected: true,
+                squadTeamOid: "malformed",
+            }],
+        },
+        runJson,
+    });
+
+    const aggregate = await global.refresh({ forceAll: true });
+
+    assert.equal(aggregate.goals[0].owner.name, "Unknown");
+    assert.equal(aggregate.partial, true);
+    assert.match(aggregate.errors[0].message, /valid Members table/);
+});
+
+test("surfaces a missing remote roster without downloading and uses assignee fallback", async () => {
+    const calls = [];
+    const remoteIssue = {
+        ...issue("octodemo/backend", 41),
+        assignees: [{ login: "octocat" }],
+    };
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/backend"),
+                included: true,
+                squadDetected: true,
+                squadTeamOid: "",
+            }],
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository("octodemo/backend");
+            if (args[0] === "issue") return [remoteIssue];
+            return [];
+        },
+    });
+
+    const aggregate = await global.refresh({ forceAll: true });
+
+    assert.equal(aggregate.goals[0].owner.name, "octocat");
+    assert.equal(aggregate.goals[0].owner.source, "assignee");
+    assert.equal(calls.filter((args) => args[0] === "api").length, 0);
+    assert.match(aggregate.errors[0].message, /does not contain .squad\/team.md/);
+});
+
+test("preserves a cached valid roster and retries a changed blob after a source error", async () => {
+    const remoteIssue = {
+        ...issue("octodemo/backend", 41),
+        labels: [{ name: "squad" }, { name: "squad:frontend" }],
+    };
+    const { blobCalls, runJson } = remoteActivityRunJson({
+        rosterByOid: {
+            "oid-b": [
+                new Error("HTTP 403: Resource not accessible"),
+                teamMarkdown("Frontend", "Frontend Lead"),
+            ],
+        },
+        issues: [remoteIssue],
+    });
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/backend"),
+                included: true,
+                squadDetected: true,
+                squadTeamOid: "oid-b",
+            }],
+            rosters: {
+                "octodemo/backend": {
+                    blobOid: "oid-a",
+                    observedOid: "oid-a",
+                    members: [{
+                        id: "frontend",
+                        name: "Frontend",
+                        role: "Frontend Lead",
+                        lead: true,
+                    }],
+                    status: "fresh",
+                    fetchedAt: "2026-09-20T12:00:00Z",
+                    error: "",
+                },
+            },
+        },
+        runJson,
+    });
+
+    const first = await global.refresh({ forceAll: true });
+    const second = await global.refresh({ forceAll: true });
+
+    assert.equal(first.goals[0].owner.name, "Frontend");
+    assert.equal(first.partial, true);
+    assert.equal(first.stale, true);
+    assert.match(first.errors[0].message, /403/);
+    assert.equal(second.goals[0].owner.name, "Frontend");
+    assert.equal(second.partial, false);
+    assert.equal(second.stale, false);
+    assert.deepEqual(blobCalls, ["oid-b", "oid-b"]);
 });
 
 test("partial refresh retains the last fully successful timestamp and later recovers", async () => {
