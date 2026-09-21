@@ -996,21 +996,22 @@ test("summarizes every non-complete bootstrap status with the correct attention 
     const statuses = ["pending", "delayed", "partial", "failed", "retried", "ambiguous", "malformed", "opted_out"];
     const attentionStatuses = new Set(["delayed", "partial", "failed", "ambiguous", "malformed"]);
     const nextState = fixture.state();
-    nextState.activity.repositories = statuses.map((status, index) => ({
+    nextState.activity.repositories = statuses.map((status) => ({
         nameWithOwner: `bootstrap-owner/repository-${status}`,
         owner: "bootstrap-owner",
         included: true,
         permission: "READ",
         lastSuccessfulRefresh: "2026-09-20T18:00:00Z",
-        bootstrap: {
-            status,
-            stale: false,
-            reasons: status === "ambiguous" ? ["duplicate-cast-candidate"] : [],
-            candidates: [{
-                title: `${status} evidence`,
-                url: `https://github.com/bootstrap-owner/repository-${status}/actions/runs/${index + 1}`,
-            }],
-        },
+    }));
+    nextState.activity.bootstraps = statuses.map((status, index) => ({
+        repository: `bootstrap-owner/repository-${status}`,
+        status,
+        stale: false,
+        reasons: status === "ambiguous" ? ["duplicate-cast-candidate"] : [],
+        candidates: [{
+            title: `${status} evidence`,
+            url: `https://github.com/bootstrap-owner/repository-${status}/actions/runs/${index + 1}`,
+        }],
     }));
     fixture.emit(nextState);
 
@@ -1027,7 +1028,8 @@ test("summarizes every non-complete bootstrap status with the correct attention 
 
 test("shows degraded repository bootstrap diagnostics without guessing a goal", async ({ page }) => {
     const nextState = fixture.state();
-    nextState.activity.repositories[1].bootstrap = {
+    nextState.activity.bootstraps = [{
+        repository: "otherdemo/backend",
         status: "ambiguous",
         stale: false,
         reasons: [{
@@ -1039,7 +1041,7 @@ test("shows degraded repository bootstrap diagnostics without guessing a goal", 
             message: "Research candidate #92 conflicts with another canonical candidate.",
             url: "https://github.com/otherdemo/backend/issues/92",
         }],
-    };
+    }];
     fixture.emit(nextState);
 
     const attention = page.getByRole("region", { name: "Factory floor stages" }).locator("..");
@@ -1054,7 +1056,8 @@ test("shows degraded repository bootstrap diagnostics without guessing a goal", 
 
 test("repository ambiguity overrides a stale goal association and remains fail closed", async ({ page }) => {
     const nextState = fixture.state();
-    nextState.activity.repositories[0].bootstrap = {
+    nextState.activity.bootstraps = [{
+        repository: "octodemo/frontend",
         status: "ambiguous",
         stale: false,
         reasons: [{
@@ -1063,7 +1066,7 @@ test("repository ambiguity overrides a stale goal association and remains fail c
             url: "https://github.com/octodemo/frontend/issues/81",
         }],
         researchIssue: null,
-    };
+    }];
     fixture.emit(nextState);
 
     const diagnostic = page.locator('.bootstrap-summary[data-bootstrap-status="ambiguous"]').first();
@@ -1079,7 +1082,8 @@ test("repository ambiguity overrides a stale goal association and remains fail c
 test("excluded repositories do not render or count bootstrap diagnostics", async ({ page }) => {
     const nextState = fixture.state();
     nextState.activity.repositories[1].included = false;
-    nextState.activity.repositories[1].bootstrap = {
+    nextState.activity.bootstraps = [{
+        repository: "otherdemo/backend",
         status: "failed",
         stale: false,
         reasons: [{
@@ -1087,7 +1091,7 @@ test("excluded repositories do not render or count bootstrap diagnostics", async
             message: "The newest bootstrap attempt failed.",
             url: "https://github.com/otherdemo/backend/actions/runs/99",
         }],
-    };
+    }];
     fixture.emit(nextState);
 
     await expect(page.locator('.bootstrap-summary[data-bootstrap-status="failed"]')).toHaveCount(0);
@@ -1098,12 +1102,13 @@ test("excluded repositories do not render or count bootstrap diagnostics", async
 
 test("labels stale and unknown bootstrap evidence explicitly", async ({ page }) => {
     const nextState = fixture.state();
-    nextState.activity.repositories[1].bootstrap = {
+    nextState.activity.bootstraps = [{
+        repository: "otherdemo/backend",
         status: "unknown",
         stale: true,
         staleSources: ["comments"],
         reasons: [],
-    };
+    }];
     fixture.emit(nextState);
 
     const summary = page.locator('.bootstrap-summary[data-bootstrap-status="unknown"]').first();
@@ -1111,11 +1116,12 @@ test("labels stale and unknown bootstrap evidence explicitly", async ({ page }) 
     await expect(summary).toContainText("comments evidence is unavailable");
 
     const unknownState = fixture.state();
-    unknownState.activity.repositories[1].bootstrap = {
+    unknownState.activity.bootstraps = [{
+        repository: "otherdemo/backend",
         status: "unknown",
         stale: false,
         reasons: [],
-    };
+    }];
     fixture.emit(unknownState);
     await expect(page.locator('.bootstrap-summary[data-bootstrap-status="unknown"]').first())
         .toContainText("Bootstrap status is unknown");
@@ -1125,14 +1131,15 @@ test("keeps complete bootstrap quiet and opted-out bootstrap out of attention", 
     await expect(page.locator('.bootstrap-summary[data-bootstrap-status="complete"]')).toHaveCount(0);
 
     const nextState = fixture.state();
-    nextState.activity.repositories[1].bootstrap = {
+    nextState.activity.bootstraps = [{
+        repository: "otherdemo/backend",
         status: "opted_out",
         stale: false,
         castPullRequest: {
             number: 88,
             url: "https://github.com/otherdemo/backend/pull/88",
         },
-    };
+    }];
     fixture.emit(nextState);
 
     await expect(page.locator('.bootstrap-summary[data-bootstrap-status="opted_out"]')).toContainText(
@@ -1555,7 +1562,10 @@ test("contains dense repository bootstrap summaries at phone width", async ({ pa
     const stressState = createStressCanvasState();
     const statuses = ["pending", "delayed", "partial", "failed", "retried", "ambiguous", "malformed", "opted_out", "unknown"];
     stressState.activity.repositories.forEach((repository, index) => {
-        repository.bootstrap = {
+        repository.bootstrap = null;
+    });
+    stressState.activity.bootstraps = stressState.activity.repositories.map((repository, index) => ({
+        repository: repository.nameWithOwner,
             status: statuses[index % statuses.length],
             stale: index === 9,
             staleSources: index === 9 ? ["workflowRuns"] : [],
@@ -1563,8 +1573,7 @@ test("contains dense repository bootstrap summaries at phone width", async ({ pa
                 title: `Evidence ${index}`,
                 url: `https://example.test/bootstrap/${index}`,
             }],
-        };
-    });
+    }));
     fixture.emit(stressState);
 
     const repositorySummaries = page.locator('section[aria-labelledby="bootstrap-summary-title"]');

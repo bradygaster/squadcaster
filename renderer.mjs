@@ -1561,30 +1561,50 @@ export function renderHtml() {
         });
       }
       const activityBootstrap = state.activity?.bootstrap;
-      const aggregateEntries = Array.isArray(activityBootstrap)
-        ? activityBootstrap
-        : Array.isArray(activityBootstrap?.repositories)
-          ? activityBootstrap.repositories
-          : [];
+      const aggregateEntries = Array.isArray(state.activity?.bootstraps)
+        ? state.activity.bootstraps
+        : Array.isArray(activityBootstrap)
+          ? activityBootstrap
+          : Array.isArray(activityBootstrap?.repositories)
+            ? activityBootstrap.repositories
+            : [];
       for (const entry of aggregateEntries) {
         const repository = typeof entry.repository === "string"
           ? { nameWithOwner: entry.repository }
           : entry.repository || entry;
         const bootstrap = entry.bootstrap || entry;
         const key = String(repository?.nameWithOwner || entry.nameWithOwner || "").toLowerCase();
-        if (!key || entries.has(key)) continue;
-        entries.set(key, { repository, bootstrap, goal: null });
+        const repositoryState = (state.activity?.repositories || []).find(candidate =>
+          String(candidate.nameWithOwner || "").toLowerCase() === key);
+        if (repositoryState?.included === false) continue;
+        if (!key) continue;
+        const existing = entries.get(key);
+        const canonicalGoal = existing?.goal &&
+          !["ambiguous", "malformed", "unknown"].includes(bootstrap?.status) &&
+          Number(bootstrap?.researchIssue?.number) === Number(existing.goal.issue?.number);
+        entries.set(key, {
+          repository: repositoryState || existing?.repository || repository,
+          bootstrap,
+          goal: canonicalGoal ? existing.goal : null,
+        });
       }
       return [...entries.values()];
     }
 
     function bootstrapForGoal(goal) {
       if (!goal) return null;
+      const repositoryName = String(goal.repository?.nameWithOwner || "").toLowerCase();
+      const aggregate = (state.activity?.bootstraps || []).find(candidate =>
+        String(
+          typeof candidate.repository === "string"
+            ? candidate.repository
+            : candidate.repository?.nameWithOwner || candidate.nameWithOwner || "",
+        ).toLowerCase() === repositoryName);
       const repository = (state.activity?.repositories || []).find(candidate =>
         candidate.included !== false &&
         String(candidate.nameWithOwner || "").toLowerCase() ===
-          String(goal.repository?.nameWithOwner || "").toLowerCase());
-      return repository?.bootstrap || goal.bootstrap || null;
+          repositoryName);
+      return (aggregate?.bootstrap || aggregate) || repository?.bootstrap || goal.bootstrap || null;
     }
 
     function goalHasCanonicalBootstrap(goal) {
