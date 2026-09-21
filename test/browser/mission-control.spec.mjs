@@ -480,8 +480,8 @@ test("preserves keyed scroll state while bounding production-scale collections",
     await page.locator('[data-action="expand-stage"][data-phase="implementing"]').click();
     await expect(page.locator(".stage-goals .goal-trigger")).toHaveCount(80);
     await expect(page.getByText("Showing the first 80 of 140 matching goals.")).toBeVisible();
-    await expect(page.locator(".run-row")).toHaveCount(80);
-    await expect(page.getByText("Showing the newest 80 of 280 active workflow runs.")).toBeVisible();
+    await expect(page.locator(".run-row")).toHaveCount(12);
+    await expect(page.getByText("Showing the newest 12 of 280 active workflow runs.")).toBeVisible();
     const stageScrollLeft = await pipeline.evaluate(element => element.scrollLeft);
 
     await page.locator(".stage-goals .goal-trigger").first().click();
