@@ -184,6 +184,25 @@ Structured data:
     );
 });
 
+test("activation handoff authority requires a valid timestamp", () => {
+    const issues = readyIssues({}, {
+        comments: [activationComment(undefined, {
+            createdAt: "not-a-timestamp",
+        })],
+    });
+
+    const evidence = parseActivationEvidence({
+        issues,
+        repository: repository.nameWithOwner,
+    });
+
+    assert.equal(evidence.get(12).activation, null);
+    assert.match(
+        evidence.get(12).errors.join(" "),
+        /timestamp is missing or invalid/i,
+    );
+});
+
 test("keeps task readiness independent from mechanism availability", () => {
     const handoff = taskGoal(snapshot({
         mechanismAvailability: {

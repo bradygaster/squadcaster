@@ -1269,6 +1269,43 @@ test("fails closed when activation artifacts tie for the latest timestamp", () =
         item.code === "ambiguous-latest-activation"));
 });
 
+test("fails closed when activation authority has no valid timestamp", () => {
+    const binding = {
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    };
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
+        artifactComment("activated", {
+            bindings: [binding],
+            createdAt: "not-a-timestamp",
+            url: "https://github.com/octodemo/demo/issues/6#issuecomment-undated-activation",
+        }),
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic", ["squad", "squad:dev"]),
+            goalIssue(21, "Task", ["squad", "squad:dev"]),
+        ],
+    });
+    const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+    assert.ok(goal.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "invalid-activation-timestamp"));
+});
+
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
         artifactComment("research"),

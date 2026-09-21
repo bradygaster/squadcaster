@@ -268,6 +268,12 @@ export function parseActivationEvidence({
             .sort((left, right) =>
                 left.createdAt.localeCompare(right.createdAt) ||
                 left.index - right.index);
+        if (activationComments.some(({ createdAt }) => !createdAt)) {
+            const reason = "Activation artifact timestamp is missing or invalid.";
+            addError(rootNumber, reason);
+            globalErrors.push(reason);
+            continue;
+        }
         const latestActivation = activationComments.at(-1);
         if (!latestActivation) continue;
         if (

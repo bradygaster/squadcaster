@@ -1191,17 +1191,26 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
                 ACTIVATION_ARTIFACT_KINDS.has(artifact.kind) ||
                 artifact.activationCandidate === true
             ));
-        const latestActivationCreatedAt = activationArtifacts.at(-1)?.createdAt || "";
-        const latestActivationArtifacts = activationArtifacts.filter((artifact) =>
-            (artifact.createdAt || "") === latestActivationCreatedAt);
+        const invalidTimestampArtifacts = activationArtifacts.filter((artifact) =>
+            !artifact.createdAt);
+        const latestActivationCreatedAt = invalidTimestampArtifacts.length === 0
+            ? activationArtifacts.at(-1)?.createdAt || ""
+            : "";
+        const latestActivationArtifacts = invalidTimestampArtifacts.length > 0
+            ? invalidTimestampArtifacts
+            : activationArtifacts.filter((artifact) =>
+                artifact.createdAt === latestActivationCreatedAt);
         const activationArtifact = latestActivationArtifacts.length === 1
+            && invalidTimestampArtifacts.length === 0
             ? latestActivationArtifacts[0]
             : null;
         const activationDiagnosticArtifact = latestActivationArtifacts.at(-1);
         let generated = {
             valid: false,
             goals: [],
-            reason: latestActivationArtifacts.length > 1
+            reason: invalidTimestampArtifacts.length > 0
+                ? "invalid-activation-timestamp"
+                : latestActivationArtifacts.length > 1
                 ? "ambiguous-latest-activation"
                 : "",
         };
