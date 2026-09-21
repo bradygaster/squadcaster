@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { renderHtml } from "../../renderer.mjs";
 import { createStressCanvasState } from "../fixtures/stress-activity.mjs";
@@ -609,6 +610,36 @@ test("does not let a delayed handoff probe overwrite newer SSE state", async ({ 
     releaseProbe();
     await expect(drawer.getByRole("heading", { name: /Updated by SSE while probing/ })).toBeVisible();
     await expect(drawer.getByLabel("Handoff readiness: blocked")).toBeVisible();
+});
+
+test("copies and exports the normalized handoff context without loss", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: fixture.url.slice(0, -1) });
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer.getByText("Local project session")).toBeVisible();
+
+    await drawer.getByRole("button", { name: "Copy context" }).click();
+    const copied = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+    const expectedGoal = fixture.state().activity.goals.find(item => item.id === "octodemo/frontend#1");
+    expect(copied).toEqual({
+        schemaVersion: 1,
+        goal: {
+            id: expectedGoal.id,
+            repository: expectedGoal.repository,
+            issue: expectedGoal.issue,
+            dependencies: expectedGoal.dependencies,
+            blockers: expectedGoal.blockers,
+            handoff: expectedGoal.handoff,
+        },
+    });
+
+    const downloadPromise = page.waitForEvent("download");
+    await drawer.getByRole("button", { name: "Export context" }).click();
+    const download = await downloadPromise;
+    const exported = JSON.parse(await readFile(await download.path(), "utf8"));
+    expect(exported).toEqual(copied);
+    expect(download.suggestedFilename()).toBe("handoff-octodemo-frontend-1.json");
 });
 
 test("distinguishes every readiness state without color-only semantics", async ({ page }) => {
