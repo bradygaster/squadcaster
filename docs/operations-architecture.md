@@ -10,8 +10,8 @@
   artifacts, pull requests, workflow runs, next action, and evidence
 - `errors`: source-specific discovery failures
 
-Repository snapshots use activity contract version 2. Pull requests retain the
-version 1 fields and add `reviews` and `reviewRequests`. `reviews` contains the
+Repository snapshots use activity contract version 3. Pull requests retain the
+version 1 fields and v2 adds `reviews` and `reviewRequests`. `reviews` contains the
 latest review exposed by GitHub for each reviewer, with the observed review
 state and submission timestamp. `reviewRequests` contains the currently
 requested GitHub users or teams. Actor identity is limited to the login or team
@@ -24,6 +24,17 @@ candidate-field audit, future schema, and fail-closed cache and renderer
 semantics are defined in
 [`agent-identity-consumer-contract.md`](agent-identity-consumer-contract.md).
 Goal owners, GitHub participants, and roster entries remain separate concepts.
+
+Version 3 adds a normalized `dayBoundary` object using UTC server-day semantics.
+It carries the contract version, `UTC` timezone, UTC calendar date, inclusive
+start, exclusive next boundary, and a date-partitioned cache key. All timestamps
+remain ISO 8601 UTC. Browser locale and viewer timezone do not alter the
+boundary, and daylight-saving changes therefore do not change the day length.
+Crossing UTC midnight makes cached repository snapshots due immediately. Failed
+refreshes retain the earliest stale source's prior-day key. User-wide snapshots
+list their repository input days, and the renderer distinguishes retained or
+mixed-day data from the aggregate observation day. No daily metric is part of
+this contract slice.
 
 The supported lifecycle is `queued`, `researching`, `implementing`, `reviewing`,
 `blocked`, `completed`, and `failed`. GitHub state has precedence over inferred
@@ -161,7 +172,8 @@ The provider contract is limited to opening the canvas, returning current
 read-only state, and refreshing discovery. The loopback HTTP surface similarly
 supports state/events, refresh, and local repository inclusion preferences.
 Legacy persisted state is normalized on load so obsolete onboarding or mission
-fields are ignored rather than restored.
+fields are ignored rather than restored. Persisted activity v2 and registry v1
+snapshots migrate to activity v3 by deriving their UTC boundary from `fetchedAt`.
 
 The proposed optional transition from activated work to an implementation
 mechanism is documented in

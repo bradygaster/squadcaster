@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { aggregateActivitySnapshots, buildActivitySnapshot } from "../activity-model.mjs";
 import {
+    applyRosterError,
     discoverCurrentRepositoryActivity,
     GitHubGlobalActivity,
     normalizeRegistry,
     refreshPolicy,
+    repositoryRefreshDue,
+    snapshotCrossedDayBoundary,
 } from "../global-activity.mjs";
 
 const repository = (nameWithOwner) => ({
@@ -257,10 +260,14 @@ test("dependency resolution does not depend on snapshot order", () => {
 });
 
 test("registry normalization preserves inclusion preferences and snapshots", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/demo"),
+        fetchedAt: "2026-09-20T12:00:00Z",
+    });
     const registry = normalizeRegistry({
         viewer: "octocat",
         repositories: [{ nameWithOwner: "octodemo/demo", included: false }],
-        snapshots: { "octodemo/demo": { goals: [] } },
+        snapshots: { "octodemo/demo": snapshot },
         restRateLimit: { remaining: 4321, reset: 1790028000 },
         discoverySignals: {
             "OCTODEMO/DEMO": {
@@ -526,6 +533,17 @@ test("dependency observation does not contaminate raw repository snapshots acros
     assert.equal(recovered.stale, false);
     assert.deepEqual(recovered.errors, []);
     assert.deepEqual(global.registry.snapshots[frontendName].errors, []);
+});
+
+test("registry normalization discards malformed and unsupported snapshots", () => {
+    const registry = normalizeRegistry({
+        snapshots: {
+            unsupported: { schemaVersion: 99, fetchedAt: "2026-09-20T12:00:00Z", goals: [{ id: "bad" }] },
+            malformed: { schemaVersion: 2, fetchedAt: "not-a-date", goals: [{ id: "bad" }] },
+        },
+    });
+
+    assert.deepEqual(registry.snapshots, {});
 });
 
 test("repository discovery preserves exclusions and ignores non-Squad repositories", async () => {
@@ -1057,6 +1075,126 @@ test("fallback discovery keeps every paginated affiliated repository eligible", 
 test("refresh policy gives active repositories a shorter interval", () => {
     assert.ok(refreshPolicy.activeMilliseconds < refreshPolicy.inactiveMilliseconds);
     assert.ok(refreshPolicy.inactiveMilliseconds < refreshPolicy.discoveryMilliseconds);
+});
+
+test("cache validity ends exactly at UTC midnight when the last attempt predates the boundary", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        fetchedAt: "2026-09-21T23:59:59Z",
+    });
+
+    assert.equal(snapshotCrossedDayBoundary(
+        snapshot,
+        "2026-09-21T23:59:59.999Z",
+        Date.parse("2026-09-21T23:59:59.999Z"),
+    ), false);
+    assert.equal(snapshotCrossedDayBoundary(
+        snapshot,
+        "2026-09-21T23:59:59.999Z",
+        Date.parse("2026-09-22T00:00:00.000Z"),
+    ), true);
+});
+
+test("failed post-midnight refreshes use the normal active TTL before retrying", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        fetchedAt: "2026-09-22T00:00:05Z",
+        sourceState: {
+            issues: {
+                data: [issue("octodemo/frontend", 57)],
+                fetchedAt: "2026-09-21T23:59:50Z",
+                status: "stale",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const cachedRepository = {
+        ...repository("octodemo/frontend"),
+        lastAttemptedRefresh: "2026-09-22T00:00:05Z",
+    };
+
+    assert.equal(snapshot.dayBoundary.snapshotDay, "2026-09-21");
+    assert.equal(repositoryRefreshDue(
+        cachedRepository,
+        snapshot,
+        "octodemo/other",
+        Date.parse("2026-09-22T00:00:10Z"),
+    ), false);
+    assert.equal(repositoryRefreshDue(
+        cachedRepository,
+        snapshot,
+        "octodemo/other",
+        Date.parse("2026-09-22T00:01:05Z"),
+    ), true);
+});
+
+test("a future last-attempt timestamp is due after backward wall-clock movement", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        fetchedAt: "2026-09-22T00:03:00Z",
+    });
+    const cachedRepository = {
+        ...repository("octodemo/frontend"),
+        lastAttemptedRefresh: "2026-09-22T00:05:00Z",
+    };
+
+    assert.equal(repositoryRefreshDue(
+        cachedRepository,
+        snapshot,
+        "octodemo/other",
+        Date.parse("2026-09-22T00:04:00Z"),
+    ), true);
+});
+
+test("stale roster data crossing midnight retains its prior UTC snapshot day", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/backend"),
+        members: [{ id: "frontend", name: "Frontend", role: "Frontend Lead" }],
+        issues: [{
+            ...issue("octodemo/backend", 41),
+            labels: [{ name: "squad" }, { name: "squad:frontend" }],
+        }],
+        fetchedAt: "2026-09-22T00:00:05Z",
+    });
+
+    applyRosterError(snapshot, {
+        status: "stale",
+        fetchedAt: "2026-09-21T23:59:50Z",
+        blobOid: "oid-a",
+        observedOid: "oid-b",
+        error: "HTTP 403: Resource not accessible",
+    });
+
+    assert.equal(snapshot.goals[0].owner.name, "Frontend");
+    assert.equal(snapshot.stale, true);
+    assert.deepEqual(snapshot.staleSources, ["roster"]);
+    assert.equal(snapshot.dayBoundary.snapshotDay, "2026-09-21");
+    assert.equal(snapshot.sourceState.roster.fetchedAt, "2026-09-21T23:59:50Z");
+});
+
+test("registry migration versions and partitions cached snapshots by UTC day", () => {
+    const registry = normalizeRegistry({
+        version: 1,
+        snapshots: {
+            "OCTODEMO/FRONTEND": {
+                ...buildActivitySnapshot({
+                    repository: repository("octodemo/frontend"),
+                    fetchedAt: "2026-09-21T18:00:00Z",
+                }),
+                schemaVersion: 2,
+                dayBoundary: undefined,
+            },
+        },
+    });
+
+    assert.equal(registry.version, 2);
+    assert.equal(registry.snapshots["octodemo/frontend"].schemaVersion, 3);
+    assert.equal(
+        registry.snapshots["octodemo/frontend"].dayBoundary.cacheKey,
+        "day-boundary-v1:utc:2026-09-21",
+    );
 });
 
 test("aggregate refresh skips excluded repositories and reuses the current snapshot", async () => {

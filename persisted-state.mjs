@@ -1,7 +1,12 @@
+import { normalizeActivityContract } from "./activity-model.mjs";
+
 export function emptyActivity() {
+    const fetchedAt = null;
     return {
-        schemaVersion: 2,
-        fetchedAt: null,
+        schemaVersion: 3,
+        fetchedAt,
+        dayBoundary: null,
+        snapshotDays: [],
         repository: {},
         repositories: [],
         summary: {
@@ -81,22 +86,30 @@ function normalizeGoal(goal) {
 }
 
 export function normalizeActivity(value) {
-    if (!isRecord(value) || value.schemaVersion !== 2) return emptyActivity();
+    const contract = normalizeActivityContract(value) ||
+        (isRecord(value) && value.schemaVersion === 3 && value.fetchedAt === null
+            ? { ...value, dayBoundary: null }
+            : null);
+    if (!contract) return emptyActivity();
     return {
-        ...value,
-        schemaVersion: 2,
-        repository: isRecord(value.repository) ? value.repository : {},
-        repositories: recordArray(value.repositories).map(normalizeRepository),
-        summary: isRecord(value.summary) ? value.summary : emptyActivity().summary,
-        goals: recordArray(value.goals).map(normalizeGoal),
-        errors: recordArray(value.errors),
+        ...contract,
+        schemaVersion: 3,
+        dayBoundary: contract.dayBoundary,
+        snapshotDays: Array.isArray(contract.snapshotDays)
+            ? contract.snapshotDays.map(String).filter(Boolean)
+            : [],
+        repository: isRecord(contract.repository) ? contract.repository : {},
+        repositories: recordArray(contract.repositories).map(normalizeRepository),
+        summary: isRecord(contract.summary) ? contract.summary : emptyActivity().summary,
+        goals: recordArray(contract.goals).map(normalizeGoal),
+        errors: recordArray(contract.errors),
     };
 }
 
 export function normalizePersistedState(value) {
     const source = isRecord(value) ? value : {};
     return {
-        version: 3,
+        version: 4,
         activity: normalizeActivity(withoutUnvalidatedProvenance(source.activity)),
     };
 }

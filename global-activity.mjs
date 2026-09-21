@@ -1,4 +1,9 @@
-import { aggregateActivitySnapshots, isCompleteActivitySnapshot } from "./activity-model.mjs";
+import {
+    aggregateActivitySnapshots,
+    isCompleteActivitySnapshot,
+    normalizeActivityContract,
+    utcServerDayBoundary,
+} from "./activity-model.mjs";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 import {
     attachLifecycleHistory,
@@ -200,13 +205,22 @@ function registryRepository(repository, previous = {}) {
     };
 }
 
-function due(repository, snapshot, currentRepository, now) {
+export function snapshotCrossedDayBoundary(snapshot, lastAttemptedRefresh, now = Date.now()) {
+    const currentBoundary = utcServerDayBoundary(new Date(now).toISOString());
+    const lastAttemptedAt = Date.parse(lastAttemptedRefresh || "");
+    return snapshot?.dayBoundary?.cacheKey !== currentBoundary.cacheKey &&
+        (!Number.isFinite(lastAttemptedAt) || lastAttemptedAt < Date.parse(currentBoundary.startsAt));
+}
+
+export function repositoryRefreshDue(repository, snapshot, currentRepository, now) {
     if (repository.nameWithOwner.toLowerCase() === String(currentRepository || "").toLowerCase()) return true;
     const last = repository.lastAttemptedRefresh
         ? Date.parse(repository.lastAttemptedRefresh)
         : Number.NaN;
+    if (!Number.isFinite(last) || now < last) return true;
+    if (snapshotCrossedDayBoundary(snapshot, repository.lastAttemptedRefresh, now)) return true;
     const active = Number(snapshot?.summary?.active || 0) > 0;
-    return !Number.isFinite(last) || now - last >= (active ? ACTIVE_TTL : INACTIVE_TTL);
+    return now - last >= (active ? ACTIVE_TTL : INACTIVE_TTL);
 }
 
 async function mapConcurrent(items, limit, mapper) {
@@ -224,6 +238,11 @@ async function mapConcurrent(items, limit, mapper) {
 }
 
 export function normalizeRegistry(value = {}) {
+    const snapshots = value.snapshots && typeof value.snapshots === "object"
+        ? Object.fromEntries(Object.entries(value.snapshots)
+            .map(([key, snapshot]) => [key.toLowerCase(), normalizeActivityContract(snapshot)])
+            .filter(([, snapshot]) => snapshot))
+        : {};
     return {
         version: 2,
         viewer: clean(value.viewer, 120),
@@ -231,7 +250,7 @@ export function normalizeRegistry(value = {}) {
         rateLimit: value.rateLimit || null,
         restRateLimit: normalizedRestRateLimit(value.restRateLimit),
         repositories: Array.isArray(value.repositories) ? value.repositories : [],
-        snapshots: value.snapshots && typeof value.snapshots === "object" ? value.snapshots : {},
+        snapshots,
         discoverySignals: value.discoverySignals && typeof value.discoverySignals === "object"
             ? Object.fromEntries(
                 Object.entries(value.discoverySignals).map(([key, signal]) => [
@@ -246,7 +265,7 @@ export function normalizeRegistry(value = {}) {
     };
 }
 
-function rosterError(snapshot, roster) {
+export function applyRosterError(snapshot, roster) {
     if (!roster?.error) return snapshot;
     snapshot.sourceState = {
         ...snapshot.sourceState,
@@ -266,6 +285,15 @@ function rosterError(snapshot, roster) {
     if (roster.status === "stale") {
         snapshot.stale = true;
         snapshot.staleSources = [...new Set([...(snapshot.staleSources || []), "roster"])];
+        const staleFetchedAt = Object.values(snapshot.sourceState)
+            .filter((state) => state?.status === "stale")
+            .map((state) => Date.parse(state?.fetchedAt || ""))
+            .filter(Number.isFinite);
+        if (staleFetchedAt.length) {
+            snapshot.dayBoundary = utcServerDayBoundary(
+                new Date(Math.min(...staleFetchedAt)).toISOString(),
+            );
+        }
     }
     return snapshot;
 }
@@ -594,7 +622,7 @@ export class GitHubGlobalActivity {
             if (!repository.included) return false;
             if (lowRateLimit && repository.nameWithOwner.toLowerCase() !== currentKey) return false;
             const snapshot = this.registry.snapshots[repository.nameWithOwner.toLowerCase()];
-            return forceAll || due(repository, snapshot, currentRepository, now);
+            return forceAll || repositoryRefreshDue(repository, snapshot, currentRepository, now);
         });
 
         await mapConcurrent(candidates, MAX_CONCURRENCY, async (repository) => {
@@ -613,7 +641,7 @@ export class GitHubGlobalActivity {
                     cwd: this.cwd,
                     repository: repository.nameWithOwner,
                 });
-                const snapshot = rosterError(await adapter.discover({
+                const snapshot = applyRosterError(await adapter.discover({
                     members: roster.members,
                     previous,
                     includeWorkflowRuns: key === currentKey ||

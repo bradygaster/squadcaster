@@ -4,6 +4,7 @@ import {
     anchoredPagedItems,
     boundedItems,
     compareFeedItems,
+    describeDayBoundary,
     describeActivityDelta,
     renderHtml,
     semanticFeedItems,
@@ -100,6 +101,16 @@ test("paginates and semantically deduplicates dense feeds", () => {
     assert.deepEqual(visited, refreshed.map((item) => item.id));
 });
 
+test("labels retained prior-day inputs separately from the aggregate observation day", () => {
+    assert.equal(describeDayBoundary({
+        dayBoundary: {
+            kind: "utc-server-day",
+            snapshotDay: "2026-09-22",
+        },
+        snapshotDays: ["2026-09-21"],
+    }), "UTC server-day data 2026-09-21 (00:00–24:00 UTC) · aggregate observed 2026-09-22; refresh pending");
+});
+
 test("announces only meaningful activity changes", () => {
     const baseline = {
         goals: [{
@@ -176,6 +187,9 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /source observation/);
     assert.match(html, /last fully synced/);
     assert.match(html, /refresh attempted/);
+    assert.match(html, /UTC server day/);
+    assert.match(html, /00:00–24:00 UTC/);
+    assert.doesNotMatch(html, /toLocaleDateString|resolvedOptions\(\)\.timeZone/);
     assert.doesNotMatch(html, /Last successful snapshot/);
     assert.match(html, /goal-drawer, \.runs-panel/);
     assert.match(html, /keyedDisclosure/);

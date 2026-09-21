@@ -142,6 +142,23 @@ export function describeActivityDelta(previous, next) {
     return `${moved.length} goals changed lifecycle stage.`;
 }
 
+export function describeDayBoundary(activity = {}) {
+    const boundary = activity.dayBoundary;
+    if (boundary?.kind !== "utc-server-day" || !boundary.snapshotDay) return "";
+    const inputDays = [...new Set(
+        (Array.isArray(activity.snapshotDays) ? activity.snapshotDays : [])
+            .map((value) => String(value || ""))
+            .filter(Boolean),
+    )].sort();
+    if (!inputDays.length || (inputDays.length === 1 && inputDays[0] === boundary.snapshotDay)) {
+        return `UTC server day ${boundary.snapshotDay} (00:00–24:00 UTC)`;
+    }
+    const dataDays = inputDays.length === 1
+        ? inputDays[0]
+        : `${inputDays[0]}–${inputDays.at(-1)}`;
+    return `UTC server-day data ${dataDays} (00:00–24:00 UTC) · aggregate observed ${boundary.snapshotDay}; refresh pending`;
+}
+
 export function renderHtml() {
     return `<!doctype html>
 <html lang="en">
@@ -1173,6 +1190,18 @@ export function renderHtml() {
       const activity = state.activity || {};
       const attemptedAt = activity.lastAttemptedRefresh || activity.fetchedAt;
       const successfulAt = activity.lastSuccessfulRefresh;
+      const dayBoundary = activity.dayBoundary;
+      const snapshotDays = [...new Set((activity.snapshotDays || []).filter(Boolean))].sort();
+      const dataDays = snapshotDays.length === 1
+        ? snapshotDays[0]
+        : snapshotDays.length > 1
+          ? \`\${snapshotDays[0]}–\${snapshotDays.at(-1)}\`
+          : "";
+      const dayLabel = dayBoundary?.kind !== "utc-server-day"
+        ? ""
+        : dataDays && (snapshotDays.length > 1 || dataDays !== dayBoundary.snapshotDay)
+          ? \` · UTC server-day data \${dataDays} (00:00–24:00 UTC) · aggregate observed \${dayBoundary.snapshotDay}; refresh pending\`
+          : \` · UTC server day \${dayBoundary.snapshotDay} (00:00–24:00 UTC)\`;
       let refreshStatus = "";
       if (activity.partial || activity.stale) {
         if (attemptedAt) refreshStatus += \` · refresh attempted \${formatTime(attemptedAt)}\`;
@@ -1184,7 +1213,7 @@ export function renderHtml() {
       } else if (attemptedAt) {
         refreshStatus = \` · refresh attempted \${formatTime(attemptedAt)}\`;
       }
-      repoHeader.innerHTML = \`<span>\${esc(watching)}\${esc(refreshStatus)}</span><span class="mode">\${active} active</span>\`;
+      repoHeader.innerHTML = \`<span>\${esc(watching)}\${esc(refreshStatus)}\${esc(dayLabel)}</span><span class="mode">\${active} active</span>\`;
     }
 
     function formatTime(value) {

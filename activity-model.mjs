@@ -1,5 +1,7 @@
 const ACTIVE_STATES = new Set(["queued", "researching", "implementing", "reviewing", "blocked", "failed"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure", "action_required"]);
+const DAY_BOUNDARY_VERSION = 1;
+const UTC_DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 const ARTIFACT_PHASES = {
     research: "researching",
     triage: "researching",
@@ -65,6 +67,46 @@ export function dedupeSemantic(items, identity) {
         if (!unique.has(key)) unique.set(key, value);
     }
     return [...unique.values()].sort(compareNewestFirst);
+}
+
+export function utcServerDayBoundary(value = new Date().toISOString()) {
+    const observedAt = timestamp(value) || new Date().toISOString();
+    const snapshotDay = observedAt.slice(0, 10);
+    const startsAt = `${snapshotDay}T00:00:00.000Z`;
+    return {
+        version: DAY_BOUNDARY_VERSION,
+        kind: "utc-server-day",
+        timeZone: "UTC",
+        snapshotDay,
+        startsAt,
+        nextBoundaryAt: new Date(Date.parse(startsAt) + UTC_DAY_MILLISECONDS).toISOString(),
+        cacheKey: `day-boundary-v${DAY_BOUNDARY_VERSION}:utc:${snapshotDay}`,
+    };
+}
+
+export function normalizeActivityContract(snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+    if (![2, 3].includes(snapshot.schemaVersion)) return null;
+    const fetchedAt = timestamp(snapshot.fetchedAt);
+    if (!fetchedAt) return null;
+    const persistedDay = snapshot.schemaVersion === 3 &&
+        /^\d{4}-\d{2}-\d{2}$/.test(snapshot.dayBoundary?.snapshotDay || "")
+        ? snapshot.dayBoundary.snapshotDay
+        : "";
+    const dayBoundary = utcServerDayBoundary(
+        persistedDay ? `${persistedDay}T00:00:00.000Z` : fetchedAt,
+    );
+    if (snapshot.schemaVersion === 3 &&
+        snapshot.fetchedAt === fetchedAt &&
+        Object.entries(dayBoundary).every(([key, value]) => snapshot.dayBoundary?.[key] === value)) {
+        return snapshot;
+    }
+    return {
+        ...snapshot,
+        schemaVersion: 3,
+        fetchedAt,
+        dayBoundary,
+    };
 }
 
 function normalizedSourceState(value, data, fetchedAt) {
@@ -613,9 +655,16 @@ export function buildActivitySnapshot({
         .map(([source]) => source);
     const incompleteSources = Object.values(normalizedSources)
         .some((state) => ["stale", "unavailable"].includes(state.status));
+    const normalizedFetchedAt = timestamp(fetchedAt) || new Date().toISOString();
+    const retainedStaleFetchedAt = earliestTimestamp(
+        Object.values(normalizedSources)
+            .filter((state) => state.status === "stale")
+            .map((state) => state.fetchedAt),
+    );
     return {
-        schemaVersion: 2,
-        fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
+        schemaVersion: 3,
+        fetchedAt: normalizedFetchedAt,
+        dayBoundary: utcServerDayBoundary(retainedStaleFetchedAt || normalizedFetchedAt),
         repository: {
             name: text(repository?.name, 160),
             nameWithOwner: text(repository?.nameWithOwner, 300),
@@ -732,10 +781,17 @@ export function aggregateActivitySnapshots({
     const successfulRefreshes = includedRepositories.map((repository) => repository?.lastSuccessfulRefresh);
     const allRepositoriesSucceeded = includedRepositories.length > 0 &&
         successfulRefreshes.every((value) => timestamp(value));
+    const normalizedFetchedAt = timestamp(fetchedAt) || new Date().toISOString();
+    const snapshotDays = [...new Set(snapshots
+        .map((snapshot) => snapshot?.dayBoundary?.snapshotDay)
+        .filter(Boolean))]
+        .sort();
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         scope: "user",
-        fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
+        fetchedAt: normalizedFetchedAt,
+        dayBoundary: utcServerDayBoundary(normalizedFetchedAt),
+        snapshotDays,
         lastAttemptedRefresh: latestTimestamp(attemptedRefreshes) || timestamp(fetchedAt),
         lastSuccessfulRefresh: allRepositoriesSucceeded
             ? earliestTimestamp(successfulRefreshes)
@@ -775,5 +831,6 @@ export function isCompleteActivitySnapshot(snapshot) {
 
 export const activityModel = {
     phases: ["queued", "researching", "implementing", "reviewing", "blocked", "completed", "failed"],
-    schemaVersion: 2,
+    schemaVersion: 3,
+    dayBoundaryVersion: DAY_BOUNDARY_VERSION,
 };
