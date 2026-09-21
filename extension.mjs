@@ -364,6 +364,8 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 };
                 state.activity.errors = [{ source: "GitHub", message }];
                 state.activity.stale = true;
+                state.activity.partial = true;
+                state.activity.lastAttemptedRefresh = new Date().toISOString();
             });
         } finally {
             entry.remoteCheckPromise = null;

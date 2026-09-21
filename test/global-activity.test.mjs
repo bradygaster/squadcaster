@@ -111,6 +111,100 @@ test("aggregation exposes partial and stale repository snapshots", () => {
     assert.equal(aggregate.errors[0].repository, "octodemo/frontend");
 });
 
+test("aggregation exposes attempted and fully successful refresh timestamps", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        fetchedAt: "2026-09-20T14:00:00Z",
+        repositories: [
+            {
+                nameWithOwner: "octodemo/frontend",
+                included: true,
+                lastAttemptedRefresh: "2026-09-20T14:00:00Z",
+                lastSuccessfulRefresh: "2026-09-20T13:00:00Z",
+            },
+            {
+                nameWithOwner: "octodemo/backend",
+                included: true,
+                lastAttemptedRefresh: "2026-09-20T13:30:00Z",
+                lastSuccessfulRefresh: "2026-09-20T12:00:00Z",
+            },
+        ],
+    });
+    assert.equal(aggregate.lastAttemptedRefresh, "2026-09-20T14:00:00.000Z");
+    assert.equal(aggregate.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
+});
+
+test("aggregation propagates a repository refresh failure with a retained fresh snapshot", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        repositories: [{
+            nameWithOwner: "octodemo/frontend",
+            included: true,
+            partial: true,
+            stale: true,
+            error: "refresh crashed",
+            lastAttemptedRefresh: "2026-09-20T13:00:00Z",
+            lastSuccessfulRefresh: "2026-09-20T12:00:00Z",
+        }],
+    });
+    assert.equal(aggregate.partial, true);
+    assert.equal(aggregate.stale, true);
+    assert.deepEqual(aggregate.errors, [{
+        source: "repository refresh",
+        repository: "octodemo/frontend",
+        message: "refresh crashed",
+    }]);
+    assert.equal(aggregate.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
+});
+
+test("aggregation retains a new total refresh failure after a partial snapshot", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        errors: [{ source: "pull requests", message: "temporary PR failure" }],
+        sourceState: {
+            issues: { data: [issue("octodemo/frontend", 57)], status: "fresh" },
+            pullRequests: {
+                data: [],
+                status: "stale",
+                error: "temporary PR failure",
+            },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        repositories: [{
+            nameWithOwner: "octodemo/frontend",
+            included: true,
+            partial: true,
+            stale: true,
+            error: "GitHub CLI exited before completing the repository refresh",
+        }],
+    });
+
+    assert.deepEqual(aggregate.errors, [
+        {
+            source: "pull requests",
+            repository: "octodemo/frontend",
+            message: "temporary PR failure",
+        },
+        {
+            source: "repository refresh",
+            repository: "octodemo/frontend",
+            message: "GitHub CLI exited before completing the repository refresh",
+        },
+    ]);
+});
+
 test("dependency resolution does not depend on snapshot order", () => {
     const dependent = buildActivitySnapshot({
         repository: repository("octodemo/frontend"),
@@ -385,15 +479,80 @@ test("partial refresh retains the last fully successful timestamp and later reco
     const partial = await global.refresh({ forceAll: true });
     assert.equal(partial.goals[0].phase, "reviewing");
     assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.equal(global.registry.repositories[0].partial, true);
+    assert.equal(global.registry.repositories[0].stale, true);
+    assert.ok(global.registry.repositories[0].lastAttemptedRefresh);
+    assert.equal(partial.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
+    assert.ok(partial.lastAttemptedRefresh);
+    assert.equal(partial.errors.length, 1);
     assert.match(global.registry.repositories[0].error, /pull requests: temporary PR failure/);
 
     failPullRequests = false;
     const recovered = await global.refresh({ forceAll: true });
     assert.equal(recovered.goals[0].phase, "queued");
     assert.notEqual(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.equal(global.registry.repositories[0].partial, false);
+    assert.equal(global.registry.repositories[0].stale, false);
     assert.equal(global.registry.repositories[0].error, "");
     assert.equal(recovered.partial, false);
     assert.equal(recovered.stale, false);
+});
+
+test("stale current snapshots never advance successful refresh time and later recovery clears state", async () => {
+    const successfulAt = "2026-09-20T12:00:00Z";
+    const stale = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        fetchedAt: "2026-09-20T13:00:00Z",
+        sourceState: {
+            issues: {
+                data: [issue("octodemo/frontend", 57)],
+                fetchedAt: successfulAt,
+                status: "stale",
+                error: "",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [{
+                ...repository("octodemo/frontend"),
+                owner: "octodemo",
+                included: true,
+                lastSuccessfulRefresh: successfulAt,
+            }],
+            snapshots: {},
+        },
+        runJson: async () => [],
+    });
+
+    const partial = await global.refresh({
+        currentRepository: "octodemo/frontend",
+        currentSnapshot: stale,
+    });
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, successfulAt);
+    assert.equal(global.registry.repositories[0].lastAttemptedRefresh, "2026-09-20T13:00:00.000Z");
+    assert.equal(partial.partial, true);
+    assert.equal(partial.stale, true);
+
+    const recovered = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        fetchedAt: "2026-09-20T14:00:00Z",
+    });
+    const fresh = await global.refresh({
+        currentRepository: "octodemo/frontend",
+        currentSnapshot: recovered,
+    });
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, "2026-09-20T14:00:00.000Z");
+    assert.equal(global.registry.repositories[0].partial, false);
+    assert.equal(global.registry.repositories[0].stale, false);
+    assert.equal(fresh.partial, false);
+    assert.equal(fresh.stale, false);
 });
 
 test("background refresh retries stale workflow sources for inactive repositories", async () => {

@@ -1,4 +1,4 @@
-import { aggregateActivitySnapshots } from "./activity-model.mjs";
+import { aggregateActivitySnapshots, isCompleteActivitySnapshot } from "./activity-model.mjs";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 
 const DISCOVERY_TTL = 15 * 60 * 1000;
@@ -76,6 +76,9 @@ function registryRepository(repository, previous = {}) {
         lastSuccessfulRefresh: previous.lastSuccessfulRefresh || null,
         lastAttemptedRefresh: previous.lastAttemptedRefresh || null,
         lastActivityAt: previous.lastActivityAt || null,
+        partial: Boolean(previous.partial),
+        stale: Boolean(previous.stale),
+        staleSources: Array.isArray(previous.staleSources) ? previous.staleSources : [],
         error: previous.error || "",
     };
 }
@@ -243,8 +246,13 @@ export class GitHubGlobalActivity {
             }
             if (current) {
                 current.lastAttemptedRefresh = currentSnapshot.fetchedAt;
-                if (!currentSnapshot.partial) current.lastSuccessfulRefresh = currentSnapshot.fetchedAt;
+                if (isCompleteActivitySnapshot(currentSnapshot)) {
+                    current.lastSuccessfulRefresh = currentSnapshot.fetchedAt;
+                }
                 current.lastActivityAt = currentSnapshot.goals?.[0]?.updatedAt || null;
+                current.partial = Boolean(currentSnapshot.partial);
+                current.stale = Boolean(currentSnapshot.stale);
+                current.staleSources = [...(currentSnapshot.staleSources || [])];
                 current.error = currentSnapshot.errors?.length
                     ? currentSnapshot.errors.map((error) => `${error.source}: ${error.message}`).join("; ").slice(0, 800)
                     : "";
@@ -285,13 +293,20 @@ export class GitHubGlobalActivity {
                         ["stale", "unavailable"].includes(previous?.sourceState?.workflowRuns?.status),
                 });
                 this.registry.snapshots[key] = snapshot;
-                if (!snapshot.partial) repository.lastSuccessfulRefresh = snapshot.fetchedAt;
+                if (isCompleteActivitySnapshot(snapshot)) {
+                    repository.lastSuccessfulRefresh = snapshot.fetchedAt;
+                }
                 repository.lastActivityAt = snapshot.goals?.[0]?.updatedAt || repository.lastActivityAt;
+                repository.partial = Boolean(snapshot.partial);
+                repository.stale = Boolean(snapshot.stale);
+                repository.staleSources = [...(snapshot.staleSources || [])];
                 repository.error = snapshot.errors?.length
                     ? snapshot.errors.map((error) => `${error.source}: ${error.message}`).join("; ").slice(0, 800)
                     : "";
             } catch (error) {
                 repository.error = message(error);
+                repository.partial = true;
+                repository.stale = Boolean(previous);
             }
         });
 
