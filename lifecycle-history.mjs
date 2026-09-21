@@ -114,6 +114,7 @@ function observationFreshness(snapshot) {
         SOURCE_STATUSES.has(source?.status) ? source.status : "unavailable",
     ]));
     const statuses = Object.values(sources);
+    if (statuses.length === 0) return null;
     const complete = !snapshot?.partial &&
         !snapshot?.stale &&
         !(snapshot?.errors?.length) &&

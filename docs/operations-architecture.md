@@ -46,7 +46,8 @@ that snapshot. Complete observations and explicitly partial observations with
 at least one fresh source may append a transition. Intentionally skipped
 sources make the observation partial; they are never labeled complete. A
 stale-only, unavailable-only, failed, or unrefreshed snapshot cannot append
-one. Partial transitions remain visibly labeled partial. Cross-repository
+one. Empty or malformed legacy source state is also ineligible because it
+provides no freshness evidence. Partial transitions remain visibly labeled partial. Cross-repository
 dependency changes are observed at the aggregate boundary and include the
 dependency repositories' source freshness.
 

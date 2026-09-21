@@ -111,6 +111,22 @@ test("labels an observation with an intentionally skipped source as partial", ()
     assert.equal(changed.appended[0].freshness.sources.workflowRuns, "skipped");
 });
 
+test("rejects observations without source freshness evidence", () => {
+    const first = observeLifecycleSnapshot({}, {
+        ...snapshot("queued"),
+        sourceState: {},
+    });
+    assert.deepEqual(first.appended, []);
+    assert.equal(first.snapshot.goals[0].lifecycleHistory.firstObservedAt, null);
+
+    const changed = observeLifecycleSnapshot(first.lifecycleHistory, {
+        ...snapshot("completed", { fetchedAt: "2026-09-21T12:05:00Z" }),
+        sourceState: {},
+    });
+    assert.deepEqual(changed.appended, []);
+    assert.deepEqual(changed.snapshot.goals[0].lifecycleHistory.transitions, []);
+});
+
 test("exclusion and re-enablement establish a new baseline without filling the gap", () => {
     const first = observeLifecycleSnapshot({}, snapshot("queued"));
     const excluded = setLifecycleRepositoryIncluded(
