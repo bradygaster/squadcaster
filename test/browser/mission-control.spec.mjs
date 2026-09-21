@@ -1079,6 +1079,65 @@ test("repository ambiguity overrides a stale goal association and remains fail c
     await expect(page.locator("#live-status")).toHaveText("Showing 0 goals filtered by automatic bootstrap.");
 });
 
+test("unknown bootstrap shapes cannot claim a canonical goal", async ({ page }) => {
+    const nextState = fixture.state();
+    nextState.activity.bootstraps = [{
+        repository: "octodemo/frontend",
+        stale: false,
+        researchIssue: {
+            number: 2,
+            url: "https://github.com/octodemo/frontend/issues/2",
+        },
+    }];
+    fixture.emit(nextState);
+
+    const summary = page.locator('.bootstrap-summary[data-bootstrap-status="unknown"]').first();
+    await expect(summary).toBeVisible();
+    await expect(summary.getByRole("button", { name: "Open canonical research goal" })).toHaveCount(0);
+
+    await page.getByText("Browse goals").click();
+    await page.getByRole("button", { name: "Automatic bootstrap" }).click();
+    await expect(page.locator("#live-status")).toHaveText("Showing 0 goals filtered by automatic bootstrap.");
+});
+
+test("active repository scope hides completed-only bootstrap diagnostics", async ({ page }) => {
+    const nextState = fixture.state();
+    nextState.activity.bootstraps = [{
+        repository: "archivedemo/archive",
+        status: "failed",
+        stale: false,
+        reasons: [{
+            code: "workflow-failed",
+            message: "The newest bootstrap attempt failed.",
+        }],
+    }];
+    fixture.emit(nextState);
+
+    const summary = page.locator('.bootstrap-summary[data-bootstrap-status="failed"]');
+    await expect(summary.first()).toBeVisible();
+
+    await page.getByText("Browse goals").click();
+    await page.getByRole("checkbox", { name: "Only repositories with active work" }).check();
+    await expect(summary).toHaveCount(0);
+    await expect(page.locator("#attention-bootstrap")).toHaveCount(0);
+});
+
+test("bootstrap drawer restores focus to the activating attention control", async ({ page }) => {
+    const nextState = fixture.state();
+    nextState.activity.bootstraps = [{
+        ...bootstrap({ status: "partial" }),
+        repository: "octodemo/frontend",
+    }];
+    fixture.emit(nextState);
+
+    const attentionLane = page.locator('section[aria-labelledby="attention-bootstrap"]');
+    const opener = attentionLane.getByRole("button", { name: "Open canonical research goal" });
+    await opener.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByRole("button", { name: "Close goal details" }).click();
+    await expect(opener).toBeFocused();
+});
+
 test("excluded repositories do not render or count bootstrap diagnostics", async ({ page }) => {
     const nextState = fixture.state();
     nextState.activity.repositories[1].included = false;

@@ -1186,6 +1186,15 @@ export function renderHtml() {
     let activityPageView = null;
     let workflowPageView = null;
     let searchAnnouncementTimer = null;
+    const canonicalBootstrapStatuses = new Set([
+      "pending",
+      "delayed",
+      "partial",
+      "failed",
+      "retried",
+      "complete",
+      "opted_out",
+    ]);
 
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
@@ -1408,12 +1417,7 @@ export function renderHtml() {
       if (repositoryFilter === "current" && repository.toLowerCase() !== String(state.activity?.currentRepository || "").toLowerCase()) return false;
       if (!["all", "current"].includes(repositoryFilter) && repository !== repositoryFilter) return false;
       if (ownerFilter !== "all" && repository.split("/")[0] !== ownerFilter) return false;
-      if (activeRepositoriesOnly) {
-        const hasActiveWork = (state.activity?.goals || []).some(candidate =>
-          candidate.phase !== "completed" &&
-          candidate.repository?.nameWithOwner === repository);
-        if (!hasActiveWork) return false;
-      }
+      if (activeRepositoriesOnly && !repositoryHasActiveWork(repository)) return false;
       const query = goalSearch.trim().toLowerCase();
       if (!query) return true;
       return [
@@ -1532,6 +1536,17 @@ export function renderHtml() {
       return links.filter(link => link?.url);
     }
 
+    function repositoryHasActiveWork(repository) {
+      const repositoryKey = String(repository || "").toLowerCase();
+      return (state.activity?.goals || []).some(candidate =>
+        candidate.phase !== "completed" &&
+        String(candidate.repository?.nameWithOwner || "").toLowerCase() === repositoryKey);
+    }
+
+    function hasCanonicalBootstrapStatus(bootstrap) {
+      return canonicalBootstrapStatuses.has(bootstrap?.status);
+    }
+
     function bootstrapReasonText(reason) {
       if (typeof reason === "string") return reason;
       return reason?.message || reason?.code || "";
@@ -1552,7 +1567,7 @@ export function renderHtml() {
         const key = String(goal.repository?.nameWithOwner || "").toLowerCase();
         const existing = entries.get(key);
         const bootstrap = existing?.bootstrap || goal.bootstrap;
-        const canonicalGoal = !["ambiguous", "malformed", "unknown"].includes(bootstrap?.status) &&
+        const canonicalGoal = hasCanonicalBootstrapStatus(bootstrap) &&
           Number(bootstrap?.researchIssue?.number) === Number(goal.issue?.number);
         entries.set(key, {
           repository: existing?.repository || goal.repository,
@@ -1580,7 +1595,7 @@ export function renderHtml() {
         if (!key) continue;
         const existing = entries.get(key);
         const canonicalGoal = existing?.goal &&
-          !["ambiguous", "malformed", "unknown"].includes(bootstrap?.status) &&
+          hasCanonicalBootstrapStatus(bootstrap) &&
           Number(bootstrap?.researchIssue?.number) === Number(existing.goal.issue?.number);
         entries.set(key, {
           repository: repositoryState || existing?.repository || repository,
@@ -1611,7 +1626,7 @@ export function renderHtml() {
       const bootstrap = bootstrapForGoal(goal);
       return Boolean(
         bootstrap &&
-        !["ambiguous", "malformed", "unknown"].includes(bootstrap.status) &&
+        hasCanonicalBootstrapStatus(bootstrap) &&
         Number(bootstrap.researchIssue?.number) === Number(goal.issue?.number),
       );
     }
@@ -1621,6 +1636,7 @@ export function renderHtml() {
       if (repositoryFilter === "current" && repository.toLowerCase() !== String(state.activity?.currentRepository || "").toLowerCase()) return false;
       if (!["all", "current"].includes(repositoryFilter) && repository !== repositoryFilter) return false;
       if (ownerFilter !== "all" && repository.split("/")[0] !== ownerFilter) return false;
+      if (activeRepositoriesOnly && !repositoryHasActiveWork(repository)) return false;
       return true;
     }
 
@@ -1648,7 +1664,7 @@ export function renderHtml() {
           \${links.length ? \`<div class="bootstrap-summary-links">\${links.map(link =>
             \`<a href="\${esc(link.url)}" target="_blank" rel="noreferrer">\${esc(link.title)} ↗ <span class="evidence-label">\${esc(link.confidence || "observed")}</span></a>\`
           ).join("")}</div>\` : ""}
-          \${goal ? \`<div class="bootstrap-summary-links"><button class="button" data-action="open-goal" data-goal-id="\${esc(goal.id)}" type="button">Open canonical research goal</button></div>\` : ""}
+          \${goal ? \`<div class="bootstrap-summary-links"><button class="button" data-action="open-goal" data-goal-id="\${esc(goal.id)}" data-open-surface="bootstrap-\${attention ? "attention" : "summary"}" type="button">Open canonical research goal</button></div>\` : ""}
         </article>\`;
     }
 
@@ -2670,7 +2686,8 @@ export function renderHtml() {
           clearHandoffOverlay();
           handoffProbeGoalId = probeGoalId;
           handoffProbePending = true;
-          drawerReturnSelector = \`[data-action="open-goal"][data-goal-id="\${CSS.escape(selectedGoalId)}"]\`;
+          const openSurface = target.dataset.openSurface;
+          drawerReturnSelector = \`[data-action="open-goal"][data-goal-id="\${CSS.escape(selectedGoalId)}"]\${openSurface ? \`[data-open-surface="\${CSS.escape(openSurface)}"]\` : ""}\`;
           render(".drawer-close");
           try {
             const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(probeGoalId)}\`, { cache: "no-store" });
