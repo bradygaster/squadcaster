@@ -102,6 +102,12 @@ function bootstrapApi(args) {
     return [[]];
 }
 
+function workflowJobsApi(args, response = workflowJobs()) {
+    return args.some((arg) => String(arg).includes("filter=latest"))
+        ? response
+        : bootstrapApi(args);
+}
+
 test("keeps the last known goals when issue discovery fails", async () => {
     const previous = buildActivitySnapshot({
         repository,
@@ -187,7 +193,7 @@ test("preserves failed workflow evidence and recovers on a later successful refr
     const failingAdapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
-            if (args[0] === "api") return bootstrapApi(args);
+            if (args[0] === "api") return workflowJobsApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue({ title: "Updated failed work", body: "" })];
             if (args[0] === "pr") return [];
@@ -204,11 +210,10 @@ test("preserves failed workflow evidence and recovers on a later successful refr
     const recoveredAdapter = new GitHubSquadActivityAdapter({
         cwd: "/repo",
         runJson: async (args) => {
-            if (args[0] === "api") return bootstrapApi(args);
+            if (args[0] === "api") return workflowJobsApi(args);
             if (args[0] === "repo") return repository;
             if (args[0] === "issue") return [issue({ title: "Recovered work", body: "" })];
             if (args[0] === "pr") return [];
-            if (args[0] === "api") return workflowJobs();
             return [workflowRun({
                 databaseId: 79,
                 conclusion: "success",
@@ -286,6 +291,9 @@ test("paginates selected workflow jobs and preserves only observed job and step 
             if (args[0] === "issue") return [issue({ body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun()];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             if (args.includes("page=1")) return workflowJobs({
                 total_count: 101,
                 jobs: firstPageJobs,
@@ -336,7 +344,9 @@ test("paginates selected workflow jobs and preserves only observed job and step 
             completedAt: null,
         }],
     });
-    const apiCalls = calls.filter((args) => args[0] === "api");
+    const apiCalls = calls.filter((args) =>
+        args[0] === "api" &&
+        args.some((arg) => String(arg).includes("filter=latest")));
     assert.equal(apiCalls.length, 2);
     assert.ok(apiCalls.every((args) => args.includes("filter=latest")));
     assert.ok(calls.every((args) => !args.some((arg) => String(arg).includes("logs"))));
@@ -385,6 +395,9 @@ test("stops at the REST reserve and marks uncached selected runs partial or unav
                 workflowRun({ databaseId: 79, updatedAt: "2026-09-20T13:00:00Z" }),
                 workflowRun(),
             ];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             return {
                 total_count: 200,
                 jobs: Array.from({ length: 100 }, (_, index) => ({
@@ -399,7 +412,9 @@ test("stops at the REST reserve and marks uncached selected runs partial or unav
     const partial = await adapter.discover({ workflowJobsRestBudget: budget });
     const runs = partial.goals[0].workflowRuns;
 
-    assert.equal(calls.filter((args) => args[0] === "api").length, 1);
+    assert.equal(calls.filter((args) =>
+        args[0] === "api" &&
+        args.some((arg) => String(arg).includes("filter=latest"))).length, 1);
     assert.equal(budget.remaining, 100);
     assert.equal(partial.sourceState.workflowJobs.status, "partial");
     assert.equal(runs.find((run) => run.id === 79).jobsState.status, "partial");
@@ -455,7 +470,7 @@ test("distinguishes a successful empty jobs response from unavailable jobs", asy
             if (args[0] === "issue") return [issue({ body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun()];
-            return { total_count: 0, jobs: [] };
+            return workflowJobsApi(args, { total_count: 0, jobs: [] });
         },
     });
     const empty = await emptyAdapter.discover();
@@ -469,6 +484,9 @@ test("distinguishes a successful empty jobs response from unavailable jobs", asy
             if (args[0] === "issue") return [issue({ body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun()];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             throw new Error("HTTP 403: Resource not accessible by integration");
         },
     });
@@ -512,6 +530,9 @@ test("preserves each selected run's last successful jobs when only the jobs sour
             if (args[0] === "issue") return [issue({ title: "Updated", body: "" })];
             if (args[0] === "pr") return [];
             if (args[0] === "run") return [workflowRun({ conclusion: "success" })];
+            if (!args.some((arg) => String(arg).includes("filter=latest"))) {
+                return bootstrapApi(args);
+            }
             throw new Error("workflow jobs permission denied");
         },
     });
