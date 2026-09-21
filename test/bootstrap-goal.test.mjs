@@ -722,7 +722,7 @@ test("duplicate activation binding blocks fail closed", () => {
     assert.deepEqual(goal.bootstrap.generatedGoals, []);
 });
 
-test("duplicate activation artifact envelopes fail closed", () => {
+test("rejects duplicate activation artifact envelopes before linking generated goals", () => {
     const binding = {
         task: "1",
         issue: "#21",
@@ -744,7 +744,10 @@ test("duplicate activation artifact envelopes fail closed", () => {
         phases: [],
     })}\n\`\`\``;
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
-        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
         duplicateArtifacts,
     ]);
     const snapshot = snapshotWithBootstrap({
@@ -755,7 +758,8 @@ test("duplicate activation artifact envelopes fail closed", () => {
         ],
     });
     const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
-    const activated = goal.artifacts.filter((artifact) => artifact.kind === "activated");
+    const activated = goal.artifacts.filter((artifact) =>
+        artifact.kind === "activated");
 
     assert.equal(activated.length, 2);
     assert.ok(activated.every((artifact) =>
@@ -994,6 +998,54 @@ test("links generated implementation goals only from validated activation bindin
     assert.ok(oversized.evidence.some((item) =>
         item.kind === "bootstrap-diagnostic" &&
         item.code === "invalid-activation-binding"));
+});
+
+test("rejects task and epic role collisions in generated goal metadata", () => {
+    const base = {
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    };
+    const epic = goalIssue(20, "Epic", ["squad", "squad:dev"]);
+    const task = goalIssue(21, "Task", ["squad", "squad:dev"]);
+    const secondTask = goalIssue(22, "Second task", ["squad", "squad:dev"]);
+    for (const bindings of [
+        [{ ...base, issue: "#20" }],
+        [
+            base,
+            {
+                ...base,
+                task: "2",
+                issue: "#22",
+                epic: "2.1",
+            },
+        ],
+    ]) {
+        const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+            artifactComment("research", {
+                createdAt: "2026-09-21T10:15:00Z",
+                url: researchComment().url,
+            }),
+            artifactComment("activated", {
+                bindings,
+                createdAt: "2026-09-21T11:00:00Z",
+            }),
+        ]);
+        const snapshot = snapshotWithBootstrap({
+            issues: [root, epic, task, secondTask],
+        });
+        const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+
+        assert.deepEqual(goal.bootstrap.generatedGoals, []);
+        assert.ok(goal.evidence.some((item) =>
+            item.kind === "bootstrap-diagnostic" &&
+            item.code === "conflicting-generated-goal"));
+    }
 });
 
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {
