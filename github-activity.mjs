@@ -1,5 +1,6 @@
 import { buildActivitySnapshot } from "./activity-model.mjs";
 import {
+    BOOTSTRAP_IDENTIFIERS,
     classifyAutomaticBootstrap,
     selectAutomaticBootstrapCandidates,
 } from "./bootstrap-classifier.mjs";
@@ -46,6 +47,8 @@ const BOOTSTRAP_SOURCE_KEYS = [
     "issues",
     "comments",
 ];
+const RUN_AUDIT_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const RUN_AUDIT_PAGE_LIMIT = 3;
 
 function bootstrapSource(previous, key) {
     const cached = previous?.sourceState?.bootstrap?.[key];
@@ -76,9 +79,23 @@ function flattenPages(value, key = "") {
     return items.flatMap((item) => item[key]);
 }
 
-function isRetryable(error) {
-    return /(?:\b429\b|\b5\d\d\b|rate limit|timed? out|timeout|temporar|connection reset|econnreset)/i
-        .test(errorMessage(error));
+function retryDelay(error, attempt, { now, maxDelayMs }) {
+    const message = errorMessage(error);
+    if (/(?:\b429\b|rate limit|secondary limit)/i.test(message)) {
+        const retryAfter = message.match(/retry[\s-]*after(?:\s*[:=]\s*|\s+)(\d+)/i);
+        if (retryAfter) return Math.min(Number(retryAfter[1]) * 1000, maxDelayMs);
+        const reset = message.match(/x-ratelimit-reset(?:\s*[:=]\s*|\s+)(\d{10,13})/i);
+        if (reset) {
+            const raw = Number(reset[1]);
+            const resetAt = raw > 1e12 ? raw : raw * 1000;
+            return Math.min(Math.max(0, resetAt - now()), maxDelayMs);
+        }
+        return null;
+    }
+    if (/(?:\b5\d\d\b|timed? out|timeout|temporar|connection reset|econnreset)/i.test(message)) {
+        return Math.min(250 * (2 ** attempt), maxDelayMs);
+    }
+    return null;
 }
 
 function apiArgs(repository, endpoint) {
@@ -90,15 +107,16 @@ function apiArgs(repository, endpoint) {
     ];
 }
 
-async function retry(operation, { attempts, sleep }) {
+async function retry(operation, { attempts, sleep, now, maxDelayMs }) {
     let failure;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
         try {
             return await operation();
         } catch (error) {
             failure = error;
-            if (attempt === attempts - 1 || !isRetryable(error)) throw error;
-            await sleep(50 * (2 ** attempt));
+            const delay = retryDelay(error, attempt, { now, maxDelayMs });
+            if (attempt === attempts - 1 || delay === null) throw error;
+            await sleep(delay);
         }
     }
     throw failure;
@@ -458,12 +476,98 @@ export class GitHubSquadActivityAdapter {
         repository = "",
         retryAttempts = 3,
         sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+        now = () => Date.now(),
+        maxRetryDelayMs = 60 * 1000,
     }) {
         this.runJson = runJson;
         this.cwd = cwd;
         this.repository = repository;
         this.retryAttempts = retryAttempts;
         this.sleep = sleep;
+        this.now = now;
+        this.maxRetryDelayMs = maxRetryDelayMs;
+    }
+
+    retry(operation) {
+        return retry(operation, {
+            attempts: this.retryAttempts,
+            sleep: this.sleep,
+            now: this.now,
+            maxDelayMs: this.maxRetryDelayMs,
+        });
+    }
+
+    async discoverWorkflowRuns({
+        repositoryName,
+        workflows,
+        previous,
+        defaultBranch,
+        attemptedAt,
+    }) {
+        const canonical = workflows.filter((workflow) =>
+            workflow.name === BOOTSTRAP_IDENTIFIERS.workflow &&
+            workflow.state !== "disabled");
+        const workflowIds = canonical.map((workflow) => Number(workflow.id)).filter(Number.isInteger);
+        if (canonical.length > workflowIds.length) {
+            throw new Error("Canonical bootstrap workflow metadata is missing an id.");
+        }
+        if (workflowIds.length === 0) {
+            return {
+                data: [],
+                fetchedAt: attemptedAt,
+                status: "fresh",
+                error: "",
+                workflowIds: [],
+                defaultBranch,
+                lastAuditAt: attemptedAt,
+            };
+        }
+
+        const previousIds = Array.isArray(previous.workflowIds) ? previous.workflowIds : [];
+        const cacheValid = previous.status !== "unavailable" &&
+            previous.defaultBranch === defaultBranch &&
+            JSON.stringify([...previousIds].sort()) === JSON.stringify([...workflowIds].sort());
+        const previousRuns = cacheValid ? previous.data : [];
+        const previousRunIds = new Set(previousRuns.map((run) => Number(run.id || run.databaseId)));
+        const attemptedMs = Date.parse(attemptedAt);
+        const lastAuditMs = Date.parse(previous.lastAuditAt || "");
+        const auditDue = cacheValid &&
+            (!Number.isFinite(lastAuditMs) || attemptedMs - lastAuditMs >= RUN_AUDIT_INTERVAL_MS);
+        const discovered = [];
+
+        for (const workflowId of workflowIds) {
+            let page = 1;
+            let overlap = false;
+            while (true) {
+                const response = await this.retry(() => this.runJson([
+                    "api",
+                    `repos/${repositoryName}/actions/workflows/${workflowId}/runs?per_page=100&page=${page}`,
+                ], this.cwd));
+                const runs = Array.isArray(response?.workflow_runs) ? response.workflow_runs : null;
+                if (!runs) throw new Error("GitHub returned an unexpected workflow-runs page.");
+                discovered.push(...runs);
+                overlap = overlap || runs.some((run) =>
+                    previousRunIds.has(Number(run.id || run.databaseId)));
+                if (runs.length < 100) break;
+                if (cacheValid && overlap && (!auditDue || page >= RUN_AUDIT_PAGE_LIMIT)) break;
+                page += 1;
+            }
+        }
+
+        const byId = new Map();
+        for (const run of [...discovered, ...previousRuns]) {
+            const id = Number(run.id || run.databaseId);
+            if (Number.isInteger(id) && !byId.has(id)) byId.set(id, run);
+        }
+        return {
+            data: [...byId.values()],
+            fetchedAt: attemptedAt,
+            status: "fresh",
+            error: "",
+            workflowIds,
+            defaultBranch,
+            lastAuditAt: auditDue || !cacheValid ? attemptedAt : previous.lastAuditAt,
+        };
     }
 
     async discoverBootstrap({ repository, previous, attemptedAt }) {
@@ -479,11 +583,6 @@ export class GitHubSquadActivityAdapter {
                 pageKey: "workflows",
             },
             {
-                key: "workflowRuns",
-                endpoint: "actions/runs",
-                pageKey: "workflow_runs",
-            },
-            {
                 key: "pullRequests",
                 endpoint: "pulls?state=all",
             },
@@ -494,10 +593,7 @@ export class GitHubSquadActivityAdapter {
             },
         ];
         const results = await Promise.allSettled(definitions.map((definition) =>
-            retry(
-                () => this.runJson(apiArgs(repositoryName, definition.endpoint), this.cwd),
-                { attempts: this.retryAttempts, sleep: this.sleep },
-            )));
+            this.retry(() => this.runJson(apiArgs(repositoryName, definition.endpoint), this.cwd))));
         const sourceState = { ...previousSources };
         results.forEach((result, index) => {
             const definition = definitions[index];
@@ -531,6 +627,27 @@ export class GitHubSquadActivityAdapter {
                 : "GitHub returned an unexpected paginated response.";
             sourceState[definition.key] = sourceFailure(previousSources[definition.key], message);
         });
+        if (sourceState.workflows.status !== "fresh") {
+            sourceState.workflowRuns = sourceFailure(
+                previousSources.workflowRuns,
+                "Bootstrap workflow discovery did not complete.",
+            );
+        } else {
+            try {
+                sourceState.workflowRuns = await this.discoverWorkflowRuns({
+                    repositoryName,
+                    workflows: sourceState.workflows.data,
+                    previous: previousSources.workflowRuns,
+                    defaultBranch,
+                    attemptedAt,
+                });
+            } catch (error) {
+                sourceState.workflowRuns = sourceFailure(
+                    previousSources.workflowRuns,
+                    errorMessage(error),
+                );
+            }
+        }
 
         const selected = selectAutomaticBootstrapCandidates({
             repository,
@@ -551,16 +668,13 @@ export class GitHubSquadActivityAdapter {
             };
         } else {
             try {
-                const response = await retry(
-                    () => this.runJson(
-                        apiArgs(
-                            repositoryName,
-                            `issues/${selected.canonicalResearchIssue.number}/comments`,
-                        ),
-                        this.cwd,
+                const response = await this.retry(() => this.runJson(
+                    apiArgs(
+                        repositoryName,
+                        `issues/${selected.canonicalResearchIssue.number}/comments`,
                     ),
-                    { attempts: this.retryAttempts, sleep: this.sleep },
-                );
+                    this.cwd,
+                ));
                 const comments = flattenPages(response);
                 if (!comments) throw new Error("GitHub returned an unexpected paginated response.");
                 sourceState.comments = {

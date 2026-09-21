@@ -1303,7 +1303,7 @@ test("excluded cached activity preserves refresh timestamps and resumes after re
     assert.equal(refreshedActivity.refreshed, true);
     assert.deepEqual(
         calls.map((args) => args[0]),
-        ["repo", "issue", "pr", "run", "api", "api", "api", "api"],
+        ["repo", "issue", "pr", "run", "api", "api", "api"],
     );
     assert.equal(refreshed.goals.length, 1);
     assert.equal(refreshed.goals[0].id, `${nameWithOwner}#58`);
@@ -1432,7 +1432,7 @@ test("forced discovery omission preserves the current repository exclusion", asy
 
     assert.deepEqual(
         calls.map((args) => args[0]),
-        ["api", "repo", "issue", "pr", "run", "api", "api", "api", "api"],
+        ["api", "repo", "issue", "pr", "run", "api", "api", "api"],
     );
     assert.equal(global.registry.rosters[nameWithOwner].status, "fresh");
     assert.equal(global.registry.rosters[nameWithOwner].members.length, 1);
