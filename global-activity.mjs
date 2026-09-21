@@ -263,6 +263,36 @@ function rosterError(snapshot, roster) {
     return snapshot;
 }
 
+export async function discoverCurrentRepositoryActivity({
+    runJson,
+    cwd,
+    registry,
+    currentRepository,
+    members = [],
+    previous = null,
+}) {
+    const normalized = normalizeRegistry(registry);
+    let resolvedRepository = String(currentRepository || "");
+    let resolvedPrevious = previous;
+    if (!resolvedRepository) {
+        const identity = await runJson(
+            ["repo", "view", "--json", "name,nameWithOwner,url,defaultBranchRef"],
+            cwd,
+        );
+        resolvedRepository = identity?.nameWithOwner || "";
+        resolvedPrevious = normalized.snapshots[resolvedRepository.toLowerCase()] || previous;
+    }
+
+    const currentKey = resolvedRepository.toLowerCase();
+    const registered = normalized.repositories.find(
+        (repository) => repository.nameWithOwner.toLowerCase() === currentKey,
+    );
+    if (registered?.included === false) return resolvedPrevious;
+
+    const adapter = new GitHubSquadActivityAdapter({ runJson, cwd });
+    return adapter.discover({ members, previous: resolvedPrevious });
+}
+
 export class GitHubGlobalActivity {
     constructor({ runJson, cwd, registry = {} }) {
         this.runJson = runJson;

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { aggregateActivitySnapshots, buildActivitySnapshot } from "../activity-model.mjs";
-import { GitHubGlobalActivity, normalizeRegistry, refreshPolicy } from "../global-activity.mjs";
+import {
+    discoverCurrentRepositoryActivity,
+    GitHubGlobalActivity,
+    normalizeRegistry,
+    refreshPolicy,
+} from "../global-activity.mjs";
 
 const repository = (nameWithOwner) => ({
     name: nameWithOwner.split("/")[1],
@@ -830,6 +835,95 @@ test("aggregate refresh skips excluded repositories and reuses the current snaps
     assert.equal(aggregate.repositories.length, 2);
     assert.equal(aggregate.goals.length, 1);
     assert.equal(calls.length, 0);
+});
+
+test("current repository activity stays cached while excluded and resumes after re-enabling", async () => {
+    const nameWithOwner = "octodemo/frontend";
+    const cached = buildActivitySnapshot({
+        repository: repository(nameWithOwner),
+        issues: [issue(nameWithOwner, 57)],
+    });
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [
+                { ...repository(nameWithOwner), owner: "octodemo", included: false },
+            ],
+            snapshots: { [nameWithOwner]: cached },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository(nameWithOwner);
+            if (args[0] === "issue") return [issue(nameWithOwner, 58)];
+            return [];
+        },
+    });
+
+    const excludedSnapshot = await discoverCurrentRepositoryActivity({
+        runJson: global.runJson,
+        cwd: global.cwd,
+        registry: global.registry,
+        currentRepository: nameWithOwner,
+        previous: cached,
+    });
+    const excluded = await global.refresh({
+        currentRepository: nameWithOwner,
+        currentSnapshot: excludedSnapshot,
+    });
+
+    assert.equal(excludedSnapshot, cached);
+    assert.equal(calls.length, 0);
+    assert.equal(excluded.goals.length, 0);
+    assert.equal(excluded.repositories.length, 1);
+    assert.equal(excluded.repositories[0].included, false);
+    assert.equal(global.registry.snapshots[nameWithOwner], cached);
+
+    assert.equal(global.setIncluded(nameWithOwner, true), true);
+    const refreshedSnapshot = await discoverCurrentRepositoryActivity({
+        runJson: global.runJson,
+        cwd: global.cwd,
+        registry: global.registry,
+        currentRepository: nameWithOwner,
+        previous: cached,
+    });
+    const refreshed = await global.refresh({
+        currentRepository: nameWithOwner,
+        currentSnapshot: refreshedSnapshot,
+    });
+
+    assert.deepEqual(calls.map((args) => args[0]), ["repo", "issue", "pr", "run"]);
+    assert.equal(refreshed.goals.length, 1);
+    assert.equal(refreshed.goals[0].id, `${nameWithOwner}#58`);
+    assert.equal(refreshed.repositories[0].included, true);
+});
+
+test("current repository identity is resolved before excluded activity is refreshed", async () => {
+    const nameWithOwner = "octodemo/frontend";
+    const cached = buildActivitySnapshot({
+        repository: repository(nameWithOwner),
+        issues: [issue(nameWithOwner, 57)],
+    });
+    const calls = [];
+    const snapshot = await discoverCurrentRepositoryActivity({
+        cwd: "/repo",
+        registry: {
+            repositories: [
+                { ...repository(nameWithOwner), owner: "octodemo", included: false },
+            ],
+            snapshots: { [nameWithOwner]: cached },
+        },
+        currentRepository: "",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository(nameWithOwner);
+            throw new Error(`Unexpected activity call: ${args[0]}`);
+        },
+    });
+
+    assert.equal(snapshot, cached);
+    assert.deepEqual(calls.map((args) => args[0]), ["repo"]);
 });
 
 test("combined rate-limit guard reports the later limiting reset", async () => {
