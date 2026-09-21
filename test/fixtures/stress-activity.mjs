@@ -140,6 +140,14 @@ export function updateStressRepositoryInclusion(state, allGoals, nameWithOwner, 
     );
     state.activity.goals = allGoals.filter((item) =>
         includedRepositories.has(item.repository.nameWithOwner));
+    state.activity.errors = state.activity.repositories
+        .filter((item) => item.included && item.error)
+        .map((item) => ({
+            source: "GitHub",
+            repository: item.nameWithOwner,
+            message: item.error,
+        }));
+    state.activity.stale = state.activity.errors.length > 0;
     const count = (phase) => state.activity.goals.filter((item) => item.phase === phase).length;
     state.activity.summary = {
         active: state.activity.goals.filter((item) => item.phase !== "completed").length,

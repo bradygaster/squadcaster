@@ -14,7 +14,14 @@ export function describeActivityDelta(previous, next) {
         return "GitHub activity refresh reported an error. Previously loaded data remains visible.";
     }
     const before = new Map(previous.goals.map((goal) => [goal.id, goal]));
-    const added = next.goals.filter((goal) => !before.has(goal.id));
+    const previousRepositories = new Map((previous.repositories || [])
+        .map((repository) => [repository.nameWithOwner, repository]));
+    const newlyIncluded = new Set((next.repositories || [])
+        .filter((repository) =>
+            repository.included && previousRepositories.get(repository.nameWithOwner)?.included === false)
+        .map((repository) => repository.nameWithOwner));
+    const added = next.goals.filter((goal) =>
+        !before.has(goal.id) && !newlyIncluded.has(goal.repository?.nameWithOwner));
     if (added.length) {
         return `${added.length} new goal${added.length === 1 ? "" : "s"} discovered.`;
     }
@@ -1062,6 +1069,8 @@ export function renderHtml() {
       border-bottom: 1px solid var(--border);
       background: var(--soft);
     }
+    .drawer-header > div { min-width: 0; }
+    .drawer-header h2, .drawer-header p { overflow-wrap: anywhere; }
     .drawer-header p { margin: 5px 0 0; color: var(--muted); }
     .drawer-close { width: 44px; height: 44px; flex: 0 0 auto; padding: 0; }
     .drawer-body { overflow: auto; padding: 18px; }
@@ -1204,6 +1213,10 @@ export function renderHtml() {
     function elementStateKey(element) {
       if (!element) return "";
       if (element.dataset?.stateKey) return \`state:\${element.dataset.stateKey}\`;
+      const keyedDisclosure = element.matches?.("summary")
+        ? element.closest("details[data-state-key]")
+        : null;
+      if (keyedDisclosure) return \`state:\${keyedDisclosure.dataset.stateKey}:summary\`;
       if (element.id) return \`id:\${element.id}\`;
       if (element.dataset?.action) {
         return [
@@ -1216,7 +1229,15 @@ export function renderHtml() {
           element.dataset.taskId,
         ].filter(Boolean).join(":");
       }
-      if (element.matches?.("a[href]")) return \`href:\${element.getAttribute("href")}\`;
+      if (element.matches?.("a[href]")) {
+        const surface = element.closest(".goal-drawer, .runs-panel, .activity-panel, .stage-detail, .secondary, .filter-disclosure");
+        const surfaceKey = surface?.classList.contains("goal-drawer") ? "drawer"
+          : surface?.getAttribute("aria-labelledby")
+            || surface?.dataset?.stateKey
+            || surface?.className
+            || "page";
+        return \`href:\${surfaceKey}:\${element.getAttribute("href")}\`;
+      }
       const focusable = [...document.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')];
       const index = focusable.indexOf(element);
       return index >= 0 ? \`focusable:\${index}\` : "";
@@ -1742,6 +1763,10 @@ export function renderHtml() {
       return (state.activity?.goals || []).find(goal => goal.id === id);
     }
 
+    function goalIsVisible(goal) {
+      return Boolean(goal && goalMatchesFilter(goal) && goalMatchesScope(goal));
+    }
+
     function goalTriggerHtml(goal, compact = false) {
       const current = String(goal.repository?.nameWithOwner || "").toLowerCase() ===
         String(state.activity?.currentRepository || "").toLowerCase();
@@ -1812,7 +1837,7 @@ export function renderHtml() {
         String(right.run.updatedAt || right.run.createdAt || "").localeCompare(
           String(left.run.updatedAt || left.run.createdAt || "")
         ));
-      const visible = boundedItems(runs, 80);
+      const visible = boundedItems(runs, 12);
       return \`
         <section class="runs-panel" aria-labelledby="runs-title">
           <div class="panel-header">
@@ -2088,6 +2113,11 @@ export function renderHtml() {
       const goals = (activity.goals || []).filter(goalMatchesFilter).filter(goalMatchesScope);
       const lifecycle = ["queued", "researching", "implementing", "reviewing", "completed"];
       const repositories = (activity.repositories || []).filter(repository => repository.included).length;
+      const successfulRefreshes = (activity.repositories || [])
+        .filter(repository => repository.included && repository.lastSuccessfulRefresh)
+        .map(repository => repository.lastSuccessfulRefresh)
+        .sort();
+      const oldestSuccessfulRefresh = successfulRefreshes[0] || "";
       const inProgress = (summary.queued || 0) + (summary.researching || 0) + (summary.implementing || 0);
       const needsAttention = (summary.blocked || 0) + (summary.failed || 0);
       return \`
@@ -2113,7 +2143,7 @@ export function renderHtml() {
           </div>
           \${activity.errors?.length || activity.stale ? \`
             <div class="sync-warning" role="alert"><strong>\${activity.stale ? "Data may be stale." : "Some GitHub data could not be refreshed."}</strong>
-              <p>Last successful snapshot: \${esc(formatTime(activity.fetchedAt))}. Previously loaded data remains visible.</p>
+              <p>\${oldestSuccessfulRefresh ? \`Oldest included repository snapshot: \${esc(formatTime(oldestSuccessfulRefresh))}. \` : ""}Previously loaded data remains visible.</p>
               \${activity.errors.map(error => '<p>' + esc(error.source) + ": " + esc(error.message) + "</p>").join("")}
             </div>\` : ""}
           \${repositoryControlsHtml()}
@@ -2152,6 +2182,7 @@ export function renderHtml() {
 
     function render(focusSelector = "") {
       const uiSnapshot = captureUiState();
+      let fallbackFocusSelector = "";
       updateHeader();
       if (!state) {
         app.innerHTML = '<div class="operation"><span class="spinner"></span><div>Loading Squad activity…</div></div>';
@@ -2166,19 +2197,27 @@ export function renderHtml() {
         return;
       }
       if (!selectedMemberId && state.members.length) selectedMemberId = state.members[0].id;
-      if (selectedGoalId && !goalById(selectedGoalId)) {
+      if (selectedGoalId && !goalIsVisible(goalById(selectedGoalId))) {
+        focusSelector = focusSelector || drawerReturnSelector;
+        fallbackFocusSelector = ".pipeline-scroll";
         selectedGoalId = "";
         drawerReturnSelector = "";
       }
       app.innerHTML = activeHtml();
       document.body.style.overflow = selectedGoalId ? "hidden" : "";
+      if (focusSelector && !document.querySelector(focusSelector)) {
+        focusSelector = fallbackFocusSelector;
+      }
       restoreUiState(uiSnapshot, focusSelector);
     }
 
     async function refresh() {
       const response = await fetch("/api/state", { cache: "no-store" });
-      state = await response.json();
+      const nextState = await response.json();
+      const message = describeActivityDelta(state?.activity, nextState?.activity);
+      state = nextState;
       render();
+      announce(message);
     }
 
     document.addEventListener("click", async event => {

@@ -48,8 +48,13 @@ test("announces only meaningful activity changes", () => {
             id: "octo/repo#1",
             phase: "queued",
             issue: { number: 1 },
+            repository: { nameWithOwner: "octo/repo" },
         }],
         errors: [],
+        repositories: [{
+            nameWithOwner: "octo/repo",
+            included: true,
+        }],
     };
 
     assert.equal(describeActivityDelta(baseline, structuredClone(baseline)), "");
@@ -69,6 +74,19 @@ test("announces only meaningful activity changes", () => {
         ...baseline,
         errors: [{ source: "GitHub", message: "rate limited" }],
     }), "GitHub activity refresh reported an error. Previously loaded data remains visible.");
+    assert.equal(describeActivityDelta({
+        ...baseline,
+        goals: [],
+        repositories: [{
+            nameWithOwner: "octo/repo",
+            included: false,
+        }],
+    }, baseline), "");
+    assert.equal(describeActivityDelta({
+        ...baseline,
+        goals: [],
+        repositories: [],
+    }, baseline), "1 new goal discovered.");
 });
 
 test("renders stable restoration keys and production-scale containment", () => {
@@ -83,4 +101,8 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /active workflow runs/);
     assert.doesNotMatch(html, /runs today/);
     assert.match(html, /Data may be stale/);
+    assert.match(html, /Oldest included repository snapshot/);
+    assert.doesNotMatch(html, /Last successful snapshot/);
+    assert.match(html, /goal-drawer, \.runs-panel/);
+    assert.match(html, /keyedDisclosure/);
 });

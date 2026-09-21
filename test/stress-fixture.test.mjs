@@ -32,7 +32,7 @@ test("stress fixture covers large repositories, goals, and delivery evidence", (
 test("stress fixture repository inclusion updates authoritative totals", () => {
     const state = createStressCanvasState();
     const allGoals = structuredClone(state.activity.goals);
-    const repository = state.activity.repositories[3];
+    const repository = state.activity.repositories[8];
 
     assert.equal(updateStressRepositoryInclusion(
         state,
@@ -44,6 +44,8 @@ test("stress fixture repository inclusion updates authoritative totals", () => {
     assert.equal(state.activity.goals.length, 126);
     assert.equal(state.activity.goals.some((goal) =>
         goal.repository.nameWithOwner === repository.nameWithOwner), false);
+    assert.equal(state.activity.stale, false);
+    assert.equal(state.activity.errors.length, 0);
 
     assert.equal(updateStressRepositoryInclusion(
         state,
@@ -52,4 +54,6 @@ test("stress fixture repository inclusion updates authoritative totals", () => {
         true,
     ), true);
     assert.equal(state.activity.goals.length, 140);
+    assert.equal(state.activity.stale, true);
+    assert.equal(state.activity.errors.length, 1);
 });
