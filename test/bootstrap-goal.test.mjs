@@ -1094,6 +1094,67 @@ test("does not fall back to older activation metadata when the latest artifact i
         item.url.endsWith("issuecomment-activated-latest")));
 });
 
+test("does not fall back when the latest activation envelope is malformed or unsupported", () => {
+    const validBinding = {
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    };
+    const invalidLatestComments = [
+        artifactComment("activated", {
+            schemaVersion: "2",
+            bindings: [validBinding],
+            createdAt: "2026-09-21T12:00:00Z",
+            url: "https://github.com/octodemo/demo/issues/6#issuecomment-unsupported",
+        }),
+        {
+            body: `Activation bindings:
+\`\`\`json
+${JSON.stringify([validBinding])}
+\`\`\`
+Structured data:
+\`\`\`json
+{"squad_artifact":"activated","schema_version":"1","origin_issue":6,"phases":[]
+\`\`\``,
+            createdAt: "2026-09-21T12:00:00Z",
+            url: "https://github.com/octodemo/demo/issues/6#issuecomment-malformed",
+        },
+    ];
+
+    for (const invalidLatest of invalidLatestComments) {
+        const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+            artifactComment("research", {
+                createdAt: "2026-09-21T10:15:00Z",
+                url: researchComment().url,
+            }),
+            artifactComment("activated", {
+                bindings: [validBinding],
+                createdAt: "2026-09-21T11:00:00Z",
+                url: "https://github.com/octodemo/demo/issues/6#issuecomment-activated-old",
+            }),
+            invalidLatest,
+        ]);
+        const snapshot = snapshotWithBootstrap({
+            issues: [
+                root,
+                goalIssue(20, "Epic", ["squad", "squad:dev"]),
+                goalIssue(21, "Task", ["squad", "squad:dev"]),
+            ],
+        });
+        const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+
+        assert.deepEqual(goal.bootstrap.generatedGoals, []);
+        assert.ok(goal.evidence.some((item) =>
+            item.kind === "bootstrap-diagnostic" &&
+            item.url === invalidLatest.url));
+    }
+});
+
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
         artifactComment("research"),

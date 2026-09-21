@@ -276,8 +276,11 @@ function parseArtifacts(comments, issueNumber) {
                 value = JSON.parse(block[1]);
             } catch {
                 if (!/squad_artifact/i.test(block[1]) && !/Structured data:/i.test(body)) continue;
+                const activationKind = block[1].match(
+                    /"squad_artifact"\s*:\s*"(activated|phases-activated|plan-accepted|phases-accepted)/i,
+                )?.[1]?.toLowerCase();
                 commentArtifacts.push({
-                    kind: "unknown",
+                    kind: activationKind || "unknown",
                     schemaVersion: "unknown",
                     originIssue: null,
                     phases: [],
@@ -1159,8 +1162,9 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
             rootGoal.workflowRuns,
             rootGoal.artifacts,
         );
-        const activationArtifacts = advancingArtifacts(rootGoal.artifacts)
-            .filter((artifact) => ACTIVATION_ARTIFACT_KINDS.has(artifact.kind));
+        const activationArtifacts = rootGoal.artifacts.filter((artifact) =>
+            artifact.advancing !== false &&
+            ACTIVATION_ARTIFACT_KINDS.has(artifact.kind));
         const activationArtifact = activationArtifacts.at(-1);
         let generated = { valid: false, goals: [], reason: "" };
         if (activationArtifact) {
