@@ -1,3 +1,42 @@
+export function boundedItems(items, limit) {
+    const values = Array.isArray(items) ? items : [];
+    const size = Number.isInteger(limit) && limit > 0 ? limit : values.length;
+    return {
+        items: values.slice(0, size),
+        total: values.length,
+        hidden: Math.max(0, values.length - size),
+    };
+}
+
+export function describeActivityDelta(previous, next) {
+    if (!previous?.goals || !next?.goals) return "";
+    if (!previous.errors?.length && next.errors?.length) {
+        return "GitHub activity refresh reported an error. Previously loaded data remains visible.";
+    }
+    const before = new Map(previous.goals.map((goal) => [goal.id, goal]));
+    const previousRepositories = new Map((previous.repositories || [])
+        .map((repository) => [repository.nameWithOwner, repository]));
+    const newlyIncluded = new Set((next.repositories || [])
+        .filter((repository) =>
+            repository.included && previousRepositories.get(repository.nameWithOwner)?.included === false)
+        .map((repository) => repository.nameWithOwner));
+    const added = next.goals.filter((goal) =>
+        !before.has(goal.id) && !newlyIncluded.has(goal.repository?.nameWithOwner));
+    if (added.length) {
+        return `${added.length} new goal${added.length === 1 ? "" : "s"} discovered.`;
+    }
+    const moved = next.goals.filter((goal) => {
+        const prior = before.get(goal.id);
+        return prior && prior.phase !== goal.phase;
+    });
+    if (!moved.length) return "";
+    if (moved.length === 1) {
+        const goal = moved[0];
+        return `Goal #${goal.issue?.number || ""} moved to ${goal.phase}.`;
+    }
+    return `${moved.length} goals changed lifecycle stage.`;
+}
+
 export function renderHtml() {
     return `<!doctype html>
 <html lang="en">
@@ -613,6 +652,7 @@ export function renderHtml() {
       font-weight: var(--font-weight-semibold, 600);
     }
     .filter-summary { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 400; }
+    .filter-summary { min-width: 0; overflow-wrap: anywhere; text-align: right; }
     .filter-disclosure .scope-controls { margin: 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; }
     .filter-disclosure .filters { margin: 0; padding: 0 14px 14px; background: var(--soft); }
     .scope-controls label { color: var(--muted); font-size: 11px; }
@@ -677,9 +717,9 @@ export function renderHtml() {
     }
     .pipeline {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(132px, 1fr));
       width: 100%;
-      min-width: 0;
+      min-width: 760px;
       gap: 18px;
       padding: 18px 16px 22px;
     }
@@ -799,6 +839,7 @@ export function renderHtml() {
     .stage-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
     .stage-detail-heading h3 { text-transform: capitalize; }
     .stage-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 9px; margin-top: 12px; }
+    .collection-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; }
     .runs-panel {
       overflow: hidden;
       margin-top: 14px;
@@ -1028,6 +1069,8 @@ export function renderHtml() {
       border-bottom: 1px solid var(--border);
       background: var(--soft);
     }
+    .drawer-header > div { min-width: 0; }
+    .drawer-header h2, .drawer-header p { overflow-wrap: anywhere; }
     .drawer-header p { margin: 5px 0 0; color: var(--muted); }
     .drawer-close { width: 44px; height: 44px; flex: 0 0 auto; padding: 0; }
     .drawer-body { overflow: auto; padding: 18px; }
@@ -1039,6 +1082,7 @@ export function renderHtml() {
     .drawer-fact small { color: var(--muted); }
     .drawer-list { display: grid; gap: 8px; margin-top: 10px; }
     .drawer-item { padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+    .drawer-item, .drawer-item a, .drawer-fact strong { min-width: 0; overflow-wrap: anywhere; }
     .drawer-item a { color: var(--focus); font-weight: var(--font-weight-semibold, 600); }
     .drawer-item small { display: block; margin-top: 3px; color: var(--muted); }
     .sr-only {
@@ -1146,6 +1190,8 @@ export function renderHtml() {
     const app = document.getElementById("app");
     const repoHeader = document.getElementById("repo-header");
     const liveStatus = document.getElementById("live-status");
+    const boundedItems = ${boundedItems.toString()};
+    const describeActivityDelta = ${describeActivityDelta.toString()};
 
     function esc(value) {
       return String(value ?? "")
@@ -1157,10 +1203,94 @@ export function renderHtml() {
     }
 
     function announce(message) {
+      if (!message) return;
       liveStatus.textContent = "";
       requestAnimationFrame(() => {
         liveStatus.textContent = message;
       });
+    }
+
+    function elementStateKey(element) {
+      if (!element) return "";
+      if (element.dataset?.stateKey) return \`state:\${element.dataset.stateKey}\`;
+      const keyedDisclosure = element.matches?.("summary")
+        ? element.closest("details[data-state-key]")
+        : null;
+      if (keyedDisclosure) return \`state:\${keyedDisclosure.dataset.stateKey}:summary\`;
+      if (element.id) return \`id:\${element.id}\`;
+      if (element.dataset?.action) {
+        return [
+          "action",
+          element.dataset.action,
+          element.dataset.id,
+          element.dataset.goalId,
+          element.dataset.phase,
+          element.dataset.repository,
+          element.dataset.taskId,
+        ].filter(Boolean).join(":");
+      }
+      if (element.matches?.("a[href]")) {
+        const surface = element.closest(".goal-drawer, .runs-panel, .activity-panel, .stage-detail, .secondary, .filter-disclosure");
+        const surfaceKey = surface?.classList.contains("goal-drawer") ? "drawer"
+          : surface?.getAttribute("aria-labelledby")
+            || surface?.dataset?.stateKey
+            || surface?.className
+            || "page";
+        return \`href:\${surfaceKey}:\${element.getAttribute("href")}\`;
+      }
+      const focusable = [...document.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')];
+      const index = focusable.indexOf(element);
+      return index >= 0 ? \`focusable:\${index}\` : "";
+    }
+
+    function findStateElement(key) {
+      if (!key) return null;
+      return [...document.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+        .find(element => elementStateKey(element) === key) || null;
+    }
+
+    function captureUiState() {
+      const active = document.activeElement;
+      const selection = active && typeof active.selectionStart === "number"
+        ? { start: active.selectionStart, end: active.selectionEnd }
+        : null;
+      return {
+        focusKey: elementStateKey(active),
+        selection,
+        windowX: window.scrollX,
+        windowY: window.scrollY,
+        scroll: Object.fromEntries([...document.querySelectorAll("[data-scroll-key]")].map(element => [
+          element.dataset.scrollKey,
+          { left: element.scrollLeft, top: element.scrollTop }
+        ])),
+        disclosures: Object.fromEntries([...document.querySelectorAll("details[data-state-key]")].map(element => [
+          element.dataset.stateKey,
+          element.open
+        ])),
+      };
+    }
+
+    function restoreUiState(snapshot, focusSelector = "") {
+      if (!snapshot) return;
+      for (const detail of document.querySelectorAll("details[data-state-key]")) {
+        if (Object.hasOwn(snapshot.disclosures, detail.dataset.stateKey)) {
+          detail.open = snapshot.disclosures[detail.dataset.stateKey];
+        }
+      }
+      for (const element of document.querySelectorAll("[data-scroll-key]")) {
+        const position = snapshot.scroll[element.dataset.scrollKey];
+        if (!position) continue;
+        element.scrollLeft = position.left;
+        element.scrollTop = position.top;
+      }
+      window.scrollTo(snapshot.windowX, snapshot.windowY);
+      const target = focusSelector
+        ? document.querySelector(focusSelector)
+        : findStateElement(snapshot.focusKey);
+      target?.focus({ preventScroll: true });
+      if (target && snapshot.selection && typeof target.setSelectionRange === "function") {
+        target.setSelectionRange(snapshot.selection.start, snapshot.selection.end);
+      }
     }
 
     function initials(name) {
@@ -1633,6 +1763,10 @@ export function renderHtml() {
       return (state.activity?.goals || []).find(goal => goal.id === id);
     }
 
+    function goalIsVisible(goal) {
+      return Boolean(goal && goalMatchesFilter(goal) && goalMatchesScope(goal));
+    }
+
     function goalTriggerHtml(goal, compact = false) {
       const current = String(goal.repository?.nameWithOwner || "").toLowerCase() ===
         String(state.activity?.currentRepository || "").toLowerCase();
@@ -1650,16 +1784,6 @@ export function renderHtml() {
         return [goal.owner?.id || name, name];
       })).values()];
       const visibleOwners = owners.slice(0, 2);
-      const today = new Date().toDateString();
-      const runsToday = new Set(goals.flatMap(goal =>
-        (goal.workflowRuns || [])
-          .filter(run => {
-            const value = run.createdAt || run.updatedAt;
-            const date = value ? new Date(value) : null;
-            return date && !Number.isNaN(date.valueOf()) && date.toDateString() === today;
-          })
-          .map(run => run.id || run.url || \`\${run.workflow}:\${run.branch}:\${run.createdAt || run.updatedAt}\`)
-      )).size;
       return \`
         <section class="stage-card \${esc(phase)} \${selected ? "selected" : ""}">
           <button class="stage-button" data-action="expand-stage" data-phase="\${phase}" type="button"
@@ -1667,7 +1791,7 @@ export function renderHtml() {
             <span class="stage-heading">
               <strong>\${esc(phase)}</strong>
             </span>
-            <span class="stage-load"><b>\${goals.length}</b><span>active</span></span>
+            <span class="stage-load"><b>\${goals.length}</b><span>\${goals.length === 1 ? "goal" : "goals"}</span></span>
             <span class="stage-agents" aria-label="\${owners.length ? "Agents: " + esc(owners.join(", ")) : "No assigned agents"}">
               \${visibleOwners.map((owner, index) => \`
                 <span class="agent-chip tone-\${index % 4}" title="\${esc(owner)}" aria-hidden="true">\${esc(initials(owner))}</span>
@@ -1676,7 +1800,7 @@ export function renderHtml() {
                 <span class="agent-more" aria-hidden="true">+\${owners.length - visibleOwners.length}</span>
               \` : ""}
             </span>
-            <span class="stage-foot"><strong>\${runsToday}</strong> \${runsToday === 1 ? "run" : "runs"} today</span>
+            <span class="stage-foot"><strong>\${owners.length}</strong> \${owners.length === 1 ? "owner" : "owners"} observed</span>
           </button>
         </section>\`;
     }
@@ -1684,6 +1808,7 @@ export function renderHtml() {
     function stageDetailHtml(goals) {
       if (!expandedStage) return "";
       const stageGoals = goals.filter(goal => goal.phase === expandedStage);
+      const visible = boundedItems(stageGoals, 80);
       return \`
         <section class="stage-detail" id="stage-detail" aria-labelledby="stage-detail-title">
           <div class="stage-detail-heading">
@@ -1694,8 +1819,9 @@ export function renderHtml() {
             <button class="button" data-action="close-stage" type="button">Close</button>
           </div>
           <div class="stage-goals">
-            \${stageGoals.length ? stageGoals.map(goal => goalTriggerHtml(goal)).join("") : '<p class="help">No visible goals are in this stage.</p>'}
+            \${visible.items.length ? visible.items.map(goal => goalTriggerHtml(goal)).join("") : '<p class="help">No visible goals are in this stage.</p>'}
           </div>
+          \${visible.hidden ? \`<p class="collection-note">Showing the first \${visible.items.length} of \${visible.total} matching goals. Narrow the goal filters to inspect the remainder.</p>\` : ""}
         </section>\`;
     }
 
@@ -1711,14 +1837,15 @@ export function renderHtml() {
         String(right.run.updatedAt || right.run.createdAt || "").localeCompare(
           String(left.run.updatedAt || left.run.createdAt || "")
         ));
+      const visible = boundedItems(runs, 12);
       return \`
         <section class="runs-panel" aria-labelledby="runs-title">
           <div class="panel-header">
             <div><h2 id="runs-title">\${runs.length} workflow run\${runs.length === 1 ? "" : "s"} in progress</h2></div>
           </div>
-          \${runs.length ? \`
+          \${visible.items.length ? \`
             <ol class="run-list">
-              \${runs.map(({ run, goal }) => \`
+              \${visible.items.map(({ run, goal }) => \`
                 <li>
                   <a class="run-row" href="\${esc(run.url || goal.issue.url)}" target="_blank" rel="noreferrer">
                     <span class="run-indicator" aria-hidden="true"></span>
@@ -1739,6 +1866,7 @@ export function renderHtml() {
                 </li>\`).join("")}
             </ol>\`
             : '<p class="help" style="padding:16px">No workflow runs are currently in progress for the visible goals.</p>'}
+          \${visible.hidden ? \`<p class="collection-note" style="padding:0 14px 14px">Showing the newest \${visible.items.length} of \${visible.total} active workflow runs. Narrow the goal filters to inspect the remainder.</p>\` : ""}
         </section>\`;
     }
 
@@ -1766,12 +1894,12 @@ export function renderHtml() {
     }
 
     function recentActivityHtml(goals) {
-      const activity = goals.flatMap(goal =>
+      const collected = boundedItems(goals.flatMap(goal =>
         (goal.evidence || []).map(item => ({ ...item, goal })))
-        .sort((left, right) => String(right.timestamp || "").localeCompare(String(left.timestamp || "")))
-        .slice(0, 18);
-      const visibleActivity = activity.slice(0, 8);
-      const olderActivity = activity.slice(8);
+        .sort((left, right) => String(right.timestamp || "").localeCompare(String(left.timestamp || ""))), 100);
+      const activity = collected.items;
+      const visibleActivity = activity.slice(0, 12);
+      const olderActivity = activity.slice(12);
       const itemsHtml = items => items.map(item => \`
         <li class="activity-item">
           \${activityMarkerHtml(item)}
@@ -1784,17 +1912,18 @@ export function renderHtml() {
         <aside class="activity-panel" aria-labelledby="activity-title">
           <div class="panel-header">
             <div><h2 id="activity-title">Activity</h2><p>Newest evidence first.</p></div>
-            <span class="evidence-count">\${activity.length}</span>
+            <span class="evidence-count">\${collected.total}</span>
           </div>
           \${activity.length ? \`
             <ol class="activity-stream">
               \${itemsHtml(visibleActivity)}
             </ol>
             \${olderActivity.length ? \`
-              <details class="activity-more">
+              <details class="activity-more" data-state-key="activity-more">
                 <summary>Show \${olderActivity.length} older events</summary>
                 <ol class="activity-stream">\${itemsHtml(olderActivity)}</ol>
               </details>\` : ""}
+            \${collected.hidden ? \`<p class="collection-note" style="padding:0 14px 14px">Showing the newest \${activity.length} of \${collected.total} evidence events. Narrow the goal filters to inspect older evidence.</p>\` : ""}
             \` : '<p class="help" style="padding:14px">No correlated evidence is available for the current filters.</p>'}
         </aside>\`;
     }
@@ -1845,7 +1974,7 @@ export function renderHtml() {
             </div>
             <button class="button drawer-close" data-action="close-goal" type="button" aria-label="Close goal details">×</button>
           </div>
-          <div class="drawer-body">
+          <div class="drawer-body" data-scroll-key="goal-drawer">
             <section class="drawer-section">
               <h3>Goal</h3>
               <div class="drawer-facts">
@@ -1901,7 +2030,7 @@ export function renderHtml() {
     function squadContextHtml() {
       const installed = Boolean(state.squad?.installed);
       return \`
-        <details class="secondary">
+        <details class="secondary" data-state-key="squad-context">
           <summary>Squad configuration · \${installed ? "Installed" : "Not detected"}</summary>
           <div class="secondary-content">
             \${installed
@@ -1927,7 +2056,7 @@ export function renderHtml() {
       ].filter(Boolean);
       const filters = ["active", "queued", "researching", "implementing", "reviewing", "blocked", "failed", "completed", "all"];
       return \`
-        <details class="filter-disclosure" \${filtersOpen ? "open" : ""}>
+        <details class="filter-disclosure" data-state-key="goal-filters" \${filtersOpen ? "open" : ""}>
           <summary>Browse goals <span class="filter-summary">\${esc(activeFilters.length ? activeFilters.join(" · ") : "All visible goals")}</span></summary>
           <section class="scope-controls" aria-label="Repository and goal filters">
             <label><span>Owner or organization</span>
@@ -1962,11 +2091,11 @@ export function renderHtml() {
     function repositoryManagerHtml() {
       const repositories = state.activity?.repositories || [];
       return \`
-        <details class="secondary" open>
+        <details class="secondary" data-state-key="repository-manager" open>
           <summary>Manage discovered Squad repositories</summary>
           <div class="secondary-content">
             <p>Excluded repositories remain visible here but are not refreshed or included in totals.</p>
-            <div class="manage-list">
+            <div class="manage-list" data-scroll-key="repository-manager">
               \${repositories.map(repository => \`
                 <label class="manage-repository">
                   <input data-action="repository-included" data-repository="\${esc(repository.nameWithOwner)}" type="checkbox" \${repository.included ? "checked" : ""}>
@@ -1984,12 +2113,17 @@ export function renderHtml() {
       const goals = (activity.goals || []).filter(goalMatchesFilter).filter(goalMatchesScope);
       const lifecycle = ["queued", "researching", "implementing", "reviewing", "completed"];
       const repositories = (activity.repositories || []).filter(repository => repository.included).length;
+      const successfulRefreshes = (activity.repositories || [])
+        .filter(repository => repository.included && repository.lastSuccessfulRefresh)
+        .map(repository => repository.lastSuccessfulRefresh)
+        .sort();
+      const oldestSuccessfulRefresh = successfulRefreshes[0] || "";
       const inProgress = (summary.queued || 0) + (summary.researching || 0) + (summary.implementing || 0);
       const needsAttention = (summary.blocked || 0) + (summary.failed || 0);
       return \`
         <section>
           <div class="metrics">
-            \${metricHtml(activity.goals?.length || 0, "Goals in view", {
+            \${metricHtml(activity.goals?.length || 0, "Goals tracked", {
               detail: \`\${summary.active || 0} active · \${summary.completed || 0} completed\`
             })}
             \${metricHtml(inProgress, "In progress", {
@@ -2007,8 +2141,9 @@ export function renderHtml() {
               detail: \`\${repositories} repos · synced \${formatTime(activity.fetchedAt)}\`
             })}
           </div>
-          \${activity.errors?.length ? \`
-            <div class="sync-warning" role="alert"><strong>Some GitHub data could not be refreshed.</strong>
+          \${activity.errors?.length || activity.stale ? \`
+            <div class="sync-warning" role="alert"><strong>\${activity.stale ? "Data may be stale." : "Some GitHub data could not be refreshed."}</strong>
+              <p>\${oldestSuccessfulRefresh ? \`Oldest included repository snapshot: \${esc(formatTime(oldestSuccessfulRefresh))}. \` : ""}Previously loaded data remains visible.</p>
               \${activity.errors.map(error => '<p>' + esc(error.source) + ": " + esc(error.message) + "</p>").join("")}
             </div>\` : ""}
           \${repositoryControlsHtml()}
@@ -2023,7 +2158,7 @@ export function renderHtml() {
                     <span><i class="legend-dot completed" aria-hidden="true"></i> completed</span>
                   </div>
                 </div>
-                <div class="pipeline-scroll" role="region" aria-label="Factory floor stages" tabindex="0">
+                <div class="pipeline-scroll" data-scroll-key="pipeline" role="region" aria-label="Factory floor stages" tabindex="0">
                   <div class="pipeline">
                     \${lifecycle.map(phase => stageHtml(phase, goals.filter(goal => goal.phase === phase))).join("")}
                   </div>
@@ -2046,7 +2181,8 @@ export function renderHtml() {
     }
 
     function render(focusSelector = "") {
-      const drawerWasFocused = Boolean(document.activeElement?.closest?.(".goal-drawer"));
+      const uiSnapshot = captureUiState();
+      let fallbackFocusSelector = "";
       updateHeader();
       if (!state) {
         app.innerHTML = '<div class="operation"><span class="spinner"></span><div>Loading Squad activity…</div></div>';
@@ -2061,19 +2197,27 @@ export function renderHtml() {
         return;
       }
       if (!selectedMemberId && state.members.length) selectedMemberId = state.members[0].id;
+      if (selectedGoalId && !goalIsVisible(goalById(selectedGoalId))) {
+        focusSelector = focusSelector || drawerReturnSelector;
+        fallbackFocusSelector = ".pipeline-scroll";
+        selectedGoalId = "";
+        drawerReturnSelector = "";
+      }
       app.innerHTML = activeHtml();
       document.body.style.overflow = selectedGoalId ? "hidden" : "";
-      if (focusSelector) {
-        document.querySelector(focusSelector)?.focus({ preventScroll: true });
-      } else if (selectedGoalId && drawerWasFocused) {
-        document.querySelector(".drawer-close")?.focus({ preventScroll: true });
+      if (focusSelector && !document.querySelector(focusSelector)) {
+        focusSelector = fallbackFocusSelector;
       }
+      restoreUiState(uiSnapshot, focusSelector);
     }
 
     async function refresh() {
       const response = await fetch("/api/state", { cache: "no-store" });
-      state = await response.json();
+      const nextState = await response.json();
+      const message = describeActivityDelta(state?.activity, nextState?.activity);
+      state = nextState;
       render();
+      announce(message);
     }
 
     document.addEventListener("click", async event => {
@@ -2266,8 +2410,11 @@ export function renderHtml() {
 
     const events = new EventSource("/events");
     events.addEventListener("state", event => {
-      state = JSON.parse(event.data);
+      const nextState = JSON.parse(event.data);
+      const message = describeActivityDelta(state?.activity, nextState?.activity);
+      state = nextState;
       render();
+      announce(message);
     });
     events.onerror = () => {
       if (state) {

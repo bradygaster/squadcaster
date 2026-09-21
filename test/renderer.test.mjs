@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderHtml } from "../renderer.mjs";
+import {
+    boundedItems,
+    describeActivityDelta,
+    renderHtml,
+} from "../renderer.mjs";
 
 test("renders the read-only mission control prototype surfaces", () => {
     const html = renderHtml();
@@ -26,4 +30,79 @@ test("includes accessible drawer, stage, and reduced-motion behavior", () => {
     assert.match(html, /prefers-color-scheme: dark/);
     assert.match(html, /color-scheme: light dark/);
     assert.match(html, /Canvas connection interrupted/);
+});
+
+test("bounds dense collections without changing the authoritative total", () => {
+    const result = boundedItems(["a", "b", "c", "d"], 2);
+
+    assert.deepEqual(result, {
+        items: ["a", "b"],
+        total: 4,
+        hidden: 2,
+    });
+});
+
+test("announces only meaningful activity changes", () => {
+    const baseline = {
+        goals: [{
+            id: "octo/repo#1",
+            phase: "queued",
+            issue: { number: 1 },
+            repository: { nameWithOwner: "octo/repo" },
+        }],
+        errors: [],
+        repositories: [{
+            nameWithOwner: "octo/repo",
+            included: true,
+        }],
+    };
+
+    assert.equal(describeActivityDelta(baseline, structuredClone(baseline)), "");
+    assert.equal(describeActivityDelta(baseline, {
+        ...baseline,
+        goals: [{ ...baseline.goals[0], phase: "reviewing" }],
+    }), "Goal #1 moved to reviewing.");
+    assert.equal(describeActivityDelta(baseline, {
+        goals: [...baseline.goals, {
+            id: "octo/repo#2",
+            phase: "queued",
+            issue: { number: 2 },
+        }],
+        errors: [],
+    }), "1 new goal discovered.");
+    assert.equal(describeActivityDelta(baseline, {
+        ...baseline,
+        errors: [{ source: "GitHub", message: "rate limited" }],
+    }), "GitHub activity refresh reported an error. Previously loaded data remains visible.");
+    assert.equal(describeActivityDelta({
+        ...baseline,
+        goals: [],
+        repositories: [{
+            nameWithOwner: "octo/repo",
+            included: false,
+        }],
+    }, baseline), "");
+    assert.equal(describeActivityDelta({
+        ...baseline,
+        goals: [],
+        repositories: [],
+    }, baseline), "1 new goal discovered.");
+});
+
+test("renders stable restoration keys and production-scale containment", () => {
+    const html = renderHtml();
+
+    assert.match(html, /data-scroll-key="pipeline"/);
+    assert.match(html, /data-scroll-key="goal-drawer"/);
+    assert.match(html, /data-state-key="goal-filters"/);
+    assert.match(html, /data-state-key="activity-more"/);
+    assert.match(html, /min-width: 760px/);
+    assert.match(html, /Showing the newest/);
+    assert.match(html, /active workflow runs/);
+    assert.doesNotMatch(html, /runs today/);
+    assert.match(html, /Data may be stale/);
+    assert.match(html, /Oldest included repository snapshot/);
+    assert.doesNotMatch(html, /Last successful snapshot/);
+    assert.match(html, /goal-drawer, \.runs-panel/);
+    assert.match(html, /keyedDisclosure/);
 });
