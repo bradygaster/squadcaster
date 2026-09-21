@@ -245,10 +245,13 @@ function dependencyReferences(body, currentRepository) {
 }
 
 function activationBindings(body) {
-    const match = /Activation bindings:\s*```json\s*([\s\S]*?)```/i.exec(String(body || ""));
-    if (!match) return { bindings: null, error: "missing-activation-bindings" };
+    const matches = [...String(body || "").matchAll(
+        /Activation bindings:\s*```json\s*([\s\S]*?)```/gi,
+    )];
+    if (matches.length === 0) return { bindings: null, error: "missing-activation-bindings" };
+    if (matches.length > 1) return { bindings: null, error: "duplicate-activation-bindings" };
     try {
-        const bindings = JSON.parse(match[1]);
+        const bindings = JSON.parse(matches[0][1]);
         return Array.isArray(bindings) && bindings.length > 0
             ? { bindings, error: "" }
             : { bindings, error: "empty-activation-bindings" };
@@ -1027,6 +1030,19 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         const commentsAreAuthoritative = commentsSource?.status === "fresh" &&
             commentsSource.exhaustive === true &&
             commentsSource.truncated === false;
+        if (commentsSource) {
+            const classifiedResearch = bootstrap.researchArtifact;
+            rootGoal.artifacts = rootGoal.artifacts.map((artifact) => ({
+                ...artifact,
+                advancing: commentsAreAuthoritative || Boolean(
+                    classifiedResearch &&
+                    artifact.kind === BOOTSTRAP_IDENTIFIERS.researchArtifactKind &&
+                    artifact.schemaVersion === classifiedResearch.schemaVersion &&
+                    artifact.originIssue === researchIssueNumber &&
+                    artifact.createdAt === classifiedResearch.createdAt
+                ),
+            }));
+        }
         const discoveredArtifacts = parseArtifacts(
             commentsSource?.data,
             researchIssueNumber,
@@ -1426,7 +1442,11 @@ export function aggregateActivitySnapshots({
                     ? {
                         bootstrap: {
                             ...goal.bootstrap,
-                            generatedGoals: (goal.bootstrap.generatedGoals || [])
+                            generatedGoals: (
+                                Array.isArray(goal.bootstrap.generatedGoals)
+                                    ? goal.bootstrap.generatedGoals
+                                    : []
+                            )
                                 .map((generatedGoal) => ({ ...generatedGoal })),
                         },
                     }

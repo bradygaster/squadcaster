@@ -207,6 +207,12 @@ function normalizeGoal(goal) {
                 lastObservedAt: null,
                 transitions: [],
             },
+        bootstrap: isRecord(goal.bootstrap)
+            ? {
+                ...goal.bootstrap,
+                generatedGoals: recordArray(goal.bootstrap.generatedGoals),
+            }
+            : undefined,
         handoff: normalizeHandoff(goal.handoff),
     };
 }

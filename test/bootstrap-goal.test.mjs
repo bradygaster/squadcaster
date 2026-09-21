@@ -413,6 +413,82 @@ test("keeps partial activation metadata visible without linking generated goals"
     );
 });
 
+test("stale embedded activation metadata cannot bypass canonical comment freshness", () => {
+    const bindings = [{
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    }];
+    const activated = artifactComment("activated", {
+        bindings,
+        createdAt: "2026-09-21T11:00:00Z",
+    });
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        activated,
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic 1.1", ["squad", "squad:dev"]),
+            goalIssue(21, "Implement the feature", ["squad", "squad:dev"]),
+        ],
+        bootstrapComments: [activated],
+        bootstrapCommentsState: {
+            status: "stale",
+        },
+    });
+    const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+
+    assert.equal(
+        goal.artifacts.find((artifact) => artifact.kind === "activated").advancing,
+        false,
+    );
+    assert.equal(goal.phase, "researching");
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+});
+
+test("duplicate activation binding blocks fail closed", () => {
+    const binding = {
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    };
+    const duplicateBindings = artifactComment("activated", {
+        bindings: [binding],
+        createdAt: "2026-09-21T11:00:00Z",
+    });
+    duplicateBindings.body = `Activation bindings:\n\`\`\`json\n${JSON.stringify([binding])}\n\`\`\`\n` +
+        duplicateBindings.body;
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        duplicateBindings,
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic 1.1", ["squad", "squad:dev"]),
+            goalIssue(21, "Implement the feature", ["squad", "squad:dev"]),
+        ],
+    });
+    const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+    const activated = goal.artifacts.find((artifact) => artifact.kind === "activated");
+
+    assert.equal(activated.validation, "malformed");
+    assert.equal(activated.validationReason, "duplicate-activation-bindings");
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+});
+
 test("links generated implementation goals only from validated activation bindings", () => {
     const bindings = [{
         task: "1",
@@ -642,6 +718,19 @@ test("aggregates bootstrap summaries across repositories including stale, unknow
     assert.equal(aggregate.summary.bootstrap.unknown, 1);
     assert.equal(aggregate.summary.bootstrap.total, 2);
     assert.equal(aggregate.summary.bootstrap.stale, 1);
+});
+
+test("aggregate snapshots discard malformed persisted generated goals", () => {
+    const snapshot = snapshotWithBootstrap({
+        issues: [goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+            artifactComment("research"),
+        ])],
+    });
+    snapshot.goals[0].bootstrap.generatedGoals = "corrupt";
+
+    const aggregate = aggregateActivitySnapshots({ snapshots: [snapshot] });
+
+    assert.deepEqual(aggregate.goals[0].bootstrap.generatedGoals, []);
 });
 
 test("recomputes generated-goal journey after cross-repository dependency resolution", () => {

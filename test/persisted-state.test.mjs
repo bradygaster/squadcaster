@@ -395,3 +395,29 @@ test("adds bootstrap defaults to older schema-v2 activity", () => {
     assert.equal(normalized.activity.summary.bootstrap.unknown, 0);
     assert.deepEqual(normalized.activity.bootstraps, []);
 });
+
+test("normalizes malformed persisted generated goals to an empty collection", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            dayBoundary: {
+                schemaVersion: 1,
+                snapshotDay: "2026-09-21",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+            },
+            summary: {},
+            goals: [{
+                id: "octodemo/demo#6",
+                repository: { nameWithOwner: "octodemo/demo" },
+                issue: { number: 6 },
+                bootstrap: {
+                    status: "complete",
+                    generatedGoals: "corrupt",
+                },
+            }],
+        },
+    });
+
+    assert.deepEqual(normalized.activity.goals[0].bootstrap.generatedGoals, []);
+});
