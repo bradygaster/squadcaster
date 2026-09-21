@@ -1491,27 +1491,50 @@ export function renderHtml() {
     function bootstrapLinks(bootstrap) {
       const attempts = bootstrap?.workflowAttempts || bootstrap?.workflowRuns || [];
       const candidates = bootstrap?.candidates || bootstrap?.candidateLinks || [];
+      const reasons = bootstrap?.reasons || [];
       const links = [
         bootstrap?.castPullRequest && {
           title: \`Cast PR #\${bootstrap.castPullRequest.number || ""}\`.trim(),
           url: bootstrap.castPullRequest.url,
+          confidence: "observed",
         },
         bootstrap?.researchIssue && {
           title: \`Research issue #\${bootstrap.researchIssue.number || ""}\`.trim(),
           url: bootstrap.researchIssue.url,
+          confidence: "observed",
+        },
+        bootstrap?.researchArtifact && {
+          title: "Canonical research artifact",
+          url: bootstrap.researchArtifact.url,
+          timestamp: bootstrap.researchArtifact.createdAt,
+          confidence: "observed",
         },
         ...attempts.map((attempt, index) => ({
           title: \`\${attempt.workflow || attempt.name || "Bootstrap workflow"} · \${attempt.conclusion || attempt.status || "unknown"}\`,
           url: attempt.url,
           timestamp: attempt.updatedAt || attempt.createdAt,
           index,
+          confidence: "observed",
         })),
         ...candidates.map(candidate => ({
           title: candidate.title || candidate.kind || "Bootstrap candidate",
           url: candidate.url,
+          confidence: "observed",
+        })),
+        ...reasons.map(reason => ({
+          title: typeof reason === "string"
+            ? reason
+            : reason.message || reason.code || "Bootstrap diagnostic",
+          url: typeof reason === "string" ? "" : reason.url,
+          confidence: "derived",
         })),
       ];
       return links.filter(link => link?.url);
+    }
+
+    function bootstrapReasonText(reason) {
+      if (typeof reason === "string") return reason;
+      return reason?.message || reason?.code || "";
     }
 
     function repositoryBootstrapEntries() {
@@ -1541,7 +1564,9 @@ export function renderHtml() {
           ? activityBootstrap.repositories
           : [];
       for (const entry of aggregateEntries) {
-        const repository = entry.repository || entry;
+        const repository = typeof entry.repository === "string"
+          ? { nameWithOwner: entry.repository }
+          : entry.repository || entry;
         const bootstrap = entry.bootstrap || entry;
         const key = String(repository?.nameWithOwner || entry.nameWithOwner || "").toLowerCase();
         if (!key || entries.has(key)) continue;
@@ -1578,9 +1603,9 @@ export function renderHtml() {
             \${bootstrapBadgeHtml(bootstrap)}
           </div>
           <p>\${esc(bootstrapStatusCopy(bootstrap))}</p>
-          \${bootstrap.reasons?.length ? \`<p><strong>Derived reasons:</strong> \${esc(bootstrap.reasons.join("; "))}</p>\` : ""}
+          \${bootstrap.reasons?.length ? \`<p><strong>Derived reasons:</strong> \${esc(bootstrap.reasons.map(bootstrapReasonText).filter(Boolean).join("; "))}</p>\` : ""}
           \${links.length ? \`<div class="bootstrap-summary-links">\${links.map(link =>
-            \`<a href="\${esc(link.url)}" target="_blank" rel="noreferrer">\${esc(link.title)} ↗</a>\`
+            \`<a href="\${esc(link.url)}" target="_blank" rel="noreferrer">\${esc(link.title)} ↗ <span class="evidence-label">\${esc(link.confidence || "observed")}</span></a>\`
           ).join("")}</div>\` : ""}
           \${goal ? \`<div class="bootstrap-summary-links"><button class="button" data-action="open-goal" data-goal-id="\${esc(goal.id)}" type="button">Open canonical research goal</button></div>\` : ""}
         </article>\`;
@@ -1616,11 +1641,11 @@ export function renderHtml() {
             <div class="drawer-fact"><small>Classification</small><strong>Derived from GitHub evidence</strong></div>
             <div class="drawer-fact"><small>Journey</small><strong>\${esc(bootstrapStatusLabel(bootstrap.journeyPhase || "unknown"))}</strong></div>
           </div>
-          \${bootstrap.reasons?.length ? \`<p><strong>Derived reasons:</strong> \${esc(bootstrap.reasons.join("; "))}</p>\` : ""}
+          \${bootstrap.reasons?.length ? \`<p><strong>Derived reasons:</strong> \${esc(bootstrap.reasons.map(bootstrapReasonText).filter(Boolean).join("; "))}</p>\` : ""}
           \${links.length ? \`<div class="drawer-list">\${links.map(link => \`
             <div class="drawer-item">
               <a href="\${esc(link.url)}" target="_blank" rel="noreferrer">\${esc(link.title)}</a>
-              <small>Observed GitHub evidence\${link.timestamp ? " · " + esc(formatTime(link.timestamp)) : ""}</small>
+              <small>\${link.confidence === "derived" ? "Derived diagnostic" : "Observed GitHub evidence"}\${link.timestamp ? " · " + esc(formatTime(link.timestamp)) : ""}</small>
             </div>\`).join("")}</div>\` : '<p class="help">No direct GitHub evidence link is currently available.</p>'}
         </section>\`;
     }

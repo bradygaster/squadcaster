@@ -971,6 +971,8 @@ test("renders canonical bootstrap details with observed and derived semantics", 
     await expect(bootstrapFilter).toBeFocused();
     await expect(bootstrapFilter).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("#live-status")).toHaveText("Showing 1 goal filtered by automatic bootstrap.");
+    fixture.emit(fixture.state());
+    await expect(bootstrapFilter).toHaveAttribute("aria-pressed", "true");
     await page.locator('[data-action="expand-stage"][data-phase="researching"]').click();
     await page.getByRole("button", { name: /Research accessible activity summaries/ }).click();
 
@@ -1028,12 +1030,13 @@ test("shows degraded repository bootstrap diagnostics without guessing a goal", 
     nextState.activity.repositories[1].bootstrap = {
         status: "ambiguous",
         stale: false,
-        reasons: ["duplicate-research-issue"],
-        candidates: [{
-            title: "Research candidate #91",
+        reasons: [{
+            code: "duplicate-research-issue",
+            message: "Research candidate #91 conflicts with another canonical candidate.",
             url: "https://github.com/otherdemo/backend/issues/91",
         }, {
-            title: "Research candidate #92",
+            code: "duplicate-research-issue",
+            message: "Research candidate #92 conflicts with another canonical candidate.",
             url: "https://github.com/otherdemo/backend/issues/92",
         }],
     };
@@ -1043,7 +1046,7 @@ test("shows degraded repository bootstrap diagnostics without guessing a goal", 
     await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible();
     const diagnostic = page.locator('.bootstrap-summary[data-bootstrap-status="ambiguous"]').first();
     await expect(diagnostic).toContainText("multiple or conflicting candidates");
-    await expect(diagnostic).toContainText("duplicate-research-issue");
+    await expect(diagnostic).toContainText("Research candidate #91 conflicts");
     await expect(diagnostic.getByRole("link")).toHaveCount(2);
     await expect(diagnostic.getByRole("button", { name: "Open canonical research goal" })).toHaveCount(0);
     await expect(attention).toBeVisible();
