@@ -130,4 +130,7 @@ Authoritative references consulted:
   issue, pull-request, and workflow sources continue to update.
 - Partial snapshots expose source-specific errors and identify retained evidence
   as stale until that source refreshes successfully.
+- Repository and aggregate refresh metadata distinguish the latest attempt from
+  the last complete successful synchronization. Partial or stale snapshots do
+  not advance the successful timestamp.
 - Unknown relationships are not promoted to observed facts.

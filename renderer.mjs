@@ -527,6 +527,8 @@ export function renderHtml() {
       gap: 20px;
     }
     .refresh-status { color: var(--muted); font-size: var(--text-body-small, 12px); white-space: nowrap; }
+    .refresh-status.warning { color: var(--warning); }
+    .refresh-status span { display: block; color: var(--muted); }
     .metrics {
       display: grid;
       grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -675,6 +677,9 @@ export function renderHtml() {
       background: color-mix(in srgb, var(--warning) 8%, var(--bg));
     }
     .sync-warning p { margin: 4px 0 0; color: var(--muted); }
+    .repository-sync { color: var(--muted); }
+    .repository-sync.warning { color: var(--warning); }
+    .repository-error { color: var(--danger); }
     .secondary {
       margin-top: 30px;
       padding: 17px 18px;
@@ -1298,12 +1303,38 @@ export function renderHtml() {
               \${repositories.map(repository => \`
                 <label class="manage-repository">
                   <input data-action="repository-included" data-repository="\${esc(repository.nameWithOwner)}" type="checkbox" \${repository.included ? "checked" : ""}>
-                  <span><strong>\${esc(repository.nameWithOwner)}</strong><br><small>\${esc(repository.error || "Last refreshed " + formatTime(repository.lastSuccessfulRefresh))}</small></span>
+                  <span><strong>\${esc(repository.nameWithOwner)}</strong><br>\${repositorySyncHtml(repository)}</span>
                   <small>\${repository.nameWithOwner.toLowerCase() === String(state.activity?.currentRepository || "").toLowerCase() ? "Current" : repository.permission || ""}</small>
                 </label>\`).join("")}
             </div>
           </div>
         </details>\`;
+    }
+
+    function repositorySyncHtml(repository) {
+      const attempted = formatTime(repository.lastAttemptedRefresh);
+      const successful = formatTime(repository.lastSuccessfulRefresh);
+      if (repository.partial || repository.stale || repository.error) {
+        return \`<small class="repository-sync warning">Partial refresh attempted \${esc(attempted)} · last fully synced \${esc(successful)}</small>\${repository.error
+          ? \`<br><small class="repository-error">\${esc(repository.error)}</small>\`
+          : ""}\`;
+      }
+      return \`<small class="repository-sync">\${repository.lastSuccessfulRefresh
+        ? "Synced " + esc(successful)
+        : repository.lastAttemptedRefresh
+          ? "Refresh attempted " + esc(attempted) + " · not fully synced yet"
+          : "Not synced yet"}</small>\`;
+    }
+
+    function aggregateSyncHtml(activity) {
+      const attempted = formatTime(activity.lastAttemptedRefresh || activity.fetchedAt);
+      const successful = formatTime(activity.lastSuccessfulRefresh);
+      if (activity.partial || activity.stale) {
+        return \`<div class="refresh-status warning">Partial refresh · attempted \${esc(attempted)}<span>\${activity.lastSuccessfulRefresh
+          ? "Last fully synced " + esc(successful)
+          : "No complete sync yet"}</span></div>\`;
+      }
+      return \`<div class="refresh-status">Synced · \${esc(successful || attempted)}</div>\`;
     }
 
     function activeHtml() {
@@ -1318,7 +1349,7 @@ export function renderHtml() {
               <h1>All Squads</h1>
               <p class="lede">\${esc((activity.repositories || []).filter(repository => repository.included).length)} repositories\${activity.viewer ? " for @" + esc(activity.viewer) : ""} · opened from \${esc(activity.currentRepository || state.repoName)}. Live, read-only visibility from GitHub evidence.</p>
             </div>
-            <div class="refresh-status">\${activity.stale ? "Showing last known state" : "Last synced"} · \${esc(formatTime(activity.fetchedAt))}</div>
+            \${aggregateSyncHtml(activity)}
           </div>
           <div class="metrics">
             \${metricHtml(summary.active || 0, "Active goals")}
@@ -1329,9 +1360,10 @@ export function renderHtml() {
             \${metricHtml(summary.researching || 0, "Researching")}
             \${metricHtml(summary.completed || 0, "Completed")}
           </div>
-          \${activity.errors?.length ? \`
-            <div class="sync-warning"><strong>Some GitHub data could not be refreshed.</strong>
-              \${activity.errors.map(error => '<p>' + esc(error.source) + ": " + esc(error.message) + "</p>").join("")}
+          \${activity.partial || activity.stale || activity.errors?.length ? \`
+            <div class="sync-warning"><strong>Some GitHub data is from an earlier sync.</strong>
+              <p>Showing the latest available data. Totals and activity may be incomplete until every source refreshes successfully.</p>
+              \${(activity.errors || []).map(error => '<p>' + esc(error.source) + ": " + esc(error.message) + "</p>").join("")}
             </div>\` : ""}
           \${repositoryControlsHtml()}
           <div class="filters" aria-label="Filter goals by status">

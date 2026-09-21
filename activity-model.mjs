@@ -37,6 +37,22 @@ function normalizedSourceState(value, data, fetchedAt) {
     };
 }
 
+function latestTimestamp(values) {
+    return values
+        .map(timestamp)
+        .filter(Boolean)
+        .sort()
+        .at(-1) || null;
+}
+
+function earliestTimestamp(values) {
+    return values
+        .map(timestamp)
+        .filter(Boolean)
+        .sort()
+        .at(0) || null;
+}
+
 function labelsOf(item) {
     return (Array.isArray(item?.labels) ? item.labels : [])
         .map((label) => text(typeof label === "string" ? label : label?.name, 120))
@@ -450,6 +466,8 @@ export function buildActivitySnapshot({
     const staleSources = Object.entries(normalizedSources)
         .filter(([, state]) => state.status === "stale")
         .map(([source]) => source);
+    const incompleteSources = Object.values(normalizedSources)
+        .some((state) => ["stale", "unavailable"].includes(state.status));
     return {
         schemaVersion: 1,
         fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
@@ -470,7 +488,8 @@ export function buildActivitySnapshot({
         },
         goals,
         sourceState: normalizedSources,
-        partial: normalizedErrors.length > 0 ||
+        partial: incompleteSources ||
+            normalizedErrors.length > 0 ||
             Object.values(normalizedSources).some((state) => Boolean(state.error)),
         stale: staleSources.length > 0,
         staleSources,
@@ -526,7 +545,21 @@ export function aggregateActivitySnapshots({
             ...error,
             repository: snapshot?.repository?.nameWithOwner || "",
         })));
-    const aggregateErrors = [...snapshotErrors, ...errors].map((error) => ({
+    const includedRepositories = repositories.filter((repository) => repository?.included !== false);
+    const snapshotByRepository = new Map(snapshots.map((snapshot) => [
+        String(snapshot?.repository?.nameWithOwner || "").toLowerCase(),
+        snapshot,
+    ]));
+    const repositoryErrors = includedRepositories.flatMap((repository) => {
+        const snapshot = snapshotByRepository.get(String(repository?.nameWithOwner || "").toLowerCase());
+        if (!repository?.error || snapshot?.errors?.length) return [];
+        return [{
+            source: "repository refresh",
+            repository: repository.nameWithOwner,
+            message: repository.error,
+        }];
+    });
+    const aggregateErrors = [...snapshotErrors, ...repositoryErrors, ...errors].map((error) => ({
         source: text(error?.source || "GitHub", 80),
         repository: text(error?.repository || "", 300),
         message: text(error?.message || error, 800),
@@ -536,10 +569,18 @@ export function aggregateActivitySnapshots({
             repository: snapshot?.repository?.nameWithOwner || "",
             source,
         })));
+    const attemptedRefreshes = includedRepositories.map((repository) => repository?.lastAttemptedRefresh);
+    const successfulRefreshes = includedRepositories.map((repository) => repository?.lastSuccessfulRefresh);
+    const allRepositoriesSucceeded = includedRepositories.length > 0 &&
+        successfulRefreshes.every((value) => timestamp(value));
     return {
         schemaVersion: 2,
         scope: "user",
         fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
+        lastAttemptedRefresh: latestTimestamp(attemptedRefreshes) || timestamp(fetchedAt),
+        lastSuccessfulRefresh: allRepositoriesSucceeded
+            ? earliestTimestamp(successfulRefreshes)
+            : null,
         currentRepository: text(currentRepository, 300),
         viewer: text(viewer, 120),
         repositories,
@@ -553,11 +594,23 @@ export function aggregateActivitySnapshots({
             completed: count(["completed"]),
         },
         goals,
-        partial: aggregateErrors.length > 0 || snapshots.some((snapshot) => snapshot?.partial),
-        stale: snapshots.some((snapshot) => snapshot?.stale),
+        partial: aggregateErrors.length > 0 ||
+            snapshots.some((snapshot) => snapshot?.partial) ||
+            includedRepositories.some((repository) => repository?.partial),
+        stale: snapshots.some((snapshot) => snapshot?.stale) ||
+            includedRepositories.some((repository) => repository?.stale),
         staleSources,
         errors: aggregateErrors,
     };
+}
+
+export function isCompleteActivitySnapshot(snapshot) {
+    return Boolean(snapshot) &&
+        !snapshot.partial &&
+        !snapshot.stale &&
+        !(snapshot.errors?.length) &&
+        !Object.values(snapshot.sourceState || {})
+            .some((state) => ["stale", "unavailable"].includes(state?.status));
 }
 
 export const activityModel = {

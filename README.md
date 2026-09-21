@@ -82,7 +82,9 @@ repositories with active work.
 Independent GitHub sources are fetched separately, so a permissions or
 rate-limit failure in one source does not discard data from the others. Failed
 sources retain their last-known evidence while successful sources continue to
-update, and the canvas labels the combined result as partial or stale.
+update, and the canvas labels the combined result as partial or stale. Refresh
+attempts are shown separately from the last fully successful synchronization;
+stale or partial data never advances the successful timestamp.
 When the GraphQL rate-limit budget is low, background refresh pauses until reset
 while the current repository continues refreshing.
 
