@@ -552,7 +552,17 @@ export function aggregateActivitySnapshots({
     ]));
     const repositoryErrors = includedRepositories.flatMap((repository) => {
         const snapshot = snapshotByRepository.get(String(repository?.nameWithOwner || "").toLowerCase());
-        if (!repository?.error || snapshot?.errors?.length) return [];
+        if (!repository?.error) return [];
+        const snapshotErrorsForRepository = snapshot?.errors || [];
+        const mirroredSnapshotError = snapshotErrorsForRepository
+            .map((error) => `${error.source}: ${error.message}`)
+            .join("; ")
+            .slice(0, 800);
+        const duplicatesSnapshotError = repository.error === mirroredSnapshotError ||
+            snapshotErrorsForRepository.some((error) =>
+                repository.error === error.message ||
+                repository.error === `${error.source}: ${error.message}`);
+        if (duplicatesSnapshotError) return [];
         return [{
             source: "repository refresh",
             repository: repository.nameWithOwner,

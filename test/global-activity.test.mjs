@@ -165,6 +165,46 @@ test("aggregation propagates a repository refresh failure with a retained fresh 
     assert.equal(aggregate.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
 });
 
+test("aggregation retains a new total refresh failure after a partial snapshot", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        errors: [{ source: "pull requests", message: "temporary PR failure" }],
+        sourceState: {
+            issues: { data: [issue("octodemo/frontend", 57)], status: "fresh" },
+            pullRequests: {
+                data: [],
+                status: "stale",
+                error: "temporary PR failure",
+            },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        repositories: [{
+            nameWithOwner: "octodemo/frontend",
+            included: true,
+            partial: true,
+            stale: true,
+            error: "GitHub CLI exited before completing the repository refresh",
+        }],
+    });
+
+    assert.deepEqual(aggregate.errors, [
+        {
+            source: "pull requests",
+            repository: "octodemo/frontend",
+            message: "temporary PR failure",
+        },
+        {
+            source: "repository refresh",
+            repository: "octodemo/frontend",
+            message: "GitHub CLI exited before completing the repository refresh",
+        },
+    ]);
+});
+
 test("dependency resolution does not depend on snapshot order", () => {
     const dependent = buildActivitySnapshot({
         repository: repository("octodemo/frontend"),
@@ -444,6 +484,7 @@ test("partial refresh retains the last fully successful timestamp and later reco
     assert.ok(global.registry.repositories[0].lastAttemptedRefresh);
     assert.equal(partial.lastSuccessfulRefresh, "2026-09-20T12:00:00.000Z");
     assert.ok(partial.lastAttemptedRefresh);
+    assert.equal(partial.errors.length, 1);
     assert.match(global.registry.repositories[0].error, /pull requests: temporary PR failure/);
 
     failPullRequests = false;
