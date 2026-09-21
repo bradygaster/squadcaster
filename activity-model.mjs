@@ -706,8 +706,8 @@ function evidenceFor(issue, pullRequests, workflowRuns, artifacts, owner, pullRe
 }
 
 function resolveIssueNumber(value) {
-    if (Number.isInteger(value) && value > 0) return value;
-    const match = /^#?([1-9][0-9]*)$/.exec(String(value || "").trim());
+    if (typeof value !== "string") return null;
+    const match = /^#([1-9][0-9]*)$/.exec(value.trim());
     return match ? Number(match[1]) : null;
 }
 
@@ -723,7 +723,10 @@ function validatesReportedLabel(goal, label, omission) {
     const labels = labelsForGoal(goal);
     if (!labels.has("squad")) return false;
     const agentLabels = [...labels].filter((candidate) => candidate.startsWith("squad:"));
-    if (label) return agentLabels.length === 1 && agentLabels[0] === text(label, 120).toLowerCase();
+    const normalizedLabel = text(label, 120).toLowerCase();
+    if (normalizedLabel) {
+        return agentLabels.length === 1 && agentLabels[0] === normalizedLabel;
+    }
     return ["multi-owner", "non-roster"].includes(text(omission, 80).toLowerCase()) &&
         agentLabels.length === 0;
 }

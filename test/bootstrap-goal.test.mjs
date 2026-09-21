@@ -911,8 +911,8 @@ test("links generated implementation goals only from validated activation bindin
         artifactComment("activated", {
             bindings: [{
                 ...bindings[0],
-                label: "",
-                epic_label: "",
+                label: "   ",
+                epic_label: "   ",
                 omission_reason: "NON-ROSTER",
                 epic_omission_reason: "NON-ROSTER",
             }],
@@ -951,6 +951,26 @@ test("links generated implementation goals only from validated activation bindin
     }).goals.find((goal) => goal.issue.number === 6);
     assert.deepEqual(malformedIdentity.bootstrap.generatedGoals, []);
     assert.ok(malformedIdentity.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "invalid-activation-binding"));
+
+    const numericReferenceRoot = goalIssue(6, root.title, [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("activated", {
+            bindings: [{
+                ...bindings[0],
+                issue: 21,
+                epic_issue: 20,
+            }],
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const numericReference = snapshotWithBootstrap({
+        issues: [numericReferenceRoot, epic, taskIssue],
+        bootstrap: snapshot.bootstrap,
+    }).goals.find((goal) => goal.issue.number === 6);
+    assert.deepEqual(numericReference.bootstrap.generatedGoals, []);
+    assert.ok(numericReference.evidence.some((item) =>
         item.kind === "bootstrap-diagnostic" &&
         item.code === "invalid-activation-binding"));
 });
