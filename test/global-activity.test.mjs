@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { aggregateActivitySnapshots, buildActivitySnapshot } from "../activity-model.mjs";
 import {
+    applyRosterError,
     discoverCurrentRepositoryActivity,
     GitHubGlobalActivity,
     normalizeRegistry,
     refreshPolicy,
+    repositoryRefreshDue,
     snapshotCrossedDayBoundary,
 } from "../global-activity.mjs";
 
@@ -1075,14 +1077,101 @@ test("refresh policy gives active repositories a shorter interval", () => {
     assert.ok(refreshPolicy.inactiveMilliseconds < refreshPolicy.discoveryMilliseconds);
 });
 
-test("cache validity ends at UTC midnight even before the ordinary TTL", () => {
+test("cache validity ends exactly at UTC midnight when the last attempt predates the boundary", () => {
     const snapshot = buildActivitySnapshot({
         repository: repository("octodemo/frontend"),
         fetchedAt: "2026-09-21T23:59:59Z",
     });
 
-    assert.equal(snapshotCrossedDayBoundary(snapshot, Date.parse("2026-09-21T23:59:59.999Z")), false);
-    assert.equal(snapshotCrossedDayBoundary(snapshot, Date.parse("2026-09-22T00:00:00.000Z")), true);
+    assert.equal(snapshotCrossedDayBoundary(
+        snapshot,
+        "2026-09-21T23:59:59.999Z",
+        Date.parse("2026-09-21T23:59:59.999Z"),
+    ), false);
+    assert.equal(snapshotCrossedDayBoundary(
+        snapshot,
+        "2026-09-21T23:59:59.999Z",
+        Date.parse("2026-09-22T00:00:00.000Z"),
+    ), true);
+});
+
+test("failed post-midnight refreshes use the normal active TTL before retrying", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        issues: [issue("octodemo/frontend", 57)],
+        fetchedAt: "2026-09-22T00:00:05Z",
+        sourceState: {
+            issues: {
+                data: [issue("octodemo/frontend", 57)],
+                fetchedAt: "2026-09-21T23:59:50Z",
+                status: "stale",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const cachedRepository = {
+        ...repository("octodemo/frontend"),
+        lastAttemptedRefresh: "2026-09-22T00:00:05Z",
+    };
+
+    assert.equal(snapshot.dayBoundary.snapshotDay, "2026-09-21");
+    assert.equal(repositoryRefreshDue(
+        cachedRepository,
+        snapshot,
+        "octodemo/other",
+        Date.parse("2026-09-22T00:00:10Z"),
+    ), false);
+    assert.equal(repositoryRefreshDue(
+        cachedRepository,
+        snapshot,
+        "octodemo/other",
+        Date.parse("2026-09-22T00:01:05Z"),
+    ), true);
+});
+
+test("a future last-attempt timestamp is due after backward wall-clock movement", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        fetchedAt: "2026-09-22T00:03:00Z",
+    });
+    const cachedRepository = {
+        ...repository("octodemo/frontend"),
+        lastAttemptedRefresh: "2026-09-22T00:05:00Z",
+    };
+
+    assert.equal(repositoryRefreshDue(
+        cachedRepository,
+        snapshot,
+        "octodemo/other",
+        Date.parse("2026-09-22T00:04:00Z"),
+    ), true);
+});
+
+test("stale roster data crossing midnight retains its prior UTC snapshot day", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/backend"),
+        members: [{ id: "frontend", name: "Frontend", role: "Frontend Lead" }],
+        issues: [{
+            ...issue("octodemo/backend", 41),
+            labels: [{ name: "squad" }, { name: "squad:frontend" }],
+        }],
+        fetchedAt: "2026-09-22T00:00:05Z",
+    });
+
+    applyRosterError(snapshot, {
+        status: "stale",
+        fetchedAt: "2026-09-21T23:59:50Z",
+        blobOid: "oid-a",
+        observedOid: "oid-b",
+        error: "HTTP 403: Resource not accessible",
+    });
+
+    assert.equal(snapshot.goals[0].owner.name, "Frontend");
+    assert.equal(snapshot.stale, true);
+    assert.deepEqual(snapshot.staleSources, ["roster"]);
+    assert.equal(snapshot.dayBoundary.snapshotDay, "2026-09-21");
+    assert.equal(snapshot.sourceState.roster.fetchedAt, "2026-09-21T23:59:50Z");
 });
 
 test("registry migration versions and partitions cached snapshots by UTC day", () => {
