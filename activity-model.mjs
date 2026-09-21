@@ -1010,6 +1010,53 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         Number.isInteger(researchIssueNumber)
         ? goalsByNumber.get(researchIssueNumber)
         : null;
+    if (!rootGoal) {
+        const candidateNumbers = new Set(
+            (snapshot.sourceState?.issues?.data || [])
+                .filter((issue) =>
+                    text(issue?.title, 240) === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
+                    String(issue?.body || "").includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker))
+                .map((issue) => Number(issue?.number))
+                .filter(Number.isInteger),
+        );
+        for (const goal of goals) {
+            if (
+                text(goal.issue?.title, 240) === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
+                String(goal.issue?.body || "").includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker)
+            ) {
+                candidateNumbers.add(Number(goal.issue?.number));
+            }
+        }
+        for (const issueNumber of candidateNumbers) {
+            const candidate = goalsByNumber.get(issueNumber);
+            if (!candidate) continue;
+            candidate.artifacts = candidate.artifacts.map((artifact) => ({
+                ...artifact,
+                advancing: false,
+            }));
+            candidate.phaseWithoutBlockers = phaseFor({
+                issue: candidate.issue,
+                artifacts: candidate.artifacts,
+                pullRequests: candidate.pullRequests,
+                workflowRuns: candidate.workflowRuns,
+                blockers: [],
+                ignoreBlockers: true,
+            });
+            candidate.phase = phaseFor({
+                issue: candidate.issue,
+                artifacts: candidate.artifacts,
+                pullRequests: candidate.pullRequests,
+                workflowRuns: candidate.workflowRuns,
+                blockers: candidate.blockers,
+            });
+            candidate.nextAction = nextActionFor(
+                candidate.phase,
+                candidate.pullRequests,
+                candidate.workflowRuns,
+                candidate.artifacts,
+            );
+        }
+    }
     if (rootGoal) {
         const artifactKey = (artifact) => [
             artifact.kind,
@@ -1202,6 +1249,12 @@ export function buildActivitySnapshot({
         )
     );
     const bootstrapResearchIssueNumber = Number(bootstrap?.researchIssue?.number);
+    const bootstrapResearchCandidateNumbers = new Set(issues
+        .filter((issue) =>
+            text(issue?.title, 240) === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
+            String(issue?.body || "").includes(BOOTSTRAP_IDENTIFIERS.researchIssueMarker))
+        .map((issue) => Number(issue?.number))
+        .filter(Number.isInteger));
     const bootstrapCommentsSource = sourceState?.bootstrap?.comments;
     const bootstrapCommentsAreAuthoritative = bootstrapCommentsSource?.status === "fresh" &&
         bootstrapCommentsSource.exhaustive === true &&
@@ -1249,12 +1302,12 @@ export function buildActivitySnapshot({
                 !normalizedSources.issueComments.truncated
             ),
     });
-    if (
-        Number.isInteger(bootstrapResearchIssueNumber) &&
-        !bootstrapCommentsAreAuthoritative
-    ) {
+    const guardedBootstrapRoots = Number.isInteger(bootstrapResearchIssueNumber)
+        ? new Set([bootstrapResearchIssueNumber])
+        : bootstrapResearchCandidateNumbers;
+    if (bootstrap && !bootstrapCommentsAreAuthoritative && guardedBootstrapRoots.size > 0) {
         for (const [issueNumber, evidence] of activationEvidence) {
-            if (evidence.activation?.rootIssueNumber !== bootstrapResearchIssueNumber) continue;
+            if (!guardedBootstrapRoots.has(evidence.activation?.rootIssueNumber)) continue;
             activationEvidence.set(issueNumber, {
                 activation: null,
                 errors: [

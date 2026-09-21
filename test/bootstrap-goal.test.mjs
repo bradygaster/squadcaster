@@ -899,6 +899,46 @@ test("does not attach ambiguous, malformed, or unknown bootstrap state to a gues
     }
 });
 
+test("unknown bootstrap state keeps retained candidate artifacts and handoff non-authoritative", () => {
+    const bindings = [{
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    }];
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("activated", {
+            bindings,
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const unknown = classifyAutomaticBootstrap(classifyInput());
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic 1.1", ["squad", "squad:dev"]),
+            goalIssue(21, "Implement the feature", ["squad", "squad:dev"]),
+        ],
+        bootstrap: unknown,
+        bootstrapCommentsState: {
+            status: "unavailable",
+            exhaustive: false,
+        },
+    });
+    const rootGoal = snapshot.goals.find((goal) => goal.issue.number === 6);
+    const taskGoal = snapshot.goals.find((goal) => goal.issue.number === 21);
+
+    assert.equal(rootGoal.bootstrap, undefined);
+    assert.equal(rootGoal.phase, "queued");
+    assert.ok(rootGoal.artifacts.every((artifact) => artifact.advancing === false));
+    assert.equal(taskGoal.handoff.activation, null);
+    assert.equal(taskGoal.handoff.readiness.state, "unknown");
+});
+
 test("attaches retained stale and partial bootstrap state without advancing it", () => {
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
         artifactComment("research"),
