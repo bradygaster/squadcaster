@@ -85,10 +85,15 @@ context. Use **Manage** to exclude repositories from refresh and totals, and
 
 Squadcaster discovers repositories through the authenticated user's owner,
 collaborator, and organization-member affiliations. A repository is included
-when it has a Squad workflow, roster, open `squad` issue/PR, or searchable
-structured Squad artifact. It reads up to 1,000 issues and pull requests per
-included repository; Actions runs are refreshed for the current repository and
-repositories with active work.
+when it has a Squad workflow, roster, open `squad`/`squad:*` issue or pull
+request, or searchable structured Squad artifact. Prefix-label and artifact
+fallbacks are scoped to each affiliated repository. Prefix discovery caches its
+last conclusive result, pages label definitions, and checks exact open-label
+existence with a one-item request while respecting the REST core budget; it does
+not use a capped global search or treat a failed probe as a negative result.
+Squadcaster reads up to 1,000 issues and pull requests per included repository;
+Actions runs are refreshed for the current repository and repositories with
+active work.
 
 Independent GitHub sources are fetched separately, so a permissions or
 rate-limit failure in one source does not discard data from the others. Failed
@@ -96,8 +101,9 @@ sources retain their last-known evidence while successful sources continue to
 update, and the canvas labels the combined result as partial or stale. Refresh
 attempts are shown separately from the last fully successful synchronization;
 stale or partial data never advances the successful timestamp.
-When the GraphQL rate-limit budget is low, background refresh pauses until reset
-while the current repository continues refreshing.
+When either the GraphQL or REST core rate-limit budget is low, background
+refresh pauses until the limiting budgets reset while the current repository
+continues refreshing.
 
 See [the operations architecture](docs/operations-architecture.md) for the
 normalized model, correlation rules, adapter boundary, and compatibility notes.

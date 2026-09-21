@@ -4,8 +4,11 @@ import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 const DISCOVERY_TTL = 15 * 60 * 1000;
 const ACTIVE_TTL = 60 * 1000;
 const INACTIVE_TTL = 10 * 60 * 1000;
+const PREFIX_SIGNAL_TTL = 60 * 60 * 1000;
 const MAX_CONCURRENCY = 3;
 const REPOSITORY_PAGE_SIZE = 40;
+const LABEL_PAGE_SIZE = 100;
+const REST_RATE_LIMIT_RESERVE = 100;
 
 const DISCOVERY_QUERY = `
 query SquadcasterRepositories($cursor: String) {
@@ -61,6 +64,112 @@ function repositoryNameFromSearch(result) {
     return nameWithOwner.includes("/") ? nameWithOwner : "";
 }
 
+function normalizedDiscoverySignal(value) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+        detected: Boolean(source.detected),
+        checkedAt: source.checkedAt || null,
+        labels: Array.isArray(source.labels)
+            ? source.labels.map((label) => clean(label, 160)).filter(Boolean)
+            : [],
+        error: clean(source.error, 800),
+    };
+}
+
+function signalFresh(signal, now = Date.now()) {
+    const checkedAt = Date.parse(signal?.checkedAt || "");
+    return Number.isFinite(checkedAt) && now - checkedAt < PREFIX_SIGNAL_TTL;
+}
+
+function resetAt(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return new Date(numeric * 1000).toISOString();
+    const parsed = Date.parse(value || "");
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function normalizedRestRateLimit(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const remaining = source.remaining === null || source.remaining === undefined
+        ? Number.NaN
+        : Number(source.remaining);
+    return {
+        remaining: Number.isFinite(remaining) ? remaining : null,
+        resetAt: resetAt(source.resetAt || source.reset),
+        error: clean(source.error, 800),
+    };
+}
+
+async function probeSquadPrefixedLabels({
+    runJson,
+    cwd,
+    repository,
+    cached,
+    budget,
+    force = false,
+}) {
+    const prior = normalizedDiscoverySignal(cached);
+    if (!force && signalFresh(prior)) return prior;
+
+    const request = async (args) => {
+        if (!budget || !Number.isFinite(budget.remaining) ||
+            budget.remaining <= REST_RATE_LIMIT_RESERVE) {
+            throw new Error("REST API rate-limit budget is too low for prefix-label discovery.");
+        }
+        budget.remaining -= 1;
+        return runJson(args, cwd);
+    };
+
+    try {
+        const labels = [];
+        for (let page = 1; ; page += 1) {
+            const pageLabels = await request([
+                "api", `repos/${repository.nameWithOwner}/labels`,
+                "--method", "GET",
+                "-f", `per_page=${LABEL_PAGE_SIZE}`,
+                "-f", `page=${page}`,
+                "--jq", "[.[].name]",
+            ]);
+            if (!Array.isArray(pageLabels)) {
+                throw new Error("GitHub returned an unexpected repository-label response.");
+            }
+            labels.push(...pageLabels.filter((label) => /^squad:/i.test(clean(label, 160))));
+            if (pageLabels.length < LABEL_PAGE_SIZE) break;
+        }
+
+        const prefixLabels = [...new Map(
+            labels.map((label) => [label.toLowerCase(), label]),
+        ).values()];
+        let detected = false;
+        for (const label of prefixLabels) {
+            const count = await request([
+                "api", `repos/${repository.nameWithOwner}/issues`,
+                "--method", "GET",
+                "-f", "state=open",
+                "-f", `labels=${label}`,
+                "-f", "per_page=1",
+                "-f", "page=1",
+                "--jq", "length",
+            ]);
+            if (Number(count) > 0) {
+                detected = true;
+                break;
+            }
+        }
+        return {
+            detected,
+            checkedAt: new Date().toISOString(),
+            labels: prefixLabels,
+            error: "",
+        };
+    } catch (error) {
+        return {
+            ...prior,
+            error: message(error),
+        };
+    }
+}
+
 function registryRepository(repository, previous = {}) {
     return {
         name: clean(repository?.name, 160),
@@ -112,8 +221,17 @@ export function normalizeRegistry(value = {}) {
         viewer: clean(value.viewer, 120),
         discoveredAt: value.discoveredAt || null,
         rateLimit: value.rateLimit || null,
+        restRateLimit: normalizedRestRateLimit(value.restRateLimit),
         repositories: Array.isArray(value.repositories) ? value.repositories : [],
         snapshots: value.snapshots && typeof value.snapshots === "object" ? value.snapshots : {},
+        discoverySignals: value.discoverySignals && typeof value.discoverySignals === "object"
+            ? Object.fromEntries(
+                Object.entries(value.discoverySignals).map(([key, signal]) => [
+                    key.toLowerCase(),
+                    normalizedDiscoverySignal(signal),
+                ]),
+            )
+            : {},
         discoveryError: clean(value.discoveryError, 800),
     };
 }
@@ -136,8 +254,13 @@ export class GitHubGlobalActivity {
         const previous = new Map(
             this.registry.repositories.map((repository) => [repository.nameWithOwner.toLowerCase(), repository]),
         );
-        const repositories = [];
+        const repositories = new Map();
         const affiliated = new Map();
+        const addRepository = (repository) => {
+            const key = String(repository?.nameWithOwner || "").toLowerCase();
+            if (!key || repositories.has(key)) return;
+            repositories.set(key, registryRepository(repository, previous.get(key)));
+        };
         let cursor = null;
         let viewer = "";
         let rateLimit = null;
@@ -153,20 +276,46 @@ export class GitHubGlobalActivity {
                     if (repository?.isArchived) continue;
                     affiliated.set(String(repository.nameWithOwner).toLowerCase(), repository);
                     if (!hasSquadSignal(repository)) continue;
-                    repositories.push(registryRepository(
-                        repository,
-                        previous.get(String(repository.nameWithOwner).toLowerCase()),
-                    ));
+                    addRepository(repository);
                 }
                 cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
             } while (cursor);
 
             const fallbackCandidates = [...affiliated.values()].filter((repository) => !hasSquadSignal(repository));
+            const signals = { ...this.registry.discoverySignals };
+            const needsRestBudget = fallbackCandidates.some((repository) => {
+                const signal = signals[String(repository.nameWithOwner).toLowerCase()];
+                return force || !signalFresh(signal);
+            });
+            let restBudget = null;
+            if (needsRestBudget) {
+                try {
+                    const response = await this.runJson(["api", "rate_limit"], this.cwd);
+                    const core = response?.resources?.core || {};
+                    restBudget = normalizedRestRateLimit(core);
+                } catch (error) {
+                    restBudget = normalizedRestRateLimit({ error: message(error) });
+                }
+            } else {
+                restBudget = normalizedRestRateLimit(this.registry.restRateLimit);
+            }
             const artifactRepositories = await mapConcurrent(
                 fallbackCandidates,
                 MAX_CONCURRENCY,
                 async (repository) => {
                     const key = String(repository.nameWithOwner).toLowerCase();
+                    const signal = await probeSquadPrefixedLabels({
+                        runJson: this.runJson,
+                        cwd: this.cwd,
+                        repository,
+                        cached: signals[key] || (previous.has(key)
+                            ? { detected: true, checkedAt: null, labels: [] }
+                            : null),
+                        budget: restBudget,
+                        force,
+                    });
+                    signals[key] = signal;
+                    if (signal.detected) return repository;
                     try {
                         const results = await this.runJson(
                             [
@@ -179,34 +328,47 @@ export class GitHubGlobalActivity {
                             ],
                             this.cwd,
                         );
-                        return Array.isArray(results) && results.some(
+                        const artifactDetected = Array.isArray(results) && results.some(
                             (item) => repositoryNameFromSearch(item).toLowerCase() === key,
-                        )
+                        );
+                        return artifactDetected || (signal.error && previous.has(key))
                             ? repository
                             : null;
                     } catch {
-                        return null;
+                        return previous.has(key) ? repository : null;
                     }
                 },
             );
             for (const repository of artifactRepositories) {
                 if (!repository) continue;
-                const key = repository.nameWithOwner.toLowerCase();
-                const normalized = registryRepository(
-                    {
-                        ...repository,
-                        issues: { totalCount: 1 },
-                    },
-                    previous.get(key),
-                );
-                repositories.push(normalized);
+                addRepository({
+                    ...repository,
+                    issues: { totalCount: 1 },
+                });
             }
 
             this.registry.viewer = viewer;
-            this.registry.repositories = repositories;
+            this.registry.repositories = [...repositories.values()];
             this.registry.discoveredAt = new Date().toISOString();
             this.registry.rateLimit = rateLimit;
-            this.registry.discoveryError = "";
+            this.registry.restRateLimit = {
+                ...normalizedRestRateLimit(restBudget),
+                error: restBudget?.error || "",
+            };
+            this.registry.discoverySignals = Object.fromEntries(
+                [...affiliated.keys()]
+                    .filter((key) => signals[key])
+                    .map((key) => [key, signals[key]]),
+            );
+            const signalErrors = [...affiliated.keys()]
+                .map((key) => signals[key]?.error
+                    ? `${affiliated.get(key).nameWithOwner}: ${signals[key].error}`
+                    : "")
+                .filter(Boolean);
+            this.registry.discoveryError = clean(
+                [restBudget?.error, ...signalErrors].filter(Boolean).join("; "),
+                800,
+            );
         } catch (error) {
             this.registry.discoveryError = message(error);
         }
@@ -264,8 +426,26 @@ export class GitHubGlobalActivity {
         const resetAt = this.registry.rateLimit?.resetAt
             ? Date.parse(this.registry.rateLimit.resetAt)
             : Number.NaN;
-        const lowRateLimit = Number.isFinite(remaining) && remaining < 100 &&
+        const lowGraphqlRateLimit = Number.isFinite(remaining) && remaining < 100 &&
             (!Number.isFinite(resetAt) || resetAt > now);
+        const restRemaining = this.registry.restRateLimit?.remaining === null ||
+            this.registry.restRateLimit?.remaining === undefined
+            ? Number.NaN
+            : Number(this.registry.restRateLimit.remaining);
+        const restResetAt = this.registry.restRateLimit?.resetAt
+            ? Date.parse(this.registry.restRateLimit.resetAt)
+            : Number.NaN;
+        const lowRestRateLimit = Number.isFinite(restRemaining) &&
+            restRemaining <= REST_RATE_LIMIT_RESERVE &&
+            (!Number.isFinite(restResetAt) || restResetAt > now);
+        const lowRateLimit = lowGraphqlRateLimit || lowRestRateLimit;
+        const limitingResetTimes = [
+            lowGraphqlRateLimit ? resetAt : Number.NaN,
+            lowRestRateLimit ? restResetAt : Number.NaN,
+        ].filter(Number.isFinite);
+        const rateLimitResetAt = limitingResetTimes.length > 0
+            ? new Date(Math.max(...limitingResetTimes)).toISOString()
+            : null;
         const candidates = this.registry.repositories.filter((repository) => {
             if (!repository.included) return false;
             if (lowRateLimit && repository.nameWithOwner.toLowerCase() !== currentKey) return false;
@@ -324,8 +504,8 @@ export class GitHubGlobalActivity {
                 : lowRateLimit
                     ? [{
                         source: "rate limit",
-                        message: this.registry.rateLimit?.resetAt
-                            ? `Background refresh paused until ${this.registry.rateLimit.resetAt}; the current repository still refreshes.`
+                        message: rateLimitResetAt
+                            ? `Background refresh paused until ${rateLimitResetAt}; the current repository still refreshes.`
                             : "Background refresh paused due to the low GitHub API rate limit; the current repository still refreshes.",
                     }]
                     : [],
