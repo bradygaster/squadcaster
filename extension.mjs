@@ -10,8 +10,11 @@ import {
     createCanvas,
     joinSession,
 } from "@github/copilot-sdk/extension";
-import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
-import { GitHubGlobalActivity, normalizeRegistry } from "./global-activity.mjs";
+import {
+    discoverCurrentRepositoryActivity,
+    GitHubGlobalActivity,
+    normalizeRegistry,
+} from "./global-activity.mjs";
 import { normalizePersistedState } from "./persisted-state.mjs";
 import { renderHtml } from "./renderer.mjs";
 import { normalizeMembers, parseTeamMarkdown } from "./squad-roster.mjs";
@@ -258,29 +261,32 @@ async function refreshRemoteState(entry, { force = false } = {}) {
     entry.lastRemoteCheckAt = Date.now();
     entry.remoteCheckPromise = (async () => {
         try {
-            const currentAdapter = new GitHubSquadActivityAdapter({
-                runJson: runGhJson,
-                cwd: entry.state.repoRoot,
-            });
             const currentRepository = entry.state.activity?.currentRepository ||
                 entry.state.activity?.repository?.nameWithOwner ||
                 "";
-            const currentPrevious = entry.registry.snapshots?.[currentRepository.toLowerCase()] ||
-                (entry.state.activity?.scope === "user" ? null : entry.state.activity);
-            const currentSnapshot = await currentAdapter.discover({
-                members: entry.state.members,
-                previous: currentPrevious,
-            });
-            const nameWithOwner = currentSnapshot.repository?.nameWithOwner || currentRepository;
             const activity = await withRegistryLock(async () => {
+                const registry = sharedRegistry || entry.registry;
+                const currentPrevious = registry.snapshots?.[currentRepository.toLowerCase()] ||
+                    (entry.state.activity?.scope === "user" ? null : entry.state.activity);
+                const currentActivity = await discoverCurrentRepositoryActivity({
+                    runJson: runGhJson,
+                    cwd: entry.state.repoRoot,
+                    members: entry.state.members,
+                    previous: currentPrevious,
+                    registry,
+                    currentRepository,
+                });
+                const currentSnapshot = currentActivity.snapshot;
+                const nameWithOwner = currentSnapshot?.repository?.nameWithOwner || currentRepository;
                 const global = new GitHubGlobalActivity({
                     runJson: runGhJson,
                     cwd: entry.state.repoRoot,
-                    registry: sharedRegistry || entry.registry,
+                    registry,
                 });
                 const aggregated = await global.refresh({
                     currentRepository: nameWithOwner,
                     currentSnapshot,
+                    currentSnapshotRefreshed: currentActivity.refreshed,
                     currentMembers: entry.state.members,
                     currentSquadDetected: entry.state.squad?.installed,
                     forceDiscovery: force,

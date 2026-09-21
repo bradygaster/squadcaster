@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { aggregateActivitySnapshots, buildActivitySnapshot } from "../activity-model.mjs";
-import { GitHubGlobalActivity, normalizeRegistry, refreshPolicy } from "../global-activity.mjs";
+import {
+    discoverCurrentRepositoryActivity,
+    GitHubGlobalActivity,
+    normalizeRegistry,
+    refreshPolicy,
+} from "../global-activity.mjs";
 
 const repository = (nameWithOwner) => ({
     name: nameWithOwner.split("/")[1],
@@ -830,6 +835,207 @@ test("aggregate refresh skips excluded repositories and reuses the current snaps
     assert.equal(aggregate.repositories.length, 2);
     assert.equal(aggregate.goals.length, 1);
     assert.equal(calls.length, 0);
+});
+
+test("excluded cached activity preserves refresh timestamps and resumes after re-enabling", async () => {
+    const nameWithOwner = "octodemo/frontend";
+    const cached = buildActivitySnapshot({
+        repository: repository(nameWithOwner),
+        issues: [issue(nameWithOwner, 57)],
+    });
+    cached.fetchedAt = "2026-09-21T12:00:00Z";
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            discoveredAt: new Date().toISOString(),
+            repositories: [
+                {
+                    ...repository(nameWithOwner),
+                    owner: "octodemo",
+                    included: false,
+                    lastAttemptedRefresh: "2026-09-21T14:00:00Z",
+                    lastSuccessfulRefresh: "2026-09-21T13:00:00Z",
+                },
+            ],
+            snapshots: { [nameWithOwner]: cached },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository(nameWithOwner);
+            if (args[0] === "issue") return [issue(nameWithOwner, 58)];
+            return [];
+        },
+    });
+
+    const excludedActivity = await discoverCurrentRepositoryActivity({
+        runJson: global.runJson,
+        cwd: global.cwd,
+        registry: global.registry,
+        currentRepository: nameWithOwner,
+        previous: cached,
+    });
+    const excluded = await global.refresh({
+        currentRepository: nameWithOwner,
+        currentSnapshot: excludedActivity.snapshot,
+        currentSnapshotRefreshed: excludedActivity.refreshed,
+    });
+
+    assert.equal(excludedActivity.snapshot, cached);
+    assert.equal(excludedActivity.refreshed, false);
+    assert.equal(calls.length, 0);
+    assert.equal(excluded.goals.length, 0);
+    assert.equal(excluded.repositories.length, 1);
+    assert.equal(excluded.repositories[0].included, false);
+    assert.equal(global.registry.snapshots[nameWithOwner], cached);
+    assert.equal(global.registry.repositories[0].lastAttemptedRefresh, "2026-09-21T14:00:00Z");
+    assert.equal(global.registry.repositories[0].lastSuccessfulRefresh, "2026-09-21T13:00:00Z");
+
+    assert.equal(global.setIncluded(nameWithOwner, true), true);
+    const refreshedActivity = await discoverCurrentRepositoryActivity({
+        runJson: global.runJson,
+        cwd: global.cwd,
+        registry: global.registry,
+        currentRepository: nameWithOwner,
+        previous: cached,
+    });
+    const refreshed = await global.refresh({
+        currentRepository: nameWithOwner,
+        currentSnapshot: refreshedActivity.snapshot,
+        currentSnapshotRefreshed: refreshedActivity.refreshed,
+    });
+
+    assert.equal(refreshedActivity.refreshed, true);
+    assert.deepEqual(calls.map((args) => args[0]), ["repo", "issue", "pr", "run"]);
+    assert.equal(refreshed.goals.length, 1);
+    assert.equal(refreshed.goals[0].id, `${nameWithOwner}#58`);
+    assert.equal(refreshed.repositories[0].included, true);
+});
+
+test("current repository identity is resolved before excluded activity is refreshed", async () => {
+    const nameWithOwner = "octodemo/frontend";
+    const cached = buildActivitySnapshot({
+        repository: repository(nameWithOwner),
+        issues: [issue(nameWithOwner, 57)],
+    });
+    const calls = [];
+    const activity = await discoverCurrentRepositoryActivity({
+        cwd: "/repo",
+        registry: {
+            repositories: [
+                { ...repository(nameWithOwner), owner: "octodemo", included: false },
+            ],
+            snapshots: { [nameWithOwner]: cached },
+        },
+        currentRepository: "",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "repo") return repository(nameWithOwner);
+            throw new Error(`Unexpected activity call: ${args[0]}`);
+        },
+    });
+
+    assert.equal(activity.snapshot, cached);
+    assert.equal(activity.refreshed, false);
+    assert.deepEqual(calls.map((args) => args[0]), ["repo"]);
+});
+
+test("forced discovery omission preserves the current repository exclusion", async () => {
+    const nameWithOwner = "octodemo/frontend";
+    const cached = buildActivitySnapshot({
+        repository: repository(nameWithOwner),
+        issues: [issue(nameWithOwner, 57)],
+    });
+    const remoteIssue = {
+        ...issue(nameWithOwner, 58),
+        labels: [{ name: "squad" }, { name: "squad:frontend" }],
+    };
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            repositories: [
+                {
+                    ...repository(nameWithOwner),
+                    owner: "octodemo",
+                    included: false,
+                    squadDetected: true,
+                    squadTeamOid: "oid-a",
+                },
+            ],
+            snapshots: { [nameWithOwner]: cached },
+            rosters: {
+                [nameWithOwner]: {
+                    blobOid: "oid-a",
+                    observedOid: "oid-a",
+                    members: [{
+                        id: "frontend",
+                        name: "Frontend",
+                        role: "Frontend Lead",
+                        lead: true,
+                    }],
+                    status: "fresh",
+                    fetchedAt: "2026-09-21T12:00:00Z",
+                    error: "",
+                },
+            },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "api" && args[1] === "graphql") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                        rateLimit: { remaining: 4999, resetAt: "2026-09-21T22:00:00Z" },
+                    },
+                };
+            }
+            if (args[0] === "repo") return repository(nameWithOwner);
+            if (args[0] === "issue") return [remoteIssue];
+            if (args[0] === "pr" || args[0] === "run") return [];
+            throw new Error(`Unexpected call: ${args.join(" ")}`);
+        },
+    });
+
+    const aggregate = await global.refresh({
+        currentRepository: nameWithOwner,
+        currentSnapshot: cached,
+        forceDiscovery: true,
+        forceAll: true,
+    });
+    const excludedActivity = await discoverCurrentRepositoryActivity({
+        runJson: global.runJson,
+        cwd: global.cwd,
+        registry: global.registry,
+        currentRepository: nameWithOwner,
+        previous: cached,
+    });
+
+    assert.deepEqual(calls.map((args) => args[0]), ["api"]);
+    assert.equal(global.registry.repositories.length, 1);
+    assert.equal(global.registry.repositories[0].included, false);
+    assert.equal(global.registry.repositories[0].squadTeamOid, "oid-a");
+    assert.equal(global.registry.snapshots[nameWithOwner], cached);
+    assert.equal(excludedActivity.snapshot, cached);
+    assert.equal(excludedActivity.refreshed, false);
+    assert.equal(aggregate.goals.length, 0);
+
+    assert.equal(global.setIncluded(nameWithOwner, true), true);
+    const refreshed = await global.refresh({
+        currentRepository: "octodemo/other",
+        forceAll: true,
+    });
+
+    assert.deepEqual(calls.map((args) => args[0]), ["api", "repo", "issue", "pr", "run"]);
+    assert.equal(global.registry.rosters[nameWithOwner].status, "fresh");
+    assert.equal(global.registry.rosters[nameWithOwner].members.length, 1);
+    assert.equal(refreshed.goals[0].owner.name, "Frontend");
 });
 
 test("combined rate-limit guard reports the later limiting reset", async () => {
