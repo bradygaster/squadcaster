@@ -70,15 +70,17 @@ export function anchoredPagedItems(items, state, pageSize, identity) {
         ].map((value) => String(value ?? "").toLowerCase()).join("|");
     const keys = values.map((item) => String(keyFor(item) ?? "").toLowerCase());
     const requested = state && typeof state === "object" ? state : {};
-    let start = 0;
+    let start = -1;
     let fixedEnd = null;
     if (values.length && requested.anchor) {
         start = keys.indexOf(String(requested.anchor).toLowerCase());
-    } else if (values.length && requested.endBefore) {
+    }
+    if (start < 0 && values.length && requested.endBefore) {
         const end = keys.indexOf(String(requested.endBefore).toLowerCase());
         start = end >= 0 ? Math.max(0, end - size) : -1;
         fixedEnd = end >= 0 ? end : null;
-    } else if (values.length && requested.visibleKeys?.length) {
+    }
+    if (start < 0 && values.length && requested.visibleKeys?.length) {
         start = requested.visibleKeys
             .map((key) => keys.indexOf(String(key).toLowerCase()))
             .find((index) => index >= 0) ?? -1;
@@ -86,6 +88,9 @@ export function anchoredPagedItems(items, state, pageSize, identity) {
     if (start < 0 && values.length && requested.beforeKey) {
         const before = keys.indexOf(String(requested.beforeKey).toLowerCase());
         start = before >= 0 ? before + 1 : -1;
+    }
+    if (start < 0 && values.length && requested.nextAnchor) {
+        start = keys.indexOf(String(requested.nextAnchor).toLowerCase());
     }
     if (start < 0) start = Number.isInteger(requested.startIndex) ? requested.startIndex : 0;
     if (start >= values.length) {
@@ -624,6 +629,7 @@ export function renderHtml() {
       overflow: hidden;
       overflow-wrap: anywhere;
       font-weight: var(--font-weight-semibold, 600);
+      line-height: 18px;
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
     }
@@ -1372,6 +1378,7 @@ export function renderHtml() {
         anchor: visible.anchor,
         beforeKey: visible.beforeKey,
         visibleKeys: visible.visibleKeys,
+        nextAnchor: visible.nextAnchor,
         startIndex: visible.startIndex,
       };
       workflowPageView = visible;
@@ -1450,6 +1457,7 @@ export function renderHtml() {
         anchor: visible.anchor,
         beforeKey: visible.beforeKey,
         visibleKeys: visible.visibleKeys,
+        nextAnchor: visible.nextAnchor,
         startIndex: visible.startIndex,
       };
       activityPageView = visible;

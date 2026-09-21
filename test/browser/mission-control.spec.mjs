@@ -704,9 +704,11 @@ test("filters evidence kinds and preserves bounded pages across repeated refresh
 
     const removed = structuredClone(refreshed);
     removed.activity.goals[0].evidence = removed.activity.goals[0].evidence
-        .filter((item) => item.url !== activityWindow[0]);
+        .filter((item) =>
+            ![activityWindow[0], "https://example.test/check-page/20"].includes(item.url));
     removed.activity.goals[0].workflowRuns = removed.activity.goals[0].workflowRuns
-        .filter((item) => item.url !== workflowWindow[0]);
+        .filter((item) =>
+            ![workflowWindow[0], "https://example.test/workflow-page/12"].includes(item.url));
     fixture.emit(removed);
 
     await expect(activity.locator(".activity-item a").first()).toHaveAttribute("href", activityWindow[1]);
@@ -726,8 +728,9 @@ test("filters evidence kinds and preserves bounded pages across repeated refresh
         if (await older.isDisabled()) break;
         await older.click();
     }
-    expect(new Set(visitedEvidence).size).toBe(46);
-    expect(visitedEvidence).toHaveLength(46);
+    const expectedEvidence = removed.activity.goals[0].evidence.map((item) => item.url).sort();
+    expect([...new Set(visitedEvidence)].sort()).toEqual(expectedEvidence);
+    expect(visitedEvidence).toHaveLength(expectedEvidence.length);
 
     await page.locator('[data-action="phase-filter"][data-phase="all"]').click();
     const visitedWorkflows = [];
@@ -739,8 +742,9 @@ test("filters evidence kinds and preserves bounded pages across repeated refresh
         if (await older.isDisabled()) break;
         await older.click();
     }
-    expect(new Set(visitedWorkflows).size).toBe(46);
-    expect(visitedWorkflows).toHaveLength(46);
+    const expectedWorkflows = removed.activity.goals[0].workflowRuns.map((item) => item.url).sort();
+    expect([...new Set(visitedWorkflows)].sort()).toEqual(expectedWorkflows);
+    expect(visitedWorkflows).toHaveLength(expectedWorkflows.length);
 });
 
 test("deduplicates refresh evidence and deterministically orders equal or missing timestamps", async ({ page }) => {
@@ -791,13 +795,19 @@ test("wraps dense workflow identifiers without viewport overflow", async ({ page
     for (const item of stressState.activity.goals) item.phase = "implementing";
     fixture.emit(stressState);
 
-    const dimensions = await page.locator(".run-row").first().evaluate((row) => {
-        const name = row.querySelector(".run-name");
+    const workflowName = page.locator(".run-name").first();
+    await expect(workflowName).toBeVisible();
+    await expect(workflowName).toHaveAttribute("title", /Workflow run/);
+    const dimensions = await workflowName.evaluate((name) => {
+        const row = name.closest(".run-row");
         const repository = row.querySelector(".run-repository");
         const branch = row.querySelector(".run-branch");
         return {
             documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-            nameLines: Math.round(name.getBoundingClientRect().height / parseFloat(getComputedStyle(name).lineHeight)),
+            nameHeight: name.getBoundingClientRect().height,
+            nameFontSize: parseFloat(getComputedStyle(name).fontSize),
+            nameOverflow: getComputedStyle(name).overflow,
+            nameLineClamp: getComputedStyle(name).webkitLineClamp,
             repositoryWrap: getComputedStyle(repository).overflowWrap,
             branchWrap: getComputedStyle(branch).overflowWrap,
             fullName: name.textContent,
@@ -806,8 +816,10 @@ test("wraps dense workflow identifiers without viewport overflow", async ({ page
     });
 
     expect(dimensions.documentOverflow).toBeLessThanOrEqual(0);
-    expect(dimensions.nameLines).toBeGreaterThanOrEqual(1);
-    expect(dimensions.nameLines).toBeLessThanOrEqual(2);
+    expect(dimensions.nameHeight).toBeGreaterThan(0);
+    expect(dimensions.nameHeight).toBeLessThanOrEqual(dimensions.nameFontSize * 3);
+    expect(dimensions.nameOverflow).toBe("hidden");
+    expect(dimensions.nameLineClamp).toBe("2");
     expect(dimensions.repositoryWrap).toBe("anywhere");
     expect(dimensions.branchWrap).toBe("anywhere");
     expect(dimensions.title).toBe(dimensions.fullName);

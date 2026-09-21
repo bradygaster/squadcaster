@@ -69,11 +69,26 @@ test("paginates and semantically deduplicates dense feeds", () => {
     const stable = anchoredPagedItems(refreshed, second, 20, (item) => item.id);
     assert.deepEqual(stable.items.map((item) => item.id), second.items.map((item) => item.id));
 
-    const removed = refreshed.filter((item) => ![21, 30].includes(item.id));
+    const anchorOnlyRemoved = refreshed.filter((item) => item.id !== 21);
+    const anchorRecovered = anchoredPagedItems(anchorOnlyRemoved, second, 20, (item) => item.id);
+    assert.equal(anchorRecovered.items[0].id, 22);
+    assert.equal(anchorRecovered.items.length, 20);
+
+    const removed = refreshed.filter((item) => ![20, 21, 30].includes(item.id));
     const recovered = anchoredPagedItems(removed, second, 20, (item) => item.id);
     assert.equal(recovered.items[0].id, 22);
     assert.equal(recovered.items.includes(30), false);
     assert.equal(recovered.items.length, 20);
+
+    const pageAndPredecessorRemoved = refreshed.filter((item) =>
+        item.id < 20 || item.id > 40);
+    const nextWindow = anchoredPagedItems(
+        pageAndPredecessorRemoved,
+        second,
+        20,
+        (item) => item.id,
+    );
+    assert.deepEqual(nextWindow.items.map((item) => item.id), [41, 42, 43, 44, 45]);
 
     const visited = [];
     let page = anchoredPagedItems(refreshed, {}, 20, (item) => item.id);
