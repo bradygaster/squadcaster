@@ -11,6 +11,7 @@ function goal({
     title,
     repository = "octodemo/frontend",
     owner = "Frontend",
+    bootstrap = null,
 }) {
     const timestamp = `2026-09-20T${String(10 + number).padStart(2, "0")}:00:00Z`;
     const pullRequests = phase === "reviewing" ? [{
@@ -220,13 +221,50 @@ function goal({
                 { kind: "manual", availability: "available", reasons: [] },
             ],
         },
+        ...(bootstrap ? { bootstrap } : {}),
+    };
+}
+
+function bootstrap({
+    status = "complete",
+    stale = false,
+    journeyPhase = "research",
+    reasons = [],
+} = {}) {
+    return {
+        status,
+        stale,
+        journeyPhase,
+        reasons,
+        staleSources: stale ? ["comments"] : [],
+        castPullRequest: {
+            number: 80,
+            url: "https://github.com/octodemo/frontend/pull/80",
+        },
+        researchIssue: {
+            number: 2,
+            url: "https://github.com/octodemo/frontend/issues/2",
+        },
+        workflowAttempts: [{
+            name: "Squad Bootstrap",
+            status: status === "retried" ? "in_progress" : "completed",
+            conclusion: status === "failed" ? "failure" : "success",
+            url: "https://github.com/octodemo/frontend/actions/runs/800",
+            updatedAt: "2026-09-20T18:00:00Z",
+        }],
     };
 }
 
 function fixtureState() {
     const goals = [
         goal({ number: 1, phase: "queued", title: "Plan a deliberately long mission control workflow title" }),
-        goal({ number: 2, phase: "researching", title: "Research accessible activity summaries", owner: "Researcher" }),
+        goal({
+            number: 2,
+            phase: "researching",
+            title: "Research accessible activity summaries",
+            owner: "Researcher",
+            bootstrap: bootstrap(),
+        }),
         goal({ number: 3, phase: "implementing", title: "Implement responsive pipeline containment" }),
         goal({ number: 4, phase: "reviewing", title: "Review keyboard drawer behavior", owner: "Reviewer" }),
         goal({ number: 5, phase: "completed", title: "Land semantic theme defaults", repository: "otherdemo/backend" }),
@@ -924,6 +962,140 @@ test("distinguishes observed and inferred correlation evidence", async ({ page }
     await expect(dialog.getByText("Inferred correlation")).toBeVisible();
 });
 
+test("renders canonical bootstrap details with observed and derived semantics", async ({ page }) => {
+    await page.getByText("Browse goals").click();
+    const bootstrapFilter = page.getByRole("button", { name: "Automatic bootstrap" });
+    await bootstrapFilter.focus();
+    await page.keyboard.press("Enter");
+
+    await expect(bootstrapFilter).toBeFocused();
+    await expect(bootstrapFilter).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("#live-status")).toHaveText("Showing 1 goal filtered by automatic bootstrap.");
+    await page.locator('[data-action="expand-stage"][data-phase="researching"]').click();
+    await page.getByRole("button", { name: /Research accessible activity summaries/ }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Automatic bootstrap");
+    await expect(dialog).toContainText("complete");
+    await expect(dialog).toContainText("Derived from GitHub evidence");
+    await expect(dialog).toContainText("Observed GitHub evidence");
+    await expect(dialog.getByRole("link", { name: /Cast PR #80/ })).toHaveAttribute(
+        "href",
+        "https://github.com/octodemo/frontend/pull/80",
+    );
+    await expect(dialog.getByRole("link", { name: /Research issue #2/ })).toHaveAttribute(
+        "href",
+        "https://github.com/octodemo/frontend/issues/2",
+    );
+    await expect(dialog.locator('[aria-label="Automatic bootstrap: complete"]').first()).toBeVisible();
+});
+
+test("summarizes every non-complete bootstrap status with the correct attention contract", async ({ page }) => {
+    const statuses = ["pending", "delayed", "partial", "failed", "retried", "ambiguous", "malformed", "opted_out"];
+    const attentionStatuses = new Set(["delayed", "partial", "failed", "ambiguous", "malformed"]);
+    const nextState = fixture.state();
+    nextState.activity.repositories = statuses.map((status, index) => ({
+        nameWithOwner: `bootstrap-owner/repository-${status}`,
+        owner: "bootstrap-owner",
+        included: true,
+        permission: "READ",
+        lastSuccessfulRefresh: "2026-09-20T18:00:00Z",
+        bootstrap: {
+            status,
+            stale: false,
+            reasons: status === "ambiguous" ? ["duplicate-cast-candidate"] : [],
+            candidates: [{
+                title: `${status} evidence`,
+                url: `https://github.com/bootstrap-owner/repository-${status}/actions/runs/${index + 1}`,
+            }],
+        },
+    }));
+    fixture.emit(nextState);
+
+    for (const status of statuses) {
+        await expect(page.locator(`.bootstrap-summary[data-bootstrap-status="${status}"]`).first()).toBeVisible();
+        await expect(page.locator(`[aria-label="Automatic bootstrap: ${status.replaceAll("_", " ")}"]`).first()).toBeVisible();
+    }
+    const attention = page.locator("#attention-bootstrap").locator("..");
+    await expect(attention.locator(".bootstrap-summary")).toHaveCount(attentionStatuses.size);
+    await expect(attention.locator('.bootstrap-summary[data-bootstrap-status="pending"]')).toHaveCount(0);
+    await expect(attention.locator('.bootstrap-summary[data-bootstrap-status="retried"]')).toHaveCount(0);
+    await expect(attention.locator('.bootstrap-summary[data-bootstrap-status="opted_out"]')).toHaveCount(0);
+});
+
+test("shows degraded repository bootstrap diagnostics without guessing a goal", async ({ page }) => {
+    const nextState = fixture.state();
+    nextState.activity.repositories[1].bootstrap = {
+        status: "ambiguous",
+        stale: false,
+        reasons: ["duplicate-research-issue"],
+        candidates: [{
+            title: "Research candidate #91",
+            url: "https://github.com/otherdemo/backend/issues/91",
+        }, {
+            title: "Research candidate #92",
+            url: "https://github.com/otherdemo/backend/issues/92",
+        }],
+    };
+    fixture.emit(nextState);
+
+    const attention = page.getByRole("region", { name: "Factory floor stages" }).locator("..");
+    await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible();
+    const diagnostic = page.locator('.bootstrap-summary[data-bootstrap-status="ambiguous"]').first();
+    await expect(diagnostic).toContainText("multiple or conflicting candidates");
+    await expect(diagnostic).toContainText("duplicate-research-issue");
+    await expect(diagnostic.getByRole("link")).toHaveCount(2);
+    await expect(diagnostic.getByRole("button", { name: "Open canonical research goal" })).toHaveCount(0);
+    await expect(attention).toBeVisible();
+});
+
+test("labels stale and unknown bootstrap evidence explicitly", async ({ page }) => {
+    const nextState = fixture.state();
+    nextState.activity.repositories[1].bootstrap = {
+        status: "unknown",
+        stale: true,
+        staleSources: ["comments"],
+        reasons: [],
+    };
+    fixture.emit(nextState);
+
+    const summary = page.locator('.bootstrap-summary[data-bootstrap-status="unknown"]').first();
+    await expect(summary).toContainText("Status is stale; reclassification is paused");
+    await expect(summary).toContainText("comments evidence is unavailable");
+
+    const unknownState = fixture.state();
+    unknownState.activity.repositories[1].bootstrap = {
+        status: "unknown",
+        stale: false,
+        reasons: [],
+    };
+    fixture.emit(unknownState);
+    await expect(page.locator('.bootstrap-summary[data-bootstrap-status="unknown"]').first())
+        .toContainText("Bootstrap status is unknown");
+});
+
+test("keeps complete bootstrap quiet and opted-out bootstrap out of attention", async ({ page }) => {
+    await expect(page.locator('.bootstrap-summary[data-bootstrap-status="complete"]')).toHaveCount(0);
+
+    const nextState = fixture.state();
+    nextState.activity.repositories[1].bootstrap = {
+        status: "opted_out",
+        stale: false,
+        castPullRequest: {
+            number: 88,
+            url: "https://github.com/otherdemo/backend/pull/88",
+        },
+    };
+    fixture.emit(nextState);
+
+    await expect(page.locator('.bootstrap-summary[data-bootstrap-status="opted_out"]')).toContainText(
+        "closed without merge",
+    );
+    await expect(page.locator("#attention-bootstrap")).toHaveCount(0);
+    await expect(page.locator(".metric").filter({ hasText: "Needs attention" }).locator(".metric-value strong"))
+        .toHaveText("1");
+});
+
 test("labels partial refresh attempts separately from successful syncs", async ({ page }) => {
     await expect(page.locator("#repo-header")).toContainText(/synced/);
     await expect(page.locator("#repo-header")).toContainText("UTC server day 2026-09-20");
@@ -1101,6 +1273,7 @@ test("preserves keyed scroll state while bounding production-scale collections",
     await drawerBody.evaluate(element => {
         element.scrollTop = 240;
     });
+
     const drawerScrollTop = await drawerBody.evaluate(element => element.scrollTop);
     expect(drawerScrollTop).toBeGreaterThan(0);
 
@@ -1328,6 +1501,35 @@ test("wraps dense workflow identifiers without viewport overflow", async ({ page
     expect(dimensions.repositoryWrap).toBe("anywhere");
     expect(dimensions.branchWrap).toBe("anywhere");
     expect(dimensions.title).toBe(dimensions.fullName);
+});
+
+test("contains dense repository bootstrap summaries at phone width", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    const stressState = createStressCanvasState();
+    const statuses = ["pending", "delayed", "partial", "failed", "retried", "ambiguous", "malformed", "opted_out", "unknown"];
+    stressState.activity.repositories.forEach((repository, index) => {
+        repository.bootstrap = {
+            status: statuses[index % statuses.length],
+            stale: index === 9,
+            staleSources: index === 9 ? ["workflowRuns"] : [],
+            candidates: [{
+                title: `Evidence ${index}`,
+                url: `https://example.test/bootstrap/${index}`,
+            }],
+        };
+    });
+    fixture.emit(stressState);
+
+    const repositorySummaries = page.locator('section[aria-labelledby="bootstrap-summary-title"]');
+    await expect(repositorySummaries.locator(".bootstrap-summary")).toHaveCount(10);
+    const overflow = await page.evaluate(() => ({
+        document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        body: document.body.scrollWidth - document.body.clientWidth,
+    }));
+    expect(overflow.document).toBeLessThanOrEqual(0);
+    expect(overflow.body).toBeLessThanOrEqual(0);
+    await expect(repositorySummaries.locator(".bootstrap-summary a").first()).toHaveAttribute("target", "_blank");
+    await expect(repositorySummaries.locator(".bootstrap-summary a").first()).toHaveAttribute("rel", "noreferrer");
 });
 
 test("announces refresh completion without replacing the persistent status region", async ({ page }) => {

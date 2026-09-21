@@ -35,7 +35,12 @@ test("renderer exposes only read-only dashboard controls", () => {
     assert.match(html, /data-action="export-handoff-context"/);
     assert.match(html, /\/api\/state\?handoff=/);
     assert.match(html, /Open existing/);
+    assert.match(html, /data-action="bootstrap-filter"/);
+    assert.match(html, /Repository-level, read-only status derived from canonical GitHub evidence/);
     for (const term of removedMutationTerms) assert.equal(html.includes(term), false, term);
+    for (const term of ["/api/bootstrap", "retry-bootstrap", "create-bootstrap", "rerun-bootstrap"]) {
+        assert.equal(html.includes(term), false, term);
+    }
 });
 
 test("extension keeps only supported POST routes and canvas actions", async () => {

@@ -369,6 +369,20 @@ export function renderHtml() {
       cursor: pointer;
     }
     .filter.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+    .bootstrap-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .bootstrap-filter::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      background: var(--surface);
+    }
+    .bootstrap-filter.selected::before { background: var(--accent); }
     .scope-controls {
       display: grid;
       grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 2fr) auto;
@@ -609,6 +623,58 @@ export function renderHtml() {
       text-transform: capitalize;
     }
     .attention-goals { display: grid; gap: 8px; margin-top: 10px; }
+    .bootstrap-summaries {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+    .bootstrap-summary {
+      min-width: 0;
+      padding: 12px 13px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+    }
+    .bootstrap-summary.attention { border-color: var(--danger); }
+    .bootstrap-summary.warning { border-color: var(--warning); }
+    .bootstrap-summary-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .bootstrap-summary-header strong, .bootstrap-summary p { overflow-wrap: anywhere; }
+    .bootstrap-summary p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+    .bootstrap-summary-links { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
+    .bootstrap-summary a { color: var(--focus); font-size: 12px; font-weight: 600; }
+    .bootstrap-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+    .bootstrap-badge.delayed, .bootstrap-badge.partial, .bootstrap-badge.retried { border-color: var(--warning); color: var(--warning); }
+    .bootstrap-badge.failed, .bootstrap-badge.ambiguous, .bootstrap-badge.malformed { border-color: var(--danger); color: var(--danger); }
+    .bootstrap-badge.complete { border-color: var(--success); color: var(--success); }
+    .bootstrap-badge.unknown, .bootstrap-badge.opted_out { color: var(--muted); }
+    .evidence-label {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 0 4px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
     .stage-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
     .stage-detail-heading h3 { text-transform: capitalize; }
     .stage-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 9px; margin-top: 12px; }
@@ -1071,6 +1137,9 @@ export function renderHtml() {
         outline-offset: -2px;
       }
       .readiness, .handoff-warning, .criterion, .mechanism { border-color: CanvasText; }
+      .bootstrap-summary.attention, .bootstrap-summary.warning, .bootstrap-badge {
+        border-color: CanvasText;
+      }
       .drawer-scrim { background: Canvas; opacity: .55; }
       .legend-dot, .activity-marker, .run-indicator {
         forced-color-adjust: none;
@@ -1094,6 +1163,7 @@ export function renderHtml() {
     let state = null;
     let localError = "";
     let phaseFilter = "all";
+    let bootstrapFilter = false;
     let repositoryFilter = "all";
     let ownerFilter = "all";
     let goalSearch = "";
@@ -1156,6 +1226,7 @@ export function renderHtml() {
       const goals = visibleGoals();
       const filters = [
         phaseFilter !== "all" ? phaseFilter : "",
+        bootstrapFilter ? "automatic bootstrap" : "",
         ownerFilter !== "all" ? ownerFilter : "",
         repositoryFilter !== "all" ? repositoryFilter === "current" ? "current repository" : repositoryFilter : "",
         goalSearch ? \`search “\${goalSearch}”\` : "",
@@ -1326,6 +1397,7 @@ export function renderHtml() {
     }
 
     function goalMatchesFilter(goal) {
+      if (bootstrapFilter && !goal.bootstrap) return false;
       if (phaseFilter === "all") return true;
       if (phaseFilter === "active") return goal.phase !== "completed";
       return goal.phase === phaseFilter;
@@ -1359,7 +1431,10 @@ export function renderHtml() {
           \${goal.evidence.map(item => \`
             <li>
               <a href="\${esc(item.url || goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
-              <small>\${esc(item.kind)} · \${esc(formatTime(item.timestamp))} · \${item.confidence === "inferred" ? "Inferred correlation" : "Observed correlation"}</small>
+              <small>\${esc(item.kind)} · \${esc(formatTime(item.timestamp))}
+                · \${item.confidence === "inferred" ? "Inferred correlation" : "Observed correlation"}
+                <span class="evidence-label">\${esc(item.confidence === "inferred" ? "derived" : item.confidence || "observed")}</span>
+              </small>
             </li>\`).join("")}
         </ol>\`;
     }
@@ -1385,6 +1460,169 @@ export function renderHtml() {
           </ol>\`
           : \`<p class="help">No later phase change has been observed\${history.firstObservedAt ? " since " + esc(formatTime(history.firstObservedAt)) : " yet"}.</p>\`}
       \`;
+    }
+
+    function bootstrapStatusLabel(status) {
+      return String(status || "unknown").replaceAll("_", " ");
+    }
+
+    function bootstrapStatusCopy(bootstrap) {
+      const status = bootstrap?.status || "unknown";
+      if (bootstrap?.stale) {
+        const sources = (bootstrap.staleSources || bootstrap.sources || []).map(source =>
+          typeof source === "string" ? source : source?.source || source?.name).filter(Boolean);
+        return \`Status is stale; reclassification is paused\${sources.length ? " because " + sources.join(", ") + " evidence is unavailable" : " until GitHub evidence is fully refreshed"}.\`;
+      }
+      const copy = {
+        pending: "Automatic bootstrap is waiting for canonical GitHub artifacts.",
+        delayed: "Derived warning: observed GitHub evidence has not advanced within the expected window.",
+        partial: "Derived diagnostic: only part of the canonical artifact set is observed.",
+        failed: "Derived diagnostic: the newest observed bootstrap workflow attempt failed.",
+        retried: "Derived status: a newer observed workflow attempt follows an earlier failure.",
+        complete: "Canonical bootstrap artifacts are observed. Downstream work remains represented by the normal goal lifecycle.",
+        ambiguous: "Derived diagnostic: multiple or conflicting candidates prevent safe canonical selection.",
+        malformed: "Derived diagnostic: a unique candidate violates the canonical bootstrap contract.",
+        opted_out: "Observed human decision: the canonical Cast pull request was closed without merge.",
+        unknown: "Bootstrap status is unknown because the evidence needed for classification has not been fully observed.",
+      };
+      return copy[status] || copy.unknown;
+    }
+
+    function bootstrapLinks(bootstrap) {
+      const attempts = bootstrap?.workflowAttempts || bootstrap?.workflowRuns || [];
+      const candidates = bootstrap?.candidates || bootstrap?.candidateLinks || [];
+      const links = [
+        bootstrap?.castPullRequest && {
+          title: \`Cast PR #\${bootstrap.castPullRequest.number || ""}\`.trim(),
+          url: bootstrap.castPullRequest.url,
+        },
+        bootstrap?.researchIssue && {
+          title: \`Research issue #\${bootstrap.researchIssue.number || ""}\`.trim(),
+          url: bootstrap.researchIssue.url,
+        },
+        ...attempts.map((attempt, index) => ({
+          title: \`\${attempt.workflow || attempt.name || "Bootstrap workflow"} · \${attempt.conclusion || attempt.status || "unknown"}\`,
+          url: attempt.url,
+          timestamp: attempt.updatedAt || attempt.createdAt,
+          index,
+        })),
+        ...candidates.map(candidate => ({
+          title: candidate.title || candidate.kind || "Bootstrap candidate",
+          url: candidate.url,
+        })),
+      ];
+      return links.filter(link => link?.url);
+    }
+
+    function repositoryBootstrapEntries() {
+      const entries = new Map();
+      for (const repository of state.activity?.repositories || []) {
+        if (!repository?.bootstrap) continue;
+        entries.set(String(repository.nameWithOwner || "").toLowerCase(), {
+          repository,
+          bootstrap: repository.bootstrap,
+          goal: null,
+        });
+      }
+      for (const goal of state.activity?.goals || []) {
+        if (!goal?.bootstrap) continue;
+        const key = String(goal.repository?.nameWithOwner || "").toLowerCase();
+        const existing = entries.get(key);
+        entries.set(key, {
+          repository: existing?.repository || goal.repository,
+          bootstrap: existing?.bootstrap || goal.bootstrap,
+          goal,
+        });
+      }
+      const activityBootstrap = state.activity?.bootstrap;
+      const aggregateEntries = Array.isArray(activityBootstrap)
+        ? activityBootstrap
+        : Array.isArray(activityBootstrap?.repositories)
+          ? activityBootstrap.repositories
+          : [];
+      for (const entry of aggregateEntries) {
+        const repository = entry.repository || entry;
+        const bootstrap = entry.bootstrap || entry;
+        const key = String(repository?.nameWithOwner || entry.nameWithOwner || "").toLowerCase();
+        if (!key || entries.has(key)) continue;
+        entries.set(key, { repository, bootstrap, goal: null });
+      }
+      return [...entries.values()];
+    }
+
+    function bootstrapEntryMatchesScope(entry) {
+      const repository = String(entry.repository?.nameWithOwner || "");
+      if (repositoryFilter === "current" && repository.toLowerCase() !== String(state.activity?.currentRepository || "").toLowerCase()) return false;
+      if (!["all", "current"].includes(repositoryFilter) && repository !== repositoryFilter) return false;
+      if (ownerFilter !== "all" && repository.split("/")[0] !== ownerFilter) return false;
+      return true;
+    }
+
+    function bootstrapBadgeHtml(bootstrap) {
+      const status = bootstrap?.status || "unknown";
+      const label = bootstrapStatusLabel(status);
+      return \`<span class="bootstrap-badge \${esc(status)}" aria-label="Automatic bootstrap: \${esc(label)}">\${esc(label)}</span>\`;
+    }
+
+    function bootstrapSummaryHtml(entry, { attention = false } = {}) {
+      const bootstrap = entry.bootstrap || {};
+      const status = bootstrap.status || "unknown";
+      const goal = entry.goal;
+      const links = bootstrapLinks(bootstrap);
+      const repository = entry.repository?.nameWithOwner || goal?.repository?.nameWithOwner || "Repository unknown";
+      const tone = attention ? "attention" : ["delayed", "partial", "retried"].includes(status) ? "warning" : "";
+      return \`
+        <article class="bootstrap-summary \${tone}" data-bootstrap-status="\${esc(status)}">
+          <div class="bootstrap-summary-header">
+            <strong>\${esc(repository)}</strong>
+            \${bootstrapBadgeHtml(bootstrap)}
+          </div>
+          <p>\${esc(bootstrapStatusCopy(bootstrap))}</p>
+          \${bootstrap.reasons?.length ? \`<p><strong>Derived reasons:</strong> \${esc(bootstrap.reasons.join("; "))}</p>\` : ""}
+          \${links.length ? \`<div class="bootstrap-summary-links">\${links.map(link =>
+            \`<a href="\${esc(link.url)}" target="_blank" rel="noreferrer">\${esc(link.title)} ↗</a>\`
+          ).join("")}</div>\` : ""}
+          \${goal ? \`<div class="bootstrap-summary-links"><button class="button" data-action="open-goal" data-goal-id="\${esc(goal.id)}" type="button">Open canonical research goal</button></div>\` : ""}
+        </article>\`;
+    }
+
+    function bootstrapSummariesHtml() {
+      const visibleStatuses = new Set(["pending", "delayed", "partial", "failed", "retried", "ambiguous", "malformed", "opted_out", "unknown"]);
+      const entries = repositoryBootstrapEntries().filter(bootstrapEntryMatchesScope).filter(entry =>
+        entry.bootstrap?.stale || visibleStatuses.has(entry.bootstrap?.status || "unknown"));
+      if (!entries.length) return "";
+      return \`
+        <section aria-labelledby="bootstrap-summary-title">
+          <div class="panel-header">
+            <div><h2 id="bootstrap-summary-title">Automatic bootstrap</h2><p>Repository-level, read-only status derived from canonical GitHub evidence.</p></div>
+            <span class="attention-count">\${entries.length}</span>
+          </div>
+          <div class="bootstrap-summaries">\${entries.map(entry => bootstrapSummaryHtml(entry)).join("")}</div>
+        </section>\`;
+    }
+
+    function bootstrapDrawerHtml(goal) {
+      const bootstrap = goal.bootstrap;
+      if (!bootstrap) return "";
+      const links = bootstrapLinks(bootstrap);
+      return \`
+        <section class="drawer-section" aria-labelledby="drawer-bootstrap-title">
+          <div class="bootstrap-summary-header">
+            <h3 id="drawer-bootstrap-title">Automatic bootstrap</h3>
+            \${bootstrapBadgeHtml(bootstrap)}
+          </div>
+          <p>\${esc(bootstrapStatusCopy(bootstrap))}</p>
+          <div class="drawer-facts">
+            <div class="drawer-fact"><small>Classification</small><strong>Derived from GitHub evidence</strong></div>
+            <div class="drawer-fact"><small>Journey</small><strong>\${esc(bootstrapStatusLabel(bootstrap.journeyPhase || "unknown"))}</strong></div>
+          </div>
+          \${bootstrap.reasons?.length ? \`<p><strong>Derived reasons:</strong> \${esc(bootstrap.reasons.join("; "))}</p>\` : ""}
+          \${links.length ? \`<div class="drawer-list">\${links.map(link => \`
+            <div class="drawer-item">
+              <a href="\${esc(link.url)}" target="_blank" rel="noreferrer">\${esc(link.title)}</a>
+              <small>Observed GitHub evidence\${link.timestamp ? " · " + esc(formatTime(link.timestamp)) : ""}</small>
+            </div>\`).join("")}</div>\` : '<p class="help">No direct GitHub evidence link is currently available.</p>'}
+        </section>\`;
     }
 
     function relatedArtifactsHtml(goal) {
@@ -1474,14 +1712,17 @@ export function renderHtml() {
 
     function needsAttentionHtml(goals) {
       const attentionGoals = goals.filter(goal => goal.phase === "blocked" || goal.phase === "failed");
-      if (!attentionGoals.length) return "";
+      const degradedBootstrap = repositoryBootstrapEntries()
+        .filter(bootstrapEntryMatchesScope)
+        .filter(entry => ["delayed", "partial", "failed", "ambiguous", "malformed"].includes(entry.bootstrap?.status));
+      if (!attentionGoals.length && !degradedBootstrap.length) return "";
       return \`
         <section class="attention-panel" aria-labelledby="attention-title">
           <div class="panel-header">
-            <div><h2 id="attention-title">Needs attention</h2><p>Blocked and failed goals remain directly inspectable outside the forward lifecycle.</p></div>
-            <span class="attention-count">\${attentionGoals.length}</span>
+            <div><h2 id="attention-title">Needs attention</h2><p>Blocked and failed goals plus degraded automatic-bootstrap diagnostics remain directly inspectable.</p></div>
+            <span class="attention-count">\${attentionGoals.length + degradedBootstrap.length}</span>
           </div>
-          <div class="attention-lanes">
+          \${attentionGoals.length ? \`<div class="attention-lanes">
             \${["blocked", "failed"].map(phase => {
               const phaseGoals = attentionGoals.filter(goal => goal.phase === phase);
               return \`
@@ -1494,7 +1735,13 @@ export function renderHtml() {
                   </div>
                 </section>\`;
             }).join("")}
-          </div>
+          </div>\` : ""}
+          \${degradedBootstrap.length ? \`
+            <section class="attention-lane" aria-labelledby="attention-bootstrap" style="margin:0 14px 14px">
+              <h3 id="attention-bootstrap"><span>Automatic bootstrap</span><span>\${degradedBootstrap.length}</span></h3>
+              <div class="bootstrap-summaries">\${degradedBootstrap.map(entry =>
+                bootstrapSummaryHtml(entry, { attention: true })).join("")}</div>
+            </section>\` : ""}
         </section>\`;
     }
 
@@ -1614,7 +1861,10 @@ export function renderHtml() {
           \${activityMarkerHtml(item)}
           <div>
             <a href="\${esc(item.url || item.goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
-            <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))} · \${item.confidence === "inferred" ? "Inferred correlation" : "Observed correlation"}</small>
+            <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))}
+              · \${item.confidence === "inferred" ? "Inferred correlation" : "Observed correlation"}
+              <span class="evidence-label">\${esc(item.confidence === "inferred" ? "derived" : item.confidence || "observed")}</span>
+            </small>
           </div>
         </li>\`).join("");
       return \`
@@ -2003,6 +2253,7 @@ export function renderHtml() {
           <div class="drawer-header">
             <div>
               <span class="phase \${esc(goal.phase)}">\${esc(goal.phase)}</span>
+              \${goal.bootstrap ? bootstrapBadgeHtml(goal.bootstrap) : ""}
               <h2 id="drawer-title" style="margin-top:8px">#\${esc(goal.issue.number)} · \${esc(goal.issue.title)}</h2>
               <p id="drawer-description">\${esc(goal.repository.nameWithOwner)}</p>
             </div>
@@ -2020,6 +2271,7 @@ export function renderHtml() {
               <p class="next-step"><strong>Next action</strong><span>\${esc(goal.nextAction || "Unknown — inspect the linked issue.")}</span></p>
               <p style="margin-bottom:0"><a href="\${esc(goal.issue.url)}" target="_blank" rel="noreferrer">Open source issue ↗</a></p>
             </section>
+            \${bootstrapDrawerHtml(goal)}
             <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
             \${handoffHtml(goal)}
             <section class="drawer-section"><h3>Pull requests and checks</h3>\${pullRequestItemsHtml(goal)}</section>
@@ -2086,6 +2338,7 @@ export function renderHtml() {
       const owners = [...new Set(repositories.map(repository => repository.owner).filter(Boolean))].sort();
       const activeFilters = [
         phaseFilter !== "all" ? phaseFilter : "",
+        bootstrapFilter ? "automatic bootstrap" : "",
         ownerFilter !== "all" ? ownerFilter : "",
         repositoryFilter !== "all" ? repositoryFilter === "current" ? "current repo" : repositoryFilter : "",
         goalSearch ? \`“\${goalSearch}”\` : "",
@@ -2118,6 +2371,7 @@ export function renderHtml() {
             </div>
           </section>
           <div class="filters" aria-label="Filter goals by status">
+            <button class="filter bootstrap-filter \${bootstrapFilter ? "selected" : ""}" data-action="bootstrap-filter" type="button" aria-pressed="\${bootstrapFilter}">Automatic bootstrap</button>
             \${filters.map(filter => \`<button class="filter \${phaseFilter === filter ? "selected" : ""}" data-action="phase-filter" data-phase="\${filter}" type="button" aria-pressed="\${phaseFilter === filter}">\${esc(filter)}</button>\`).join("")}
           </div>
           <label class="toggle" style="margin:0;padding:0 14px 14px;background:var(--soft)"><input data-action="active-repositories" type="checkbox" \${activeRepositoriesOnly ? "checked" : ""}> Only repositories with active work</label>
@@ -2175,7 +2429,9 @@ export function renderHtml() {
       const lifecycle = ["queued", "researching", "implementing", "reviewing", "completed"];
       const repositories = (activity.repositories || []).filter(repository => repository.included).length;
       const inProgress = (summary.queued || 0) + (summary.researching || 0) + (summary.implementing || 0);
-      const needsAttention = (summary.blocked || 0) + (summary.failed || 0);
+      const bootstrapAttention = repositoryBootstrapEntries().filter(entry =>
+        ["delayed", "partial", "failed", "ambiguous", "malformed"].includes(entry.bootstrap?.status)).length;
+      const needsAttention = (summary.blocked || 0) + (summary.failed || 0) + bootstrapAttention;
       return \`
         <section>
           <p class="sr-only">Live, read-only visibility from GitHub evidence.</p>
@@ -2190,7 +2446,7 @@ export function renderHtml() {
             \${metricHtml(needsAttention, "Needs attention", {
               tone: needsAttention ? "danger" : "",
               aside: \`\${summary.failed || 0} failed\`,
-              detail: \`\${summary.blocked || 0} blocked\`
+              detail: \`\${summary.blocked || 0} blocked · \${bootstrapAttention} bootstrap\`
             })}
             \${metricHtml(summary.completed || 0, "Delivery", {
               tone: summary.awaitingReview ? "warning" : "",
@@ -2207,6 +2463,7 @@ export function renderHtml() {
             </div>\` : ""}
           \${localError ? \`<div class="sync-warning" role="alert"><strong>The canvas could not complete the local request.</strong><p>\${esc(localError)}</p></div>\` : ""}
           \${repositoryControlsHtml()}
+          \${bootstrapSummariesHtml()}
           <div class="mission-layout">
             <div>
               <section class="pipeline-panel" aria-labelledby="pipeline-title">
@@ -2294,6 +2551,11 @@ export function renderHtml() {
       try {
         if (action === "phase-filter") {
           phaseFilter = target.dataset.phase || "active";
+          resetFeedPages();
+          render();
+          announce(filterAnnouncement());
+        } else if (action === "bootstrap-filter") {
+          bootstrapFilter = !bootstrapFilter;
           resetFeedPages();
           render();
           announce(filterAnnouncement());
