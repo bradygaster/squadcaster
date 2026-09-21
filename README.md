@@ -106,9 +106,13 @@ sources retain their last-known evidence while successful sources continue to
 update, and the canvas labels the combined result as partial or stale. Refresh
 attempts are shown separately from the last fully successful synchronization;
 stale or partial data never advances the successful timestamp.
+Non-current repository rosters are fetched from `.squad/team.md` by discovered
+blob OID and cached in the user registry. Unchanged OIDs reuse the cached roster;
+changed OIDs reload it, while malformed or inaccessible replacements retain the
+last valid roster and surface a visible stale-source error.
 When either the GraphQL or REST core rate-limit budget is low, background
-refresh pauses until the limiting budgets reset while the current repository
-continues refreshing.
+refresh pauses until the limiting budgets reset
+while the current repository continues refreshing.
 
 See [the operations architecture](docs/operations-architecture.md) for the
 normalized model, correlation rules, adapter boundary, and compatibility notes.
@@ -129,6 +133,7 @@ npm run test:all
 - `activity-model.mjs` — normalized goals, lifecycle derivation, and evidence correlation
 - `github-activity.mjs` — read-only GitHub/Squad discovery adapter
 - `global-activity.mjs` — user-wide registry, discovery, adaptive refresh, and aggregation
+- `squad-roster.mjs` — shared local and remote Squad roster parsing and normalization
 - `extension.mjs` — canvas provider, persistence, refresh, and legacy storage migration
 - `persisted-state.mjs` — safe normalization of current and legacy persisted state
 - `renderer.mjs` — responsive operations dashboard

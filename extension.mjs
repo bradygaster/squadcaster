@@ -14,6 +14,7 @@ import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 import { GitHubGlobalActivity, normalizeRegistry } from "./global-activity.mjs";
 import { normalizePersistedState } from "./persisted-state.mjs";
 import { renderHtml } from "./renderer.mjs";
+import { normalizeMembers, parseTeamMarkdown } from "./squad-roster.mjs";
 
 const execFileAsync = promisify(execFile);
 const servers = new Map();
@@ -21,38 +22,8 @@ let session;
 let sharedRegistry = null;
 let registryQueue = Promise.resolve();
 
-function slug(value) {
-    return String(value || "")
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "member";
-}
-
 function cleanText(value, maxLength = 12000) {
     return String(value || "").trim().slice(0, maxLength);
-}
-
-function normalizeMembers(members) {
-    const seen = new Set();
-    return (Array.isArray(members) ? members : [])
-        .slice(0, 24)
-        .map((member, index) => {
-            let id = slug(member?.id || member?.name || `member-${index + 1}`);
-            while (seen.has(id)) id = `${id}-${index + 1}`;
-            seen.add(id);
-            return {
-                id,
-                name: cleanText(member?.name || `Member ${index + 1}`, 80),
-                role: cleanText(member?.role || "Specialist", 120),
-                rationale: cleanText(member?.rationale || "", 1200),
-                charter: cleanText(member?.charter || "", 12000),
-                lead: Boolean(member?.lead),
-                reviewer: Boolean(member?.reviewer),
-                charterPath: cleanText(member?.charterPath || "", 320),
-                status: cleanText(member?.status || "Active", 40),
-            };
-        });
 }
 
 function hashKey(value) {
@@ -95,42 +66,13 @@ async function parseTeam(repoRoot) {
     const teamPath = path.join(repoRoot, ".squad", "team.md");
     if (!(await exists(teamPath))) return [];
     const content = await fs.readFile(teamPath, "utf8");
-    const lines = content.split(/\r?\n/);
-    const members = [];
-    let inMembers = false;
-
-    for (const line of lines) {
-        if (/^##\s+Members\b/i.test(line)) {
-            inMembers = true;
-            continue;
-        }
-        if (inMembers && /^##\s+/.test(line)) break;
-        if (!inMembers || !line.trim().startsWith("|")) continue;
-
-        const columns = line.split("|").slice(1, -1).map((column) => column.trim());
-        if (columns.length < 3) continue;
-        if (/^(name|[-:]+)$/i.test(columns[0])) continue;
-
-        const name = columns[0].replaceAll("**", "").trim();
-        const role = columns[1].replaceAll("**", "").trim();
-        const charterMatch = columns[2].match(/`([^`]+)`/);
-        const charterPath = charterMatch?.[1] || "";
-        if (!name || name.startsWith("@")) continue;
-
-        members.push({
-            id: slug(name),
-            name,
-            role,
-            rationale: `Configured in .squad/team.md as ${role}.`,
-            charter: await readCharter(repoRoot, charterPath),
-            charterPath,
-            lead: /\blead\b/i.test(role),
-            reviewer: /quality|review/i.test(role),
-            status: columns[3]?.replace(/[✅📋🔄🤖]/gu, "").trim() || "Active",
+    try {
+        return await parseTeamMarkdown(content, {
+            loadCharter: (charterPath) => readCharter(repoRoot, charterPath),
         });
+    } catch {
+        return [];
     }
-
-    return normalizeMembers(members);
 }
 
 function storageRoot(name) {
