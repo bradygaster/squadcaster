@@ -156,6 +156,141 @@ test("repository discovery preserves exclusions and ignores non-Squad repositori
     assert.equal(global.registry.rateLimit.remaining, 4999);
 });
 
+test("fallback discovery searches each affiliated repository and rejects unrelated results", async () => {
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] === "api") {
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [
+                                    {
+                                        ...repository("octodemo/artifacts"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                    {
+                                        ...repository("octodemo/ordinary"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                ],
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                            },
+                        },
+                    },
+                };
+            }
+            if (args.includes("octodemo/artifacts")) {
+                return [
+                    { repository: { nameWithOwner: "octodemo/artifacts" } },
+                    { repository: { nameWithOwner: "unrelated/public" } },
+                ];
+            }
+            return [{ repository: { nameWithOwner: "unrelated/public" } }];
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.deepEqual(
+        global.registry.repositories.map((candidate) => candidate.nameWithOwner),
+        ["octodemo/artifacts"],
+    );
+    assert.equal(global.registry.repositories[0].squadDetected, true);
+    assert.equal(calls.filter((args) => args[0] === "search").length, 2);
+    assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("--repo")));
+    assert.ok(calls.filter((args) => args[0] === "search").every((args) => args.includes("1")));
+    const discoveryQuery = calls.find((args) => args[0] === "api").find(
+        (argument) => argument.startsWith("query="),
+    );
+    assert.match(discoveryQuery, /affiliations: \[OWNER, COLLABORATOR, ORGANIZATION_MEMBER\]/);
+});
+
+test("fallback discovery keeps every paginated affiliated repository eligible", async () => {
+    const searchCalls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "api") {
+                const cursorIndex = args.indexOf("cursor=page-2");
+                if (cursorIndex >= 0) {
+                    return {
+                        data: {
+                            viewer: {
+                                login: "octocat",
+                                repositories: {
+                                    nodes: [
+                                        {
+                                            ...repository("octodemo/second-page"),
+                                            viewerPermission: "WRITE",
+                                            issues: { totalCount: 0 },
+                                            pullRequests: { totalCount: 0 },
+                                        },
+                                    ],
+                                    pageInfo: { hasNextPage: false, endCursor: null },
+                                },
+                            },
+                        },
+                    };
+                }
+                return {
+                    data: {
+                        viewer: {
+                            login: "octocat",
+                            repositories: {
+                                nodes: [
+                                    {
+                                        ...repository("octodemo/already-detected"),
+                                        viewerPermission: "ADMIN",
+                                        squadSource: { oid: "abc" },
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                    {
+                                        ...repository("octodemo/first-page"),
+                                        viewerPermission: "READ",
+                                        issues: { totalCount: 0 },
+                                        pullRequests: { totalCount: 0 },
+                                    },
+                                ],
+                                pageInfo: { hasNextPage: true, endCursor: "page-2" },
+                            },
+                        },
+                    },
+                };
+            }
+            searchCalls.push(args);
+            assert.ok(args.includes("--repo"), "fallback searches must never use a global result window");
+            return args.includes("octodemo/second-page")
+                ? [{ repository: { nameWithOwner: "OCTODEMO/SECOND-PAGE" } }]
+                : Array.from({ length: 1001 }, () => ({
+                    repository: { nameWithOwner: "unrelated/public" },
+                }));
+        },
+    });
+
+    await global.discoverRepositories({ force: true });
+
+    assert.deepEqual(
+        global.registry.repositories.map((candidate) => candidate.nameWithOwner),
+        ["octodemo/already-detected", "octodemo/second-page"],
+    );
+    assert.equal(global.registry.repositories[1].permission, "write");
+    assert.equal(searchCalls.length, 2);
+    assert.deepEqual(
+        new Set(searchCalls.map((args) => args[args.indexOf("--repo") + 1])),
+        new Set(["octodemo/first-page", "octodemo/second-page"]),
+    );
+});
+
 test("refresh policy gives active repositories a shorter interval", () => {
     assert.ok(refreshPolicy.activeMilliseconds < refreshPolicy.inactiveMilliseconds);
     assert.ok(refreshPolicy.inactiveMilliseconds < refreshPolicy.discoveryMilliseconds);
