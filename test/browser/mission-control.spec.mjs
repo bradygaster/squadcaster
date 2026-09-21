@@ -79,6 +79,7 @@ function fixtureState() {
         goal({ number: 4, phase: "reviewing", title: "Review keyboard drawer behavior", owner: "Reviewer" }),
         goal({ number: 5, phase: "completed", title: "Land semantic theme defaults", repository: "otherdemo/backend" }),
         goal({ number: 6, phase: "blocked", title: "Resolve upstream contract blocker", repository: "otherdemo/backend" }),
+        goal({ number: 7, phase: "completed", title: "Archive a completed-only repository", repository: "archivedemo/archive" }),
     ];
     return {
         mode: "active",
@@ -103,6 +104,13 @@ function fixtureState() {
                     permission: "READ",
                     lastSuccessfulRefresh: "2026-09-20T18:00:00Z",
                 },
+                {
+                    nameWithOwner: "archivedemo/archive",
+                    owner: "archivedemo",
+                    included: true,
+                    permission: "READ",
+                    lastSuccessfulRefresh: "2026-09-20T18:00:00Z",
+                },
             ],
             summary: {
                 active: 5,
@@ -113,7 +121,7 @@ function fixtureState() {
                 blocked: 1,
                 failed: 0,
                 awaitingReview: 1,
-                completed: 1,
+                completed: 2,
             },
             goals,
             errors: [],
@@ -226,8 +234,22 @@ for (const viewport of [
 
         const pipeline = page.getByRole("region", { name: "Factory floor stages" });
         await pipeline.focus();
-        await page.keyboard.press("End");
         await expect(pipeline).toBeFocused();
+        if (viewport.width <= 768) {
+            const beforeScroll = await pipeline.evaluate(element => element.scrollLeft);
+            for (let index = 0; index < 5; index += 1) await page.keyboard.press("Tab");
+            const finalStage = page.locator('[data-action="expand-stage"][data-phase="completed"]');
+            await expect(finalStage).toBeFocused();
+            const [pipelineBox, finalStageBox] = await Promise.all([pipeline.boundingBox(), finalStage.boundingBox()]);
+            const visibleWidth = Math.min(
+                finalStageBox.x + finalStageBox.width,
+                pipelineBox.x + pipelineBox.width,
+            ) - Math.max(finalStageBox.x, pipelineBox.x);
+            expect(visibleWidth / finalStageBox.width).toBeGreaterThanOrEqual(0.75);
+            if (viewport.width <= 375) {
+                await expect.poll(() => pipeline.evaluate(element => element.scrollLeft)).toBeGreaterThan(beforeScroll);
+            }
+        }
     });
 }
 
@@ -361,7 +383,16 @@ test("applies every filter and announces the resulting goal set", async ({ page 
     await expect(page.locator(".pipeline-footer")).toContainText("2 visible");
 
     await owner.selectOption("all");
-    await expect(liveStatus).toHaveText("Showing 6 goals.");
+    await expect(liveStatus).toHaveText("Showing 7 goals.");
+    await expect(page.locator(".pipeline-footer")).toContainText("7 visible");
+
+    await activeOnly.check();
+    await expect(liveStatus).toHaveText("Showing 6 goals filtered by active repositories.");
+    await expect(page.locator(".pipeline-footer")).toContainText("6 visible");
+    await expect(page.locator('[data-action="expand-stage"][data-phase="completed"]')).toContainText("1");
+    await activeOnly.uncheck();
+    await expect(liveStatus).toHaveText("Showing 7 goals.");
+
     await repository.selectOption("otherdemo/backend");
     await expect(liveStatus).toHaveText("Showing 2 goals filtered by otherdemo/backend.");
 
@@ -377,6 +408,22 @@ test("applies every filter and announces the resulting goal set", async ({ page 
     await expect(repository).toHaveValue("otherdemo/backend");
     await expect(activeOnly).toBeChecked();
     await expect(search).toHaveValue("blocker");
+});
+
+test("excludes a repository whose goals are all completed from active-only results", async ({ page }) => {
+    await page.getByText("Browse goals").click();
+    const repository = page.locator('[data-action="repository-filter"]');
+    const activeOnly = page.locator('[data-action="active-repositories"]');
+    const liveStatus = page.locator("#live-status");
+
+    await repository.selectOption("archivedemo/archive");
+    await expect(page.locator(".pipeline-footer")).toContainText("1 visible");
+    await expect(page.locator('[data-action="expand-stage"][data-phase="completed"]')).toContainText("1");
+
+    await activeOnly.check();
+    await expect(liveStatus).toHaveText("Showing 0 goals filtered by archivedemo/archive, active repositories.");
+    await expect(page.locator(".pipeline-footer")).toContainText("0 visible");
+    await expect(page.getByRole("heading", { name: "No goals found." })).toBeVisible();
 });
 
 test("recovers safely when a live update removes the open goal", async ({ page }) => {
