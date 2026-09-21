@@ -68,7 +68,11 @@ active repositories every minute, and inactive repositories every ten minutes.
 Repository discovery refreshes every fifteen minutes. The browser remains bound
 to `127.0.0.1` on an ephemeral port. The canvas follows the operating system's
 light or dark color preference by default and uses the host canvas semantic
-theme tokens when available.
+theme tokens when available. Background refreshes preserve the focused control,
+filter text and caret, selected stage, open disclosures and goal drawer, and
+document, pipeline, repository-list, and drawer scroll positions. Dense stage
+and evidence collections keep authoritative totals while bounding the rendered
+DOM; narrow the existing filters to inspect items outside the displayed window.
 
 If Squad is not detected, the canvas links to the Squad installation guidance.
 Once installed, the repository-owned roster is shown as secondary operational
@@ -131,7 +135,7 @@ speech output or user-specific zoom and font settings.
 - `global-activity.mjs` — user-wide registry, discovery, adaptive refresh, and aggregation
 - `extension.mjs` — canvas provider, persistence, refresh, and legacy tool compatibility
 - `renderer.mjs` — responsive operations dashboard
-- `test/` — model and degraded-source tests using Node's built-in test runner
+- `test/` — model, degraded-source, renderer, and production-scale stress fixtures using Node's built-in test runner
 - `copilot-extension.json` — extension install and share manifest
 
 ## License

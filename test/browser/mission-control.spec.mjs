@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { expect, test } from "@playwright/test";
 import { renderHtml } from "../../renderer.mjs";
+import { createStressCanvasState } from "../fixtures/stress-activity.mjs";
 
 function goal({
     number,
@@ -441,6 +442,66 @@ test("recovers safely when a live update removes the open goal", async ({ page }
     await expect(page.locator("body")).not.toHaveCSS("overflow", "hidden");
     await expect(page.getByRole("region", { name: "Factory floor stages" })).toBeFocused();
     await expect(page.locator("#live-status")).toHaveText("The selected goal is no longer visible. Goal details closed.");
+});
+
+test("preserves keyed scroll state while bounding production-scale collections", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    const stressState = createStressCanvasState();
+    for (const item of stressState.activity.goals) item.phase = "implementing";
+    stressState.activity.summary = {
+        active: stressState.activity.goals.length,
+        queued: 0,
+        blocked: 0,
+        failed: 0,
+        awaitingReview: 0,
+        implementing: stressState.activity.goals.length,
+        researching: 0,
+        completed: 0,
+    };
+    fixture.emit(stressState);
+
+    await expect(page.locator(".evidence-count")).toHaveText("4200");
+    await expect(page.locator(".activity-item")).toHaveCount(100);
+    await expect(page.getByText("Showing the newest 100 of 4200 evidence events.")).toBeVisible();
+    const olderActivity = page.locator("details.activity-more");
+    await expect(olderActivity.getByText("Show 88 older events")).toBeVisible();
+    await olderActivity.locator("summary").click();
+
+    const pipeline = page.getByRole("region", { name: "Factory floor stages" });
+    await pipeline.focus();
+    for (let index = 0; index < 5; index += 1) await page.keyboard.press("Tab");
+    const pipelineScrollLeft = await pipeline.evaluate(element => element.scrollLeft);
+    expect(pipelineScrollLeft).toBeGreaterThan(0);
+
+    fixture.emit(stressState);
+    await expect(olderActivity).toHaveAttribute("open", "");
+    await expect(pipeline).toHaveJSProperty("scrollLeft", pipelineScrollLeft);
+
+    await page.locator('[data-action="expand-stage"][data-phase="implementing"]').click();
+    await expect(page.locator(".stage-goals .goal-trigger")).toHaveCount(80);
+    await expect(page.getByText("Showing the first 80 of 140 matching goals.")).toBeVisible();
+    await expect(page.locator(".run-row")).toHaveCount(80);
+    await expect(page.getByText("Showing the newest 80 of 280 active workflow runs.")).toBeVisible();
+    const stageScrollLeft = await pipeline.evaluate(element => element.scrollLeft);
+
+    await page.locator(".stage-goals .goal-trigger").first().click();
+    const drawer = page.getByRole("dialog");
+    const drawerBody = page.locator(".drawer-body");
+    await expect(drawer).toBeVisible();
+    await expect(page.locator(".topbar")).toHaveAttribute("inert", "");
+    await drawerBody.evaluate(element => {
+        element.scrollTop = 240;
+    });
+    const drawerScrollTop = await drawerBody.evaluate(element => element.scrollTop);
+    expect(drawerScrollTop).toBeGreaterThan(0);
+
+    fixture.emit(stressState);
+
+    await expect(drawer).toBeVisible();
+    await expect(page.getByRole("button", { name: "Close goal details" })).toBeFocused();
+    await expect(page.locator(".topbar")).toHaveAttribute("inert", "");
+    await expect(drawerBody).toHaveJSProperty("scrollTop", drawerScrollTop);
+    await expect(pipeline).toHaveJSProperty("scrollLeft", stageScrollLeft);
 });
 
 test("announces refresh completion without replacing the persistent status region", async ({ page }) => {
