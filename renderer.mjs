@@ -2286,6 +2286,7 @@ export function renderHtml() {
           handoffProbePending = true;
           render();
           try {
+            await post("/api/refresh");
             const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(probeGoalId)}&refresh=1\`, { cache: "no-store" });
             const nextState = await response.json();
             if (!response.ok) throw new Error(nextState.error || "Handoff refresh failed.");
