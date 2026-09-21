@@ -30,6 +30,8 @@ const FAILURE_CONCLUSIONS = new Set([
     "action_required",
 ]);
 const ACTIVE_RUN_STATUSES = new Set(["queued", "in_progress", "waiting", "requested", "pending"]);
+const CAST_PULL_REQUEST_STATES = new Set(["open", "closed", "merged"]);
+const RESEARCH_ISSUE_STATES = new Set(["open", "closed"]);
 const SOURCE_STATUSES = new Set(["fresh", "stale", "unavailable"]);
 const RESEARCH_KEYS = ["origin_issue", "phases", "schema_version", "squad_artifact"];
 const DEFAULT_DELAY_MS = 15 * 60 * 1000;
@@ -346,6 +348,7 @@ function candidateSets({ pullRequests, issues, comments, repository }) {
     }
     for (const pullRequest of castCandidates) {
         if (
+            !CAST_PULL_REQUEST_STATES.has(pullRequest.state) ||
             pullRequest.branch !== BOOTSTRAP_IDENTIFIERS.castBranch ||
             pullRequest.title !== BOOTSTRAP_IDENTIFIERS.castPullRequestTitle ||
             pullRequest.baseBranch !== repository.defaultBranch
@@ -372,6 +375,7 @@ function candidateSets({ pullRequests, issues, comments, repository }) {
     for (const issue of issueCandidates) {
         if (
             !isPositiveInteger(issue.number) ||
+            !RESEARCH_ISSUE_STATES.has(issue.state) ||
             issue.title !== BOOTSTRAP_IDENTIFIERS.researchIssueTitle ||
             occurrenceCount(issue.body, BOOTSTRAP_IDENTIFIERS.researchIssueMarker) !== 1
         ) {
@@ -436,6 +440,7 @@ export function selectAutomaticBootstrapCandidates({
         repository: normalizedRepository,
     });
     const canonicalCastPullRequest = candidates.castCandidates.length === 1 &&
+        CAST_PULL_REQUEST_STATES.has(candidates.castCandidates[0].state) &&
         candidates.castCandidates[0].branch === BOOTSTRAP_IDENTIFIERS.castBranch &&
         candidates.castCandidates[0].title === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
         candidates.castCandidates[0].baseBranch === normalizedRepository.defaultBranch
@@ -443,6 +448,7 @@ export function selectAutomaticBootstrapCandidates({
         : null;
     const canonicalResearchIssue = candidates.issueCandidates.length === 1 &&
         isPositiveInteger(candidates.issueCandidates[0].number) &&
+        RESEARCH_ISSUE_STATES.has(candidates.issueCandidates[0].state) &&
         candidates.issueCandidates[0].title === BOOTSTRAP_IDENTIFIERS.researchIssueTitle &&
         occurrenceCount(
             candidates.issueCandidates[0].body,

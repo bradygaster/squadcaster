@@ -231,6 +231,8 @@ test("uses exact delay boundaries for active attempts and installed workflows", 
 
 test("validates exact Cast and research issue identity across all states", () => {
     for (const pullRequest of [
+        castPullRequest({ state: undefined }),
+        castPullRequest({ state: "UNKNOWN" }),
         castPullRequest({ title: "Cast your Squad" }),
         castPullRequest({ headRefName: "squad/bootstrap" }),
         castPullRequest({ baseRefName: "release" }),
@@ -241,6 +243,8 @@ test("validates exact Cast and research issue identity across all states", () =>
         })).status, "malformed");
     }
     for (const issue of [
+        researchIssue({ state: undefined }),
+        researchIssue({ state: "UNKNOWN" }),
         researchIssue({ title: "Research proposals" }),
         researchIssue({ body: "missing marker" }),
         researchIssue({
