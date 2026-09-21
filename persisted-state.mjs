@@ -110,10 +110,15 @@ function normalizeActivation(value, expectedRepository, expectedIssueNumber) {
     const issueNumber = value.issueNumber;
     const epicIssueNumber = value.epicIssueNumber;
     const rootIssueNumber = value.rootIssueNumber;
-    const epicAgents = Array.isArray(value.epicAgents)
-        ? value.epicAgents.map(String).filter(Boolean)
+    const identityFieldsAreStrings = ["task", "epic", "agent"]
+        .every((field) => typeof value[field] === "string" && value[field].trim());
+    const epicAgents = Array.isArray(value.epicAgents) &&
+        value.epicAgents.every((agent) => typeof agent === "string" && agent.trim())
+        ? value.epicAgents.map((agent) => agent.trim())
         : [];
-    const normalizedAgent = String(value.agent || "").trim().toLowerCase();
+    const normalizedAgent = typeof value.agent === "string"
+        ? value.agent.trim().toLowerCase()
+        : "";
     const normalizedEpicAgents = epicAgents.map((agent) => agent.toLowerCase());
     const valid = value.schemaVersion === "1" &&
         ["activated", "phases-activated", "plan-accepted", "phases-accepted"]
@@ -129,8 +134,7 @@ function normalizeActivation(value, expectedRepository, expectedIssueNumber) {
         qualifiedIssueMatches(value.issue, expectedRepository, issueNumber) &&
         qualifiedIssueMatches(value.epicIssue, expectedRepository, epicIssueNumber) &&
         qualifiedIssueMatches(value.rootIssue, expectedRepository, rootIssueNumber) &&
-        Boolean(String(value.task || "").trim()) &&
-        Boolean(String(value.epic || "").trim()) &&
+        identityFieldsAreStrings &&
         Boolean(normalizedAgent) &&
         epicAgents.length > 0 &&
         new Set(normalizedEpicAgents).size === epicAgents.length &&

@@ -905,6 +905,54 @@ test("links generated implementation goals only from validated activation bindin
     assert.ok(taskIdentityCollision.evidence.some((item) =>
         item.kind === "bootstrap-diagnostic" &&
         item.code === "conflicting-generated-goal"));
+
+    const normalizedOmissionRoot = goalIssue(6, root.title, [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("activated", {
+            bindings: [{
+                ...bindings[0],
+                label: "",
+                epic_label: "",
+                omission_reason: "NON-ROSTER",
+                epic_omission_reason: "NON-ROSTER",
+            }],
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const normalizedOmission = snapshotWithBootstrap({
+        issues: [
+            normalizedOmissionRoot,
+            goalIssue(20, "Epic 1.1", ["squad"]),
+            goalIssue(21, "Implement the feature", ["squad"]),
+        ],
+        bootstrap: snapshot.bootstrap,
+    }).goals.find((goal) => goal.issue.number === 6);
+    assert.deepEqual(
+        normalizedOmission.bootstrap.generatedGoals.map((goal) => goal.issueNumber),
+        [20, 21],
+    );
+
+    const malformedIdentityRoot = goalIssue(6, root.title, [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("activated", {
+            bindings: [{
+                ...bindings[0],
+                task: { id: "1" },
+                epic: ["1.1"],
+                agent: 7,
+                epic_agents: [7],
+            }],
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const malformedIdentity = snapshotWithBootstrap({
+        issues: [malformedIdentityRoot, epic, taskIssue],
+        bootstrap: snapshot.bootstrap,
+    }).goals.find((goal) => goal.issue.number === 6);
+    assert.deepEqual(malformedIdentity.bootstrap.generatedGoals, []);
+    assert.ok(malformedIdentity.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "invalid-activation-binding"));
 });
 
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {

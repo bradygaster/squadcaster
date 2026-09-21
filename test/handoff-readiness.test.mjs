@@ -495,6 +495,23 @@ test("activation identity collisions fail the whole envelope closed", () => {
         repository: "octodemo/demo",
     });
 
+    test("activation identity fields require raw strings", () => {
+        const issues = readyIssues();
+        issues[0].comments = [activationComment([binding({
+            task: { id: "3" },
+            epic: ["2.1"],
+            agent: 7,
+            epic_agents: [7],
+        })])];
+        const evidence = parseActivationEvidence({
+            issues,
+            repository: "octodemo/demo",
+        });
+
+        assert.equal(evidence.get(12).activation, null);
+        assert.match(evidence.get(12).errors.join(" "), /must be strings/i);
+    });
+
     assert.equal(taskEvidence.get(12).activation, null);
     assert.equal(taskEvidence.get(13).activation, null);
     assert.match(

@@ -112,6 +112,21 @@ function validateBinding(raw, repository, issueByNumber) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
         return { error: "Activation binding is not an object." };
     }
+    if (
+        typeof raw.task !== "string" ||
+        typeof raw.epic !== "string" ||
+        typeof raw.agent !== "string" ||
+        !Array.isArray(raw.epic_agents) ||
+        !raw.epic_agents.every((value) =>
+            typeof value === "string" && value.trim()) ||
+        !["label", "epic_label", "omission_reason", "epic_omission_reason"]
+            .every((field) =>
+                raw[field] === undefined ||
+                raw[field] === null ||
+                typeof raw[field] === "string")
+    ) {
+        return { error: "Activation binding identity and ownership fields must be strings." };
+    }
     if (unresolvedReference(raw.issue)) {
         return { error: `Activation binding issue ${clean(raw.issue)} is unresolved.` };
     }
@@ -127,9 +142,7 @@ function validateBinding(raw, repository, issueByNumber) {
     const task = clean(raw.task, 80);
     const epic = clean(raw.epic, 80);
     const agent = clean(raw.agent, 160);
-    const epicAgents = Array.isArray(raw.epic_agents)
-        ? raw.epic_agents.map((value) => normalized(value)).filter(Boolean)
-        : [];
+    const epicAgents = raw.epic_agents.map((value) => normalized(value)).filter(Boolean);
     if (!task) return { error: `Activation binding for #${number} has no task identifier.` };
     if (!epic) return { error: `Activation binding for #${number} has no epic identifier.` };
     if (!agent) return { error: `Activation binding for #${number} has no agent.` };

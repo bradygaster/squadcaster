@@ -724,7 +724,8 @@ function validatesReportedLabel(goal, label, omission) {
     if (!labels.has("squad")) return false;
     const agentLabels = [...labels].filter((candidate) => candidate.startsWith("squad:"));
     if (label) return agentLabels.length === 1 && agentLabels[0] === text(label, 120).toLowerCase();
-    return ["multi-owner", "non-roster"].includes(omission) && agentLabels.length === 0;
+    return ["multi-owner", "non-roster"].includes(text(omission, 80).toLowerCase()) &&
+        agentLabels.length === 0;
 }
 
 function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
@@ -751,14 +752,27 @@ function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
         if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
             return { valid: false, goals: [], reason: "invalid-activation-binding" };
         }
+        if (
+            typeof binding.task !== "string" ||
+            typeof binding.epic !== "string" ||
+            typeof binding.agent !== "string" ||
+            !Array.isArray(binding.epic_agents) ||
+            !binding.epic_agents.every((value) =>
+                typeof value === "string" && value.trim()) ||
+            !["label", "epic_label", "omission_reason", "epic_omission_reason"]
+                .every((field) =>
+                    binding[field] === undefined ||
+                    binding[field] === null ||
+                    typeof binding[field] === "string")
+        ) {
+            return { valid: false, goals: [], reason: "invalid-activation-binding" };
+        }
         const issueNumber = resolveIssueNumber(binding.issue);
         const epicIssueNumber = resolveIssueNumber(binding.epic_issue);
         const task = text(binding.task, 80);
         const epic = text(binding.epic, 80);
         const agent = normalizedAgent(binding.agent);
-        const epicAgents = Array.isArray(binding.epic_agents)
-            ? binding.epic_agents.map(normalizedAgent).filter(Boolean)
-            : [];
+        const epicAgents = binding.epic_agents.map(normalizedAgent).filter(Boolean);
         const uniqueEpicAgents = [...new Set(epicAgents)].sort();
         if (!issueNumber ||
             !epicIssueNumber ||
