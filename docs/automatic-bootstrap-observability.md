@@ -250,6 +250,37 @@ Each implementation must include fixture coverage for every status, precedence
 case, retry history, stale-source retention, exact links, and the absence of
 GitHub mutation commands or routes.
 
+### Classifier contract
+
+The first implementation boundary is provided by
+`classifyAutomaticBootstrap` in `bootstrap-classifier.mjs`.
+`selectAutomaticBootstrapCandidates` exposes the same exact pull-request and
+issue identity validation so discovery can identify the unique canonical
+research issue before fetching its comments without duplicating contract
+logic. Both functions are pure and repository-scoped. Classifier callers
+provide one repository's complete all-state pull-request and issue candidate
+sets, the comments for the unique research issue when present, canonical
+workflow runs, installed workflow metadata, independent source freshness, and
+an optional prior classification. Neither function performs discovery,
+persistence, rendering, or GitHub mutation.
+
+The result uses schema version 1 and includes the derived `status`, ordered
+workflow-attempt history, canonical artifacts when uniquely valid, all
+diagnostic `reasons`, unsupported research envelopes, ignored non-canonical
+research envelopes, and the source states used for the decision. Unsupported
+research schemas remain observable but cannot satisfy the schema-1 research
+requirement. A stale or unavailable required source retains the supplied prior
+classification and marks it stale; without a prior classification the result
+is `unknown`. A fully fresh repository with no canonical workflow, run, or
+artifact is also `unknown`, rather than incorrectly claiming bootstrap is
+pending.
+
+Delay classification is deterministic. A queued or in-progress canonical run
+is delayed at 15 minutes without a change. An installed canonical workflow
+with no run or artifacts is delayed after one caller-supplied repository
+discovery interval plus 15 minutes. Callers may override these durations for
+tests, but production consumers should use their actual discovery interval.
+
 ## Upstream references
 
 - [bradygaster/squad#2041](https://github.com/bradygaster/squad/pull/2041) —
