@@ -35,6 +35,7 @@ in-browser filters. GitHub and repository content remain read-only.
 - Pull requests linked by closing references or Squad's durable implementation marker and branch convention
 - Actions runs correlated by issue or implementation branch
 - Current checks, dependencies, next actions, and an expandable evidence timeline
+- Persisted lifecycle transitions observed by Squadcaster after history is enabled
 - Partial-sync warnings while retaining the last known goal state when issue discovery is unavailable
 
 Every conclusion links to its source on GitHub. Relationships inferred from
@@ -42,6 +43,14 @@ branch or run metadata are explicitly marked `inferred`; missing ownership and
 other ambiguous data remain `Unknown`. The canvas follows the operating
 system's light or dark color preference by default and uses semantic theme
 tokens for both schemes.
+
+Lifecycle history is observation-only. The first eligible refresh establishes a
+baseline and is not a transition. A later complete or explicitly partial
+refresh appends `from`, `to`, repository and goal identity, source freshness,
+and the Squadcaster observation time only when the normalized phase changes.
+The UI labels that time as an observation; it is never presented as the time
+GitHub or Squad performed the transition, and no issue, pull request, check,
+artifact, or workflow timestamp is used to backfill earlier history.
 
 ## Install
 
@@ -145,6 +154,7 @@ npm run test:all
 - `activity-model.mjs` — normalized goals, lifecycle derivation, and evidence correlation
 - `github-activity.mjs` — read-only GitHub/Squad discovery adapter
 - `global-activity.mjs` — user-wide registry, discovery, adaptive refresh, and aggregation
+- `lifecycle-history.mjs` — observation-only lifecycle history, migration, retention, and exclusion gaps
 - `squad-roster.mjs` — shared local and remote Squad roster parsing and normalization
 - `extension.mjs` — canvas provider, persistence, refresh, and legacy storage migration
 - `persisted-state.mjs` — safe normalization of current and legacy persisted state

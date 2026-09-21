@@ -171,6 +171,9 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.doesNotMatch(html, /Agents:|No assigned agents/);
     assert.match(html, /Observed correlation/);
     assert.match(html, /Inferred correlation/);
+    assert.match(html, /Observed lifecycle history/);
+    assert.match(html, /not when GitHub or Squad performed it/);
+    assert.match(html, /source observation/);
     assert.match(html, /last fully synced/);
     assert.match(html, /refresh attempted/);
     assert.doesNotMatch(html, /Last successful snapshot/);

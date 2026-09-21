@@ -30,6 +30,12 @@ test("normalizes legacy state without restoring mutation fields", () => {
     assert.equal(normalized.activity.fetchedAt, activity.fetchedAt);
     assert.equal(normalized.activity.goals[0].id, activity.goals[0].id);
     assert.deepEqual(normalized.activity.goals[0].pullRequests, []);
+    assert.deepEqual(normalized.activity.goals[0].lifecycleHistory, {
+        incompleteBeforeFirstObservation: true,
+        firstObservedAt: null,
+        lastObservedAt: null,
+        transitions: [],
+    });
     assert.equal("signals" in normalized, false);
     assert.equal("summary" in normalized, false);
     assert.equal("members" in normalized, false);
