@@ -648,7 +648,7 @@ export function renderHtml() {
       align-items: start;
     }
     .mission-layout > * { min-width: 0; }
-    .pipeline-panel, .activity-panel, .exceptions {
+    .pipeline-panel, .activity-panel {
       min-width: 0;
       overflow: hidden;
       border: 1px solid var(--border);
@@ -799,13 +799,53 @@ export function renderHtml() {
     .stage-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
     .stage-detail-heading h3 { text-transform: capitalize; }
     .stage-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 9px; margin-top: 12px; }
-    .exceptions { margin-top: 14px; }
-    .exception-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px; }
-    .exception-lane { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 7px; }
-    .exception-lane.danger { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
-    .exception-lane.danger h3 { color: var(--danger); }
-    .exception-lane h3 { display: flex; justify-content: space-between; gap: 8px; }
-    .exception-lane .stage-goals { grid-template-columns: 1fr; }
+    .runs-panel {
+      overflow: hidden;
+      margin-top: 14px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--bg);
+    }
+    .run-list { margin: 0; padding: 0; list-style: none; }
+    .run-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 68px;
+      padding: 11px 14px;
+      border-top: 1px solid var(--border);
+      color: var(--text);
+      text-decoration: none;
+    }
+    .run-row:first-child { border-top: 0; }
+    .run-row:hover { background: var(--soft); text-decoration: none; }
+    .run-indicator {
+      width: 15px;
+      height: 15px;
+      border: 2px dashed var(--warning);
+      border-radius: 50%;
+    }
+    .run-main { min-width: 0; }
+    .run-name { overflow: hidden; font-weight: var(--font-weight-semibold, 600); text-overflow: ellipsis; white-space: nowrap; }
+    .run-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px 7px;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .run-repository { color: var(--text); font-weight: var(--font-weight-semibold, 600); }
+    .run-branch {
+      padding: 0 5px;
+      border-radius: 5px;
+      background: color-mix(in srgb, var(--focus) 13%, var(--bg));
+      color: var(--focus);
+      font-family: var(--mono);
+    }
+    .run-side { min-width: 112px; color: var(--muted); font-size: 11px; text-align: right; }
+    .run-side strong { display: block; color: var(--warning); font-weight: var(--font-weight-semibold, 600); text-transform: capitalize; }
     .activity-panel { position: sticky; top: 14px; }
     .activity-stream { margin: 0; padding: 0; list-style: none; }
     .activity-item { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 9px; padding: 11px 14px; border-top: 1px solid var(--border); }
@@ -997,7 +1037,8 @@ export function renderHtml() {
       .goal-details-body { grid-template-columns: 1fr; }
       .mission-layout { grid-template-columns: 1fr; }
       .activity-panel { position: static; }
-      .exception-grid { grid-template-columns: 1fr; }
+      .run-row { grid-template-columns: 18px minmax(0, 1fr); }
+      .run-side { grid-column: 2; min-width: 0; text-align: left; }
     }
     @media (max-width: 1040px) and (min-width: 901px) {
       .pipeline {
@@ -1615,15 +1656,46 @@ export function renderHtml() {
         </section>\`;
     }
 
-    function exceptionLaneHtml(phase, goals) {
-      const laneGoals = goals.filter(goal => goal.phase === phase);
+    function activeWorkflowRunsHtml(goals) {
+      const runs = [...new Map(goals.flatMap(goal =>
+        (goal.workflowRuns || [])
+          .filter(run => run.status !== "completed")
+          .map(run => {
+            const key = run.id || run.url || \`\${run.workflow}:\${run.branch}:\${run.createdAt}\`;
+            return [key, { run, goal }];
+          })
+      )).values()].sort((left, right) =>
+        String(right.run.updatedAt || right.run.createdAt || "").localeCompare(
+          String(left.run.updatedAt || left.run.createdAt || "")
+        ));
       return \`
-        <section class="exception-lane danger" aria-labelledby="\${phase}-title">
-          <h3 id="\${phase}-title"><span>\${esc(phase)}</span><span>\${laneGoals.length}</span></h3>
-          <p class="help">\${phase === "blocked" ? "Dependencies or an explicit blocker need attention." : "A workflow or required check has failed."}</p>
-          <div class="stage-goals">
-            \${laneGoals.length ? laneGoals.map(goal => goalTriggerHtml(goal)).join("") : '<p class="help">No goals need attention.</p>'}
+        <section class="runs-panel" aria-labelledby="runs-title">
+          <div class="panel-header">
+            <div><h2 id="runs-title">\${runs.length} workflow run\${runs.length === 1 ? "" : "s"} in progress</h2></div>
           </div>
+          \${runs.length ? \`
+            <ol class="run-list">
+              \${runs.map(({ run, goal }) => \`
+                <li>
+                  <a class="run-row" href="\${esc(run.url || goal.issue.url)}" target="_blank" rel="noreferrer">
+                    <span class="run-indicator" aria-hidden="true"></span>
+                    <span class="run-main">
+                      <span class="run-name">\${esc(run.name || run.workflow || "Workflow run")}</span>
+                      <span class="run-meta">
+                        <span class="run-repository">\${esc(goal.repository.nameWithOwner)}</span>
+                        <span>#\${esc(goal.issue.number)}</span>
+                        \${run.branch ? \`<span class="run-branch">\${esc(run.branch)}</span>\` : ""}
+                        <span>\${esc(goal.owner?.name || "Unknown owner")}</span>
+                      </span>
+                    </span>
+                    <span class="run-side">
+                      <strong>\${esc(String(run.status || "in progress").replaceAll("_", " "))}</strong>
+                      <span>updated \${esc(formatTime(run.updatedAt || run.createdAt))}</span>
+                    </span>
+                  </a>
+                </li>\`).join("")}
+            </ol>\`
+            : '<p class="help" style="padding:16px">No workflow runs are currently in progress for the visible goals.</p>'}
         </section>\`;
     }
 
@@ -1893,16 +1965,7 @@ export function renderHtml() {
                 \${stageDetailHtml(goals)}
                 <div class="pipeline-footer"><span>Select a stage to inspect its goals. Blocked and failed work stays separate.</span><span>\${goals.length} visible</span></div>
               </section>
-              <section class="exceptions" aria-labelledby="exceptions-title">
-                <div class="panel-header">
-                  <div><h2 id="exceptions-title">Needs attention</h2><p>Exceptions are separated from forward lifecycle stages.</p></div>
-                  <span class="evidence-count">\${goals.filter(goal => goal.phase === "blocked" || goal.phase === "failed").length}</span>
-                </div>
-                <div class="exception-grid">
-                  \${exceptionLaneHtml("blocked", goals)}
-                  \${exceptionLaneHtml("failed", goals)}
-                </div>
-              </section>
+              \${activeWorkflowRunsHtml(goals)}
               \${goals.length ? "" : \`
                 <section class="empty" style="margin-top:14px">
                   <h2>\${phaseFilter === "all" ? "No goals found." : "No " + esc(phaseFilter) + " goals found."}</h2>
