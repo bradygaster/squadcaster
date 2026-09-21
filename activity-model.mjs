@@ -248,8 +248,12 @@ function activationBindings(body) {
     const matches = [...String(body || "").matchAll(
         /Activation bindings:\s*```json\s*([\s\S]*?)```/gi,
     )];
-    if (matches.length === 0) return { bindings: null, error: "missing-activation-bindings" };
-    if (matches.length > 1) return { bindings: null, error: "duplicate-activation-bindings" };
+    if (matches.length === 0) {
+        return { bindings: null, error: "missing-activation-bindings" };
+    }
+    if (matches.length > 1) {
+        return { bindings: null, error: "duplicate-activation-bindings" };
+    }
     try {
         const bindings = JSON.parse(matches[0][1]);
         return Array.isArray(bindings) && bindings.length > 0
@@ -949,6 +953,43 @@ function lifecycleSummary(goals) {
     };
 }
 
+function confirmedCanonicalCastPullRequest({ bootstrap, sourceState, repository }) {
+    if (
+        !bootstrap?.castPullRequest ||
+        ["ambiguous", "malformed", "unknown"].includes(bootstrap.status)
+    ) {
+        return null;
+    }
+    const pullRequestSource = sourceState?.bootstrap?.pullRequests;
+    if (
+        pullRequestSource?.status !== "fresh" ||
+        pullRequestSource.exhaustive !== true ||
+        pullRequestSource.truncated !== false
+    ) {
+        return null;
+    }
+    const defaultBranch = text(
+        repository?.defaultBranchRef?.name || repository?.defaultBranch,
+        240,
+    );
+    const candidates = (pullRequestSource.data || []).filter((pullRequest) =>
+        text(pullRequest?.headRefName || pullRequest?.head?.ref, 240) ===
+            BOOTSTRAP_IDENTIFIERS.castBranch &&
+        text(pullRequest?.title, 240) === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
+        text(pullRequest?.baseRefName || pullRequest?.base?.ref, 240) === defaultBranch);
+    if (candidates.length !== 1) return null;
+    const candidate = candidates[0];
+    const canonical = bootstrap.castPullRequest;
+    const sameIdentity = (
+        canonical.number &&
+        Number(candidate?.number) === canonical.number
+    ) || (
+        canonical.url &&
+        text(candidate?.url || candidate?.html_url, 500) === canonical.url
+    );
+    return sameIdentity ? canonical : null;
+}
+
 export function integrateAutomaticBootstrapSnapshot(snapshot) {
     const bootstrap = snapshot?.bootstrap;
     if (!bootstrap || !BOOTSTRAP_STATUSES.includes(bootstrap.status)) return snapshot;
@@ -969,64 +1010,6 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         Number.isInteger(researchIssueNumber)
         ? goalsByNumber.get(researchIssueNumber)
         : null;
-    const canonicalCastPullRequest = bootstrap.castPullRequest;
-    const defaultBranch = text(
-        snapshot.repository?.defaultBranchRef?.name || snapshot.repository?.defaultBranch,
-        240,
-    );
-    const suppressCanonicalCast = canonicalCastPullRequest &&
-        !["ambiguous", "malformed"].includes(bootstrap.status) &&
-        canonicalCastPullRequest.branch === BOOTSTRAP_IDENTIFIERS.castBranch &&
-        canonicalCastPullRequest.title === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
-        canonicalCastPullRequest.baseBranch === defaultBranch;
-    if (suppressCanonicalCast) {
-        const matchesCanonicalCast = (pullRequest) =>
-            (
-                canonicalCastPullRequest.number &&
-                pullRequest.number === canonicalCastPullRequest.number
-            ) ||
-            (
-                canonicalCastPullRequest.url &&
-                pullRequest.url === canonicalCastPullRequest.url
-            );
-        for (const goal of goals) {
-            const remainingPullRequests = goal.pullRequests.filter((pullRequest) =>
-                !matchesCanonicalCast(pullRequest));
-            if (remainingPullRequests.length === goal.pullRequests.length) continue;
-            goal.pullRequests = remainingPullRequests;
-            goal.workItems = goal.workItems.filter((workItem) =>
-                !matchesCanonicalCast(workItem.pullRequest));
-            goal.evidence = goal.evidence.filter((item) =>
-                item.kind !== "pull-request" ||
-                item.url !== canonicalCastPullRequest.url);
-            goal.phaseWithoutBlockers = phaseFor({
-                issue: goal.issue,
-                artifacts: goal.artifacts,
-                pullRequests: goal.pullRequests,
-                workflowRuns: goal.workflowRuns,
-                blockers: [],
-                ignoreBlockers: true,
-            });
-            goal.phase = phaseFor({
-                issue: goal.issue,
-                artifacts: goal.artifacts,
-                pullRequests: goal.pullRequests,
-                workflowRuns: goal.workflowRuns,
-                blockers: goal.blockers,
-            });
-            goal.nextAction = nextActionFor(
-                goal.phase,
-                goal.pullRequests,
-                goal.workflowRuns,
-                goal.artifacts,
-            );
-            goal.updatedAt = latestTimestamp([
-                goal.issue.updatedAt,
-                ...goal.pullRequests.map((pullRequest) => pullRequest.updatedAt),
-                ...goal.workflowRuns.map((run) => run.updatedAt),
-            ]);
-        }
-    }
     if (rootGoal) {
         const artifactKey = (artifact) => [
             artifact.kind,
@@ -1041,29 +1024,41 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         const commentsAreAuthoritative = commentsSource?.status === "fresh" &&
             commentsSource.exhaustive === true &&
             commentsSource.truncated === false;
-        if (commentsSource) {
-            const classifiedResearch = bootstrap.researchArtifact;
-            rootGoal.artifacts = rootGoal.artifacts.map((artifact) => ({
-                ...artifact,
-                advancing: commentsAreAuthoritative || Boolean(
-                    classifiedResearch &&
-                    artifact.kind === BOOTSTRAP_IDENTIFIERS.researchArtifactKind &&
-                    artifact.schemaVersion === classifiedResearch.schemaVersion &&
-                    artifact.originIssue === researchIssueNumber &&
-                    artifact.createdAt === classifiedResearch.createdAt
-                ),
-            }));
-        }
         const discoveredArtifacts = parseArtifacts(
             commentsSource?.data,
             researchIssueNumber,
-        ).map((artifact) => ({
+        );
+        const discoveredArtifactKeys = new Set(discoveredArtifacts.map(artifactKey));
+        const retainedResearchArtifact = bootstrap.researchArtifact;
+        const retainedResearchCandidates = rootGoal.artifacts.filter((artifact) =>
+            retainedResearchArtifact &&
+            artifact.kind === BOOTSTRAP_IDENTIFIERS.researchArtifactKind &&
+            artifact.schemaVersion === String(retainedResearchArtifact.schemaVersion) &&
+            artifact.originIssue === Number(retainedResearchArtifact.originIssue) &&
+            artifact.url === retainedResearchArtifact.url &&
+            artifact.validation === "supported");
+        const retainedResearchKey = retainedResearchCandidates.length === 1
+            ? artifactKey(retainedResearchCandidates[0])
+            : "";
+        rootGoal.artifacts = rootGoal.artifacts.map((artifact) => ({
             ...artifact,
-            advancing: commentsAreAuthoritative,
+            advancing: Boolean((
+                commentsAreAuthoritative &&
+                discoveredArtifactKeys.has(artifactKey(artifact))
+            ) || (
+                retainedResearchKey &&
+                artifactKey(artifact) === retainedResearchKey
+            )),
         }));
         const addedArtifacts = discoveredArtifacts
             .filter((artifact) => !existingArtifactKeys.has(artifactKey(artifact)));
-        rootGoal.artifacts = [...rootGoal.artifacts, ...addedArtifacts]
+        rootGoal.artifacts = [
+            ...rootGoal.artifacts,
+            ...addedArtifacts.map((artifact) => ({
+                ...artifact,
+                advancing: commentsAreAuthoritative,
+            })),
+        ]
             .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
         rootGoal.phaseWithoutBlockers = phaseFor({
             issue: rootGoal.issue,
@@ -1167,6 +1162,7 @@ export function buildActivitySnapshot({
     copilotTasks = {},
     localSessions = {},
     mechanismAvailability = {},
+    bootstrap = null,
     fetchedAt = new Date().toISOString(),
 } = {}) {
     const normalizedSources = {
@@ -1190,10 +1186,62 @@ export function buildActivitySnapshot({
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
     const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
     const repositoryKey = repositoryName.toLowerCase();
+    const canonicalCastPullRequest = confirmedCanonicalCastPullRequest({
+        bootstrap,
+        sourceState,
+        repository,
+    });
+    const matchesCanonicalCast = (pullRequest) => canonicalCastPullRequest && (
+        (
+            canonicalCastPullRequest.number &&
+            Number(pullRequest?.number) === canonicalCastPullRequest.number
+        ) ||
+        (
+            canonicalCastPullRequest.url &&
+            text(pullRequest?.url || pullRequest?.html_url, 500) === canonicalCastPullRequest.url
+        )
+    );
+    const bootstrapResearchIssueNumber = Number(bootstrap?.researchIssue?.number);
+    const bootstrapCommentsSource = sourceState?.bootstrap?.comments;
+    const bootstrapCommentsAreAuthoritative = bootstrapCommentsSource?.status === "fresh" &&
+        bootstrapCommentsSource.exhaustive === true &&
+        bootstrapCommentsSource.truncated === false;
+    let activationIssues = issues;
+    let activationComments = Array.isArray(issueComments)
+        ? normalizedSources.issueComments.data
+        : null;
+    if (
+        Number.isInteger(bootstrapResearchIssueNumber) &&
+        bootstrapCommentsAreAuthoritative
+    ) {
+        if (activationComments) {
+            const commentIssueNumber = (comment) => Number(
+                comment?.issueNumber ||
+                String(comment?.issue_url || comment?.url || "")
+                    .match(/\/issues\/([1-9][0-9]*)(?:$|#)/)?.[1],
+            );
+            activationComments = [
+                ...activationComments.filter((comment) =>
+                    commentIssueNumber(comment) !== bootstrapResearchIssueNumber),
+                ...(bootstrapCommentsSource.data || []).map((comment) => ({
+                    ...comment,
+                    issueNumber: bootstrapResearchIssueNumber,
+                })),
+            ];
+        } else {
+            activationIssues = issues.map((issue) =>
+                Number(issue?.number) === bootstrapResearchIssueNumber
+                    ? {
+                        ...issue,
+                        comments: bootstrapCommentsSource.data || [],
+                    }
+                    : issue);
+        }
+    }
     const activationEvidence = parseActivationEvidence({
-        issues,
+        issues: activationIssues,
         repository: repositoryKey,
-        comments: Array.isArray(issueComments) ? normalizedSources.issueComments.data : null,
+        comments: activationComments,
         commentsComplete: normalizedSources.issueComments.status === "complete" ||
             (
                 normalizedSources.issueComments.status === "fresh" &&
@@ -1201,8 +1249,25 @@ export function buildActivitySnapshot({
                 !normalizedSources.issueComments.truncated
             ),
     });
+    if (
+        Number.isInteger(bootstrapResearchIssueNumber) &&
+        !bootstrapCommentsAreAuthoritative
+    ) {
+        for (const [issueNumber, evidence] of activationEvidence) {
+            if (evidence.activation?.rootIssueNumber !== bootstrapResearchIssueNumber) continue;
+            activationEvidence.set(issueNumber, {
+                activation: null,
+                errors: [
+                    ...(evidence.errors || []),
+                    "Canonical bootstrap activation comments are incomplete.",
+                ],
+            });
+        }
+    }
     const normalizedPullRequests = dedupeSemantic(
-        pullRequests.map((pullRequest) => ({
+        pullRequests
+            .filter((pullRequest) => !matchesCanonicalCast(pullRequest))
+            .map((pullRequest) => ({
             source: pullRequest,
             value: normalizePullRequest(pullRequest),
             issueLinks: linkedIssueLinks(pullRequest, repositoryKey),
@@ -1216,9 +1281,15 @@ export function buildActivitySnapshot({
     const normalizedRuns = dedupeSemantic(
         workflowRuns
             .filter((run) =>
-                text(run?.workflowName || run?.name, 160) !== BOOTSTRAP_IDENTIFIERS.workflow ||
-                text(run?.headBranch, 240) !==
-                    text(repository?.defaultBranchRef?.name || repository?.defaultBranch, 240))
+                (
+                    text(run?.workflowName || run?.name, 160) !== BOOTSTRAP_IDENTIFIERS.workflow ||
+                    text(run?.headBranch, 240) !==
+                        text(repository?.defaultBranchRef?.name || repository?.defaultBranch, 240)
+                ) &&
+                (
+                    !canonicalCastPullRequest ||
+                    text(run?.headBranch, 240) !== canonicalCastPullRequest.branch
+                ))
             .map((run) => ({
             source: run,
             value: normalizeRun(run),
