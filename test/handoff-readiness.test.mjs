@@ -157,6 +157,33 @@ test("uses only the latest activation artifact for handoff authority", () => {
     assert.equal(evidence.get(13).activation?.issue, "octodemo/demo#13");
 });
 
+test("invalid latest activation envelopes supersede older handoff authority", () => {
+    const issues = readyIssues();
+    issues[0].comments.push({
+        body: `Activation bindings:
+\`\`\`json
+${JSON.stringify([binding()])}
+\`\`\`
+Structured data:
+\`\`\`json
+{"schema_version":"1","origin_issue":10,"phases":[]}
+\`\`\``,
+        url: "https://github.com/octodemo/demo/issues/10#issuecomment-invalid-latest",
+        createdAt: "2026-09-21T18:45:00Z",
+    });
+
+    const evidence = parseActivationEvidence({
+        issues,
+        repository: repository.nameWithOwner,
+    });
+
+    assert.equal(evidence.get(12).activation, null);
+    assert.match(
+        evidence.get(12).errors.join(" "),
+        /structured data kind is invalid or unsupported/i,
+    );
+});
+
 test("keeps task readiness independent from mechanism availability", () => {
     const handoff = taskGoal(snapshot({
         mechanismAvailability: {

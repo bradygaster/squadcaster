@@ -268,6 +268,7 @@ function parseArtifacts(comments, issueNumber) {
     const artifacts = [];
     for (const comment of Array.isArray(comments) ? comments : []) {
         const body = String(comment?.body || "");
+        const activationCandidate = /Activation bindings\s*:/i.test(body);
         const blocks = body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
         const commentArtifacts = [];
         for (const block of blocks) {
@@ -289,6 +290,7 @@ function parseArtifacts(comments, issueNumber) {
                     validation: "malformed",
                     validationReason: "invalid-json",
                     bindings: null,
+                    activationCandidate,
                 });
                 continue;
             }
@@ -337,6 +339,25 @@ function parseArtifacts(comments, issueNumber) {
                 validation,
                 validationReason,
                 bindings,
+                activationCandidate,
+            });
+        }
+        if (
+            activationCandidate &&
+            !commentArtifacts.some((artifact) =>
+                artifact.activationCandidate)
+        ) {
+            commentArtifacts.push({
+                kind: "unknown",
+                schemaVersion: "unknown",
+                originIssue: null,
+                phases: [],
+                createdAt: timestamp(comment?.createdAt || comment?.created_at),
+                url: text(comment?.url || comment?.html_url, 500),
+                validation: "malformed",
+                validationReason: "invalid-activation-envelope",
+                bindings: null,
+                activationCandidate: true,
             });
         }
         const activationArtifacts = commentArtifacts.filter((artifact) =>
@@ -1166,7 +1187,10 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         );
         const activationArtifacts = rootGoal.artifacts.filter((artifact) =>
             artifact.advancing !== false &&
-            ACTIVATION_ARTIFACT_KINDS.has(artifact.kind));
+            (
+                ACTIVATION_ARTIFACT_KINDS.has(artifact.kind) ||
+                artifact.activationCandidate === true
+            ));
         const latestActivationCreatedAt = activationArtifacts.at(-1)?.createdAt || "";
         const latestActivationArtifacts = activationArtifacts.filter((artifact) =>
             (artifact.createdAt || "") === latestActivationCreatedAt);

@@ -261,9 +261,10 @@ export function parseActivationEvidence({
                 parsed: parseStructuredArtifact(String(comment?.body || "")),
                 createdAt: timestamp(comment?.createdAt || comment?.created_at) || "",
             }))
-            .filter(({ parsed }) =>
+            .filter(({ comment, parsed }) =>
                 Boolean(parsed.error) ||
-                ACTIVATION_KINDS.has(parsed.artifact?.squad_artifact))
+                ACTIVATION_KINDS.has(parsed.artifact?.squad_artifact) ||
+                /Activation bindings\s*:/i.test(String(comment?.body || "")))
             .sort((left, right) =>
                 left.createdAt.localeCompare(right.createdAt) ||
                 left.index - right.index);
@@ -286,7 +287,12 @@ export function parseActivationEvidence({
                 globalErrors.push(error);
                 continue;
             }
-            if (!ACTIVATION_KINDS.has(artifact?.squad_artifact)) continue;
+            if (!ACTIVATION_KINDS.has(artifact?.squad_artifact)) {
+                const reason = "Activation structured data kind is invalid or unsupported.";
+                addError(rootNumber, reason);
+                globalErrors.push(reason);
+                continue;
+            }
             if (artifact.schema_version !== "1") {
                 const reason = "Activation artifact schema version is unsupported.";
                 addError(rootNumber, reason);

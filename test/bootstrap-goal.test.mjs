@@ -1180,6 +1180,18 @@ Structured data:
             createdAt: "2026-09-21T12:00:00Z",
             url: "https://github.com/octodemo/demo/issues/6#issuecomment-malformed",
         },
+        {
+            body: `Activation bindings:
+\`\`\`json
+${JSON.stringify([validBinding])}
+\`\`\`
+Structured data:
+\`\`\`json
+{"schema_version":"1","origin_issue":6,"phases":[]}
+\`\`\``,
+            createdAt: "2026-09-21T12:00:00Z",
+            url: "https://github.com/octodemo/demo/issues/6#issuecomment-missing-kind",
+        },
     ];
 
     for (const invalidLatest of invalidLatestComments) {
