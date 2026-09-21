@@ -231,7 +231,10 @@ GitHub's 1,000-result cap for filtered run queries. The first refresh exhausts
 that history manually. Later refreshes stop when the latest-first pages overlap
 the cached run IDs, while a periodic three-page audit rechecks recent history.
 Changing the workflow identity or default branch invalidates the run cache and
-forces another exhaustive read.
+forces another exhaustive read. A short final page is an authoritative complete
+history and evicts absent cached runs immediately. A bounded audit replaces its
+newest-by-creation window, including deletions and reruns, while retaining only
+cached runs created before the oldest audited page boundary.
 
 A normal refresh performs four endpoint traversals when no unique research
 issue exists and five when its comments must be hydrated; repeated refreshes

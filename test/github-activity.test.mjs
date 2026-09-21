@@ -1216,3 +1216,134 @@ test("honors primary and secondary rate-limit reset delays with a maximum bound"
         assert.deepEqual(delays, [expectedDelay]);
     }
 });
+
+test("audits replace deleted and rewritten recent runs while retaining older history", async () => {
+    const deletedFailure = bootstrapWorkflowRun({
+        databaseId: 700,
+        conclusion: "failure",
+        updatedAt: "2026-09-21T11:59:30Z",
+    });
+    const rerunBefore = bootstrapWorkflowRun({
+        databaseId: 701,
+        conclusion: "failure",
+        updatedAt: "2026-09-21T11:59:00Z",
+    });
+    const olderHistory = bootstrapWorkflowRun({
+        databaseId: 1,
+        conclusion: "failure",
+        createdAt: "2026-09-20T12:00:00Z",
+        updatedAt: "2026-09-21T11:59:45Z",
+    });
+    const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [deletedFailure, rerunBefore, olderHistory],
+        },
+        "pulls?state=all": [[]],
+        "issues?state=all": [[]],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T05:00:00.000Z",
+    });
+    const currentWindow = Array.from({ length: 300 }, (_, index) => bootstrapWorkflowRun({
+        databaseId: index === 0 ? 701 : 1000 + index,
+        conclusion: "success",
+        updatedAt: new Date(Date.parse("2026-09-21T11:59:00Z") - index * 1000).toISOString(),
+    }));
+    const calls = [];
+    const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": ({ args }) => {
+            const page = Number(new URL(`https://api.github.test/?${args[1].split("?")[1]}`)
+                .searchParams.get("page"));
+            return { workflow_runs: currentWindow.slice((page - 1) * 100, page * 100) };
+        },
+        "pulls?state=all": [[]],
+        "issues?state=all": [[]],
+    }), calls).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    const byId = new Map(second.sourceState.workflowRuns.data.map((run) => [
+        Number(run.id || run.databaseId),
+        run,
+    ]));
+    assert.equal(byId.has(700), false);
+    assert.equal(byId.get(701).conclusion, "success");
+    assert.equal(byId.has(1), true);
+    assert.equal(
+        calls.filter((args) => args[1].includes("/actions/workflows/42/runs?")).length,
+        3,
+    );
+});
+
+test("an exhausted first page immediately evicts absent cached runs", async () => {
+    const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [
+                bootstrapWorkflowRun({ databaseId: 801, conclusion: "failure" }),
+                bootstrapWorkflowRun({ databaseId: 802, conclusion: "success" }),
+            ],
+        },
+        "pulls?state=all": [[]],
+        "issues?state=all": [[]],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T11:55:00.000Z",
+    });
+    const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [bootstrapWorkflowRun({ databaseId: 802, conclusion: "success" })],
+        },
+        "pulls?state=all": [[]],
+        "issues?state=all": [[]],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.deepEqual(
+        second.sourceState.workflowRuns.data.map((run) => Number(run.id || run.databaseId)),
+        [802],
+    );
+});
+
+test("failed workflow-run audits preserve cached history as stale", async () => {
+    const first = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": {
+            workflow_runs: [bootstrapWorkflowRun({ conclusion: "failure" })],
+        },
+        "pulls?state=all": [[]],
+        "issues?state=all": [[]],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: null,
+        attemptedAt: "2026-09-21T05:00:00.000Z",
+    });
+    const second = await bootstrapDiscoveryAdapter(bootstrapResponses({
+        "actions/workflows/42/runs?": new Error("HTTP 403: audit unavailable"),
+        "pulls?state=all": [[]],
+        "issues?state=all": [[]],
+    })).discoverBootstrap({
+        repository: bootstrapRepository(),
+        previous: {
+            bootstrap: first.bootstrap,
+            sourceState: { bootstrap: first.sourceState },
+        },
+        attemptedAt: "2026-09-21T12:00:00.000Z",
+    });
+
+    assert.equal(second.sourceState.workflowRuns.status, "stale");
+    assert.equal(second.sourceState.workflowRuns.data.length, 1);
+    assert.equal(second.bootstrap.status, first.bootstrap.status);
+    assert.equal(second.bootstrap.stale, true);
+});

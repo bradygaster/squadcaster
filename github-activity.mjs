@@ -534,10 +534,13 @@ export class GitHubSquadActivityAdapter {
         const auditDue = cacheValid &&
             (!Number.isFinite(lastAuditMs) || attemptedMs - lastAuditMs >= RUN_AUDIT_INTERVAL_MS);
         const discovered = [];
+        const retainedPrevious = [];
 
         for (const workflowId of workflowIds) {
             let page = 1;
             let overlap = false;
+            let exhausted = false;
+            const workflowRuns = [];
             while (true) {
                 const response = await this.retry(() => this.runJson([
                     "api",
@@ -546,16 +549,39 @@ export class GitHubSquadActivityAdapter {
                 const runs = Array.isArray(response?.workflow_runs) ? response.workflow_runs : null;
                 if (!runs) throw new Error("GitHub returned an unexpected workflow-runs page.");
                 discovered.push(...runs);
+                workflowRuns.push(...runs);
                 overlap = overlap || runs.some((run) =>
                     previousRunIds.has(Number(run.id || run.databaseId)));
-                if (runs.length < 100) break;
+                if (runs.length < 100) {
+                    exhausted = true;
+                    break;
+                }
                 if (cacheValid && overlap && (!auditDue || page >= RUN_AUDIT_PAGE_LIMIT)) break;
                 page += 1;
             }
+            if (!cacheValid) continue;
+            const cachedForWorkflow = previousRuns.filter((run) => {
+                const runWorkflowId = Number(run.workflow_id || run.workflowId);
+                return Number.isInteger(runWorkflowId)
+                    ? runWorkflowId === workflowId
+                    : workflowIds.length === 1;
+            });
+            if (exhausted) continue;
+            if (!auditDue) {
+                retainedPrevious.push(...cachedForWorkflow);
+                continue;
+            }
+            const oldestAuditedAt = Math.min(...workflowRuns.map((run) =>
+                Date.parse(run.created_at || run.createdAt || "")));
+            if (!Number.isFinite(oldestAuditedAt)) continue;
+            retainedPrevious.push(...cachedForWorkflow.filter((run) => {
+                const createdAt = Date.parse(run.created_at || run.createdAt || "");
+                return Number.isFinite(createdAt) && createdAt < oldestAuditedAt;
+            }));
         }
 
         const byId = new Map();
-        for (const run of [...discovered, ...previousRuns]) {
+        for (const run of [...discovered, ...retainedPrevious]) {
             const id = Number(run.id || run.databaseId);
             if (Number.isInteger(id) && !byId.has(id)) byId.set(id, run);
         }
