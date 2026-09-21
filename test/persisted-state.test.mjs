@@ -27,7 +27,9 @@ test("normalizes legacy state without restoring mutation fields", () => {
     });
 
     assert.equal(normalized.version, 3);
-    assert.equal(normalized.activity, activity);
+    assert.equal(normalized.activity.fetchedAt, activity.fetchedAt);
+    assert.equal(normalized.activity.goals[0].id, activity.goals[0].id);
+    assert.deepEqual(normalized.activity.goals[0].pullRequests, []);
     assert.equal("signals" in normalized, false);
     assert.equal("summary" in normalized, false);
     assert.equal("members" in normalized, false);
@@ -54,4 +56,38 @@ test("ignores legacy proposal and unknown fields", () => {
     assert.equal("signals" in normalized, false);
     assert.equal("members" in normalized, false);
     assert.equal("unknown" in normalized, false);
+});
+
+test("coerces malformed schema-v2 activity into renderer-safe shapes", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 2,
+            repository: [],
+            repositories: {},
+            summary: [],
+            goals: [{
+                repository: null,
+                issue: "invalid",
+                owner: [],
+                blockers: {},
+                evidence: [null, { title: "Observed" }],
+                pullRequests: "invalid",
+                workflowRuns: [null, { workflow: "Squad" }],
+            }],
+            errors: "invalid",
+        },
+    });
+
+    assert.deepEqual(normalized.activity.repository, {});
+    assert.deepEqual(normalized.activity.repositories, []);
+    assert.deepEqual(normalized.activity.summary, emptyActivity().summary);
+    assert.deepEqual(normalized.activity.errors, []);
+    assert.equal(normalized.activity.goals.length, 1);
+    assert.deepEqual(normalized.activity.goals[0].repository, {});
+    assert.deepEqual(normalized.activity.goals[0].issue, {});
+    assert.equal(normalized.activity.goals[0].owner, null);
+    assert.deepEqual(normalized.activity.goals[0].blockers, []);
+    assert.deepEqual(normalized.activity.goals[0].evidence, [{ title: "Observed" }]);
+    assert.deepEqual(normalized.activity.goals[0].pullRequests, []);
+    assert.deepEqual(normalized.activity.goals[0].workflowRuns, [{ workflow: "Squad" }]);
 });
