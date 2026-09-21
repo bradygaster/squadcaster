@@ -925,6 +925,68 @@ export function renderHtml() {
     .drawer-item, .drawer-item a, .drawer-fact strong { min-width: 0; overflow-wrap: anywhere; }
     .drawer-item a { color: var(--focus); font-weight: var(--font-weight-semibold, 600); }
     .drawer-item small { display: block; margin-top: 3px; color: var(--muted); }
+    .handoff-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .readiness {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border: 2px solid var(--border-strong);
+      border-radius: 999px;
+      background: var(--soft);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+    .readiness::before { content: "○"; font-size: 14px; line-height: 1; }
+    .readiness.ready { border-style: solid; }
+    .readiness.ready::before { content: "✓"; }
+    .readiness.blocked { border-style: dashed; }
+    .readiness.blocked::before { content: "!"; }
+    .readiness.already-in-progress { border-style: double; }
+    .readiness.already-in-progress::before { content: "↻"; }
+    .readiness.completed::before { content: "✓"; }
+    .readiness.ineligible { border-style: dotted; }
+    .readiness.ineligible::before { content: "—"; }
+    .readiness.unknown { border-style: dashed; }
+    .readiness.unknown::before { content: "?"; }
+    .handoff-reasons { margin: 10px 0 0; padding-left: 22px; }
+    .handoff-reasons li + li { margin-top: 5px; }
+    .handoff-reasons a { color: var(--focus); }
+    .criteria-list { display: grid; gap: 8px; margin: 10px 0 0; }
+    .criterion {
+      margin: 0;
+      padding: 10px 12px;
+      border-left: 4px solid var(--border-strong);
+      background: var(--soft);
+    }
+    .criterion footer { margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .handoff-warning {
+      margin: 10px 0 0;
+      padding: 9px 10px;
+      border: 1px dashed var(--warning);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--warning) 8%, var(--bg));
+    }
+    .mechanism-list { display: grid; gap: 8px; margin-top: 10px; }
+    .mechanism {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .mechanism-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+    .mechanism-status { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: capitalize; }
+    .mechanism p { margin: 5px 0 0; color: var(--muted); }
+    .mechanism ul { margin: 6px 0 0; padding-left: 20px; color: var(--muted); }
+    .handoff-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .handoff-actions .button { text-decoration: none; }
     .sr-only {
       position: absolute;
       width: 1px;
@@ -1008,6 +1070,7 @@ export function renderHtml() {
         outline: 2px solid Highlight;
         outline-offset: -2px;
       }
+      .readiness, .handoff-warning, .criterion, .mechanism { border-color: CanvasText; }
       .drawer-scrim { background: Canvas; opacity: .55; }
       .legend-dot, .activity-marker, .run-indicator {
         forced-color-adjust: none;
@@ -1040,6 +1103,9 @@ export function renderHtml() {
     let expandedStage = "";
     let selectedGoalId = "";
     let drawerReturnSelector = "";
+    let handoffProbeGoalId = "";
+    let handoffProbePending = false;
+    let handoffProbeComplete = false;
     let filtersOpen = false;
     let activityKindFilter = "all";
     let activityPageState = {};
@@ -1656,6 +1722,179 @@ export function renderHtml() {
       }).join("")}</div>\`;
     }
 
+    const mechanismDefinitions = {
+      "local-session": {
+        name: "Local project session",
+        description: "Runs in the local Copilot app using a project checkout or worktree. A future approved adapter could create one issue-linked session.",
+      },
+      "copilot-cloud-agent": {
+        name: "Copilot cloud agent",
+        description: "Runs on GitHub infrastructure from the existing issue. A future approved adapter could assign Copilot and produce one branch and pull request.",
+      },
+      "squad-implement": {
+        name: "/squad implement",
+        description: "Runs through the repository's installed Squad workflow. A future approved adapter could dispatch one implementation run for this issue.",
+      },
+      manual: {
+        name: "Manual handling",
+        description: "Makes no repository or agent change. Open the issue or copy/export the exact normalized context for use elsewhere.",
+      },
+    };
+
+    function handoffReasonHtml(reason) {
+      if (typeof reason === "string") return esc(reason);
+      const text = reason?.message || reason?.text || reason?.code || "Readiness could not be proven.";
+      const url = reason?.url || reason?.sourceUrl;
+      return url
+        ? \`<a href="\${esc(url)}" target="_blank" rel="noreferrer">\${esc(text)}</a>\`
+        : esc(text);
+    }
+
+    function handoffLink(item, fallbackLabel) {
+      if (!item) return "";
+      const url = typeof item === "string" ? "" : item.url || item.appUrl || item.sourceUrl;
+      const label = typeof item === "string"
+        ? item
+        : item.title || item.name || item.label || item.id || fallbackLabel;
+      if (!url) return \`<strong>\${esc(label)}</strong>\`;
+      return \`<a href="\${esc(url)}" target="_blank" rel="noreferrer">\${esc(label)}</a>\`;
+    }
+
+    function existingImplementationHtml(handoff) {
+      const existing = handoff?.existingImplementation || {};
+      const groups = [
+        ["Pull requests", existing.pullRequests],
+        ["Workflow runs", existing.workflowRuns],
+        ["Copilot cloud agent", existing.copilotTasks || existing.copilotSessions || existing.assignments],
+        ["Local project sessions", existing.sessions || existing.localSessions],
+      ];
+      const items = groups.flatMap(([kind, values]) =>
+        (Array.isArray(values) ? values : []).map(item => ({ kind, item })));
+      if (!items.length) {
+        return '<p class="help">No existing implementation is recorded by the normalized handoff contract.</p>';
+      }
+      return \`<div class="drawer-list">\${items.map(({ kind, item }) => \`
+        <div class="drawer-item">
+          \${handoffLink(item, kind)}
+          <small>\${esc(kind)} · \${esc(item?.status || item?.state || existing.state || "observed")}</small>
+          \${item?.url || item?.appUrl || item?.sourceUrl ? \`<div class="handoff-actions"><a class="button" href="\${esc(item.url || item.appUrl || item.sourceUrl)}" target="_blank" rel="noreferrer">Open existing</a></div>\` : ""}
+        </div>\`).join("")}</div>\`;
+    }
+
+    function activationHtml(handoff) {
+      const activation = handoff?.activation;
+      if (!activation) return '<p class="help">No resolved activation provenance is available.</p>';
+      const root = activation.rootIssue;
+      const rootLabel = typeof root === "object" ? root.id || root.goalId || "Activation root" : root;
+      const rootUrl = activation.rootIssueUrl || activation.rootUrl || (typeof root === "object" ? root.url : "");
+      return \`
+        <div class="drawer-list">
+          <div class="drawer-item">
+            \${rootUrl
+              ? \`<a href="\${esc(rootUrl)}" target="_blank" rel="noreferrer">\${esc(rootLabel || "Activation root")}</a>\`
+              : \`<strong>\${esc(rootLabel || "Activation root unavailable")}</strong>\`}
+            <small>Accepted-plan activation root</small>
+          </div>
+          <div class="drawer-item">
+            \${activation.artifactUrl
+              ? \`<a href="\${esc(activation.artifactUrl)}" target="_blank" rel="noreferrer">\${esc(activation.artifactKind || "Activation artifact")}</a>\`
+              : \`<strong>\${esc(activation.artifactKind || "Activation artifact unavailable")}</strong>\`}
+            <small>Schema \${esc(activation.schemaVersion || "unknown")} · task \${esc(activation.task || "unknown")} · agent \${esc(activation.agent || "unknown")}</small>
+          </div>
+        </div>\`;
+    }
+
+    function acceptanceCriteriaHtml(handoff) {
+      const criteria = Array.isArray(handoff?.acceptanceCriteria) ? handoff.acceptanceCriteria : [];
+      const complete = handoff?.acceptanceCriteriaComplete === true;
+      return \`
+        \${criteria.length ? \`<div class="criteria-list">\${criteria.map(item => \`
+          <blockquote class="criterion">
+            “\${esc(typeof item === "string" ? item : item.text)}”
+            \${typeof item === "object" && item.sourceUrl ? \`<footer><a href="\${esc(item.sourceUrl)}" target="_blank" rel="noreferrer">Task issue source</a></footer>\` : ""}
+          </blockquote>\`).join("")}</div>\` : '<p class="help">No acceptance criteria are available from the task issue.</p>'}
+        \${complete ? "" : '<p class="handoff-warning"><strong>Incomplete source.</strong> Automated readiness must remain fail closed because the criteria source is missing, truncated, partial, or unavailable.</p>'}
+      \`;
+    }
+
+    function mechanismsHtml(handoff) {
+      if (handoffProbePending) return '<p class="help" role="status">Checking non-mutating mechanism availability…</p>';
+      if (!handoffProbeComplete) return '<p class="help">Availability will be checked when these goal details open.</p>';
+      const mechanisms = new Map((handoff?.mechanisms || []).map(item => [item.kind, item]));
+      return \`<div class="mechanism-list">\${Object.entries(mechanismDefinitions).map(([kind, definition]) => {
+        const mechanism = mechanisms.get(kind);
+        const availability = mechanism?.availability || (kind === "manual" ? "available" : "unavailable");
+        const reasons = Array.isArray(mechanism?.reasons) ? mechanism.reasons : [];
+        return \`
+          <article class="mechanism" data-mechanism="\${esc(kind)}">
+            <div class="mechanism-heading">
+              <strong>\${esc(definition.name)}</strong>
+              <span class="mechanism-status">\${esc(String(availability).replaceAll("-", " "))}</span>
+            </div>
+            <p>\${esc(definition.description)}</p>
+            \${reasons.length ? \`<ul>\${reasons.map(reason => \`<li>\${handoffReasonHtml(reason)}</li>\`).join("")}</ul>\` : ""}
+          </article>\`;
+      }).join("")}</div>\`;
+    }
+
+    function handoffContext(goal) {
+      return {
+        schemaVersion: 1,
+        goal: {
+          id: goal.id,
+          repository: goal.repository,
+          issue: goal.issue,
+          dependencies: goal.dependencies || [],
+          blockers: goal.blockers || [],
+          handoff: goal.handoff || null,
+        },
+      };
+    }
+
+    function handoffHtml(goal) {
+      const handoff = goal.handoff;
+      const readiness = handoff?.readiness || {
+        state: "unknown",
+        reasons: ["The normalized handoff contract is unavailable."],
+      };
+      const readinessState = readiness.state || "unknown";
+      const reasons = Array.isArray(readiness.reasons) ? readiness.reasons : [];
+      const incompleteSources = Object.entries(readiness.sourceStates || {})
+        .filter(([, sourceState]) => sourceState !== "complete");
+      return \`
+        <section class="drawer-section handoff-section" aria-labelledby="handoff-title">
+          <div class="handoff-heading">
+            <h3 id="handoff-title">Handoff</h3>
+            <span class="readiness \${esc(readinessState)}" aria-label="Handoff readiness: \${esc(readinessState)}">\${esc(readinessState.replaceAll("-", " "))}</span>
+          </div>
+          \${reasons.length
+            ? \`<ul class="handoff-reasons">\${reasons.map(reason => \`<li>\${handoffReasonHtml(reason)}</li>\`).join("")}</ul>\`
+            : '<p class="help">All task-readiness checks passed.</p>'}
+          \${incompleteSources.length ? \`
+            <div class="handoff-warning">
+              <strong>Readiness is fail closed.</strong>
+              <ul class="handoff-reasons">\${incompleteSources.map(([source, sourceState]) =>
+                \`<li>\${esc(source.replaceAll(/([A-Z])/g, " $1").toLowerCase())}: \${esc(String(sourceState).replaceAll("-", " "))}</li>\`
+              ).join("")}</ul>
+            </div>\` : ""}
+          <h3 style="margin-top:16px">Activation provenance</h3>
+          \${activationHtml(handoff)}
+          <h3 style="margin-top:16px">Acceptance criteria</h3>
+          \${acceptanceCriteriaHtml(handoff)}
+          <h3 style="margin-top:16px">Existing implementation</h3>
+          \${existingImplementationHtml(handoff)}
+          <h3 style="margin-top:16px">Mechanism availability</h3>
+          <p class="help">Availability and repository policy affect only each mechanism; they do not rewrite task readiness.</p>
+          \${mechanismsHtml(handoff)}
+          <div class="handoff-actions">
+            <a class="button" href="\${esc(goal.issue.url)}" target="_blank" rel="noreferrer">Open issue</a>
+            <button class="button" data-action="refresh-handoff" type="button">Refresh</button>
+            <button class="button" data-action="copy-handoff-context" type="button">Copy context</button>
+            <button class="button" data-action="export-handoff-context" type="button">Export context</button>
+          </div>
+        </section>\`;
+    }
+
     function goalDrawerHtml() {
       const goal = goalById(selectedGoalId);
       if (!goal) return "";
@@ -1683,6 +1922,7 @@ export function renderHtml() {
               <p style="margin-bottom:0"><a href="\${esc(goal.issue.url)}" target="_blank" rel="noreferrer">Open source issue ↗</a></p>
             </section>
             <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
+            \${handoffHtml(goal)}
             <section class="drawer-section"><h3>Pull requests and checks</h3>\${pullRequestItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Workflow runs</h3>\${workflowItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Workflow jobs and steps</h3>\${workflowJobItemsHtml(goal)}</section>
@@ -1994,13 +2234,59 @@ export function renderHtml() {
           announce(\`\${phase[0].toUpperCase() + phase.slice(1)} stage collapsed.\`);
         } else if (action === "open-goal") {
           selectedGoalId = target.dataset.goalId || "";
+          handoffProbeGoalId = selectedGoalId;
+          handoffProbePending = true;
+          handoffProbeComplete = false;
           drawerReturnSelector = \`[data-action="open-goal"][data-goal-id="\${CSS.escape(selectedGoalId)}"]\`;
           render(".drawer-close");
+          try {
+            const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(selectedGoalId)}\`, { cache: "no-store" });
+            const nextState = await response.json();
+            if (!response.ok) throw new Error(nextState.error || "Availability probe failed.");
+            state = nextState;
+            handoffProbeComplete = true;
+          } finally {
+            handoffProbePending = false;
+            if (selectedGoalId === handoffProbeGoalId) render();
+          }
         } else if (action === "close-goal") {
           const returnSelector = drawerReturnSelector;
           selectedGoalId = "";
           drawerReturnSelector = "";
+          handoffProbeGoalId = "";
+          handoffProbePending = false;
+          handoffProbeComplete = false;
           render(returnSelector);
+        } else if (action === "refresh-handoff") {
+          handoffProbePending = true;
+          render();
+          try {
+            const response = await fetch(\`/api/state?handoff=\${encodeURIComponent(selectedGoalId)}\`, { cache: "no-store" });
+            const nextState = await response.json();
+            if (!response.ok) throw new Error(nextState.error || "Handoff refresh failed.");
+            state = nextState;
+            handoffProbeComplete = true;
+            announce("Handoff readiness refreshed.");
+          } finally {
+            handoffProbePending = false;
+            render();
+          }
+        } else if (action === "copy-handoff-context") {
+          const goal = goalById(selectedGoalId);
+          if (!goal) return;
+          await navigator.clipboard.writeText(JSON.stringify(handoffContext(goal), null, 2));
+          announce("Lossless handoff context copied.");
+        } else if (action === "export-handoff-context") {
+          const goal = goalById(selectedGoalId);
+          if (!goal) return;
+          const blob = new Blob([JSON.stringify(handoffContext(goal), null, 2) + "\\n"], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = \`handoff-\${String(goal.id).replaceAll(/[^a-z0-9._-]+/gi, "-")}.json\`;
+          link.click();
+          URL.revokeObjectURL(url);
+          announce("Lossless handoff context exported.");
         } else if (action === "manage-repositories") {
           showRepositoryManager = !showRepositoryManager;
           render();
@@ -2033,6 +2319,9 @@ export function renderHtml() {
         const returnSelector = drawerReturnSelector;
         selectedGoalId = "";
         drawerReturnSelector = "";
+        handoffProbeGoalId = "";
+        handoffProbePending = false;
+        handoffProbeComplete = false;
         render(returnSelector);
         return;
       }

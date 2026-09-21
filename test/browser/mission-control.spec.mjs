@@ -12,6 +12,106 @@ function goal({
     owner = "Frontend",
 }) {
     const timestamp = `2026-09-20T${String(10 + number).padStart(2, "0")}:00:00Z`;
+    const pullRequests = phase === "reviewing" ? [{
+        number: 26,
+        title: "Ship the mission control canvas",
+        url: "https://github.com/octodemo/frontend/pull/26",
+        state: "open",
+        draft: true,
+        reviewDecision: "review_required",
+        branch: "squad/implement-4-mission-control",
+        checks: [{
+            name: "browser tests",
+            status: "success",
+            url: "https://github.com/octodemo/frontend/actions/runs/26",
+        }],
+    }] : [];
+    const workflowRuns = phase === "implementing" ? [{
+        id: 300 + number,
+        name: "Implement mission control",
+        workflow: "Squad Implement Worker",
+        status: "in_progress",
+        conclusion: "",
+        branch: `squad/implement-${number}-mission-control`,
+        url: `https://github.com/${repository}/actions/runs/${300 + number}`,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        jobsState: {
+            status: "fresh",
+            fetchedAt: timestamp,
+            error: "",
+            truncated: false,
+        },
+        jobs: [{
+            id: 900 + number,
+            name: "Browser validation",
+            status: "completed",
+            conclusion: "success",
+            url: `https://github.com/${repository}/actions/runs/${300 + number}/job/${900 + number}`,
+            startedAt: timestamp,
+            completedAt: timestamp,
+            steps: [{
+                number: 1,
+                name: "Run browser tests",
+                status: "completed",
+                conclusion: "success",
+                startedAt: timestamp,
+                completedAt: timestamp,
+            }],
+        }],
+    }] : [];
+    const readinessState = number === 1 ? "ready"
+        : phase === "blocked" ? "blocked"
+            : phase === "completed" ? "completed"
+                : pullRequests.length || workflowRuns.length ? "already-in-progress"
+                    : "ineligible";
+    const readinessReasons = readinessState === "ready" ? []
+        : readinessState === "blocked" ? [{
+            text: "Dependency octodemo/backend#9 is not complete.",
+            url: "https://github.com/octodemo/backend/issues/9",
+        }]
+            : readinessState === "completed" ? ["The task issue is closed."]
+                : readinessState === "already-in-progress" ? ["Existing implementation work is active."]
+                    : ["The issue is not an activated leaf task."];
+    const existingImplementation = pullRequests.length ? {
+        state: "active",
+        pullRequests: pullRequests.map(item => ({
+            number: item.number,
+            title: `PR #${item.number} · ${item.title}`,
+            url: item.url,
+            state: item.state,
+        })),
+        workflowRuns: [],
+        copilotTasks: [],
+        sessions: [],
+    } : workflowRuns.length ? {
+        state: "active",
+        pullRequests: [],
+        workflowRuns: workflowRuns.map(item => ({
+            id: item.id,
+            title: item.workflow,
+            url: item.url,
+            status: item.status,
+        })),
+        copilotTasks: [],
+        sessions: [],
+    } : {
+        state: readinessState === "completed" ? "completed" : "none",
+        pullRequests: [],
+        workflowRuns: [],
+        copilotTasks: number === 2 ? [{
+            id: "copilot-task-2",
+            title: "Copilot task for issue #2",
+            url: "https://github.com/octodemo/frontend/issues/2",
+            status: "queued",
+        }] : [],
+        sessions: number === 2 ? [{
+            id: "local-session-2",
+            title: "Local project session",
+            appUrl: "https://example.test/sessions/local-session-2",
+            status: "active",
+        }] : [],
+    };
     return {
         id: `${repository}#${number}`,
         phase,
@@ -36,54 +136,8 @@ function goal({
             phase: "implementing",
             url: "https://github.com/octodemo/backend/issues/9",
         }] : [],
-        pullRequests: phase === "reviewing" ? [{
-            number: 26,
-            title: "Ship the mission control canvas",
-            url: "https://github.com/octodemo/frontend/pull/26",
-            state: "open",
-            draft: true,
-            reviewDecision: "review_required",
-            branch: "squad/implement-4-mission-control",
-            checks: [{
-                name: "browser tests",
-                status: "success",
-                url: "https://github.com/octodemo/frontend/actions/runs/26",
-            }],
-        }] : [],
-        workflowRuns: phase === "implementing" ? [{
-            id: 300 + number,
-            name: "Implement mission control",
-            workflow: "Squad Implement Worker",
-            status: "in_progress",
-            conclusion: "",
-            branch: `squad/implement-${number}-mission-control`,
-            url: `https://github.com/${repository}/actions/runs/${300 + number}`,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            jobsState: {
-                status: "fresh",
-                fetchedAt: timestamp,
-                error: "",
-                truncated: false,
-            },
-            jobs: [{
-                id: 900 + number,
-                name: "Browser validation",
-                status: "completed",
-                conclusion: "success",
-                url: `https://github.com/${repository}/actions/runs/${300 + number}/job/${900 + number}`,
-                startedAt: timestamp,
-                completedAt: timestamp,
-                steps: [{
-                    number: 1,
-                    name: "Run browser tests",
-                    status: "completed",
-                    conclusion: "success",
-                    startedAt: timestamp,
-                    completedAt: timestamp,
-                }],
-            }],
-        }] : [],
+        pullRequests,
+        workflowRuns,
         evidence: [{
             kind: phase === "reviewing" ? "pull-request" : "issue",
             title: `${title} moved to ${phase}`,
@@ -92,6 +146,52 @@ function goal({
             url: `https://github.com/${repository}/issues/${number}`,
         }],
         artifacts: [],
+        handoff: {
+            schemaVersion: 1,
+            goalId: `${repository}#${number}`,
+            readiness: {
+                state: readinessState,
+                reasons: readinessReasons,
+                evaluatedAt: timestamp,
+                automatedHandoffAvailable: readinessState === "ready",
+                sourceStates: {
+                    issue: "complete",
+                    issueAssignees: "complete",
+                    subIssues: "complete",
+                    dependencies: readinessState === "blocked" ? "incomplete" : "complete",
+                    pullRequests: "complete",
+                    workflowRuns: "complete",
+                    copilotTasks: "complete",
+                    localSessions: "complete",
+                },
+            },
+            activation: {
+                rootIssue: "octodemo/frontend#100",
+                rootIssueUrl: "https://github.com/octodemo/frontend/issues/100",
+                artifactKind: "activated",
+                artifactUrl: "https://github.com/octodemo/frontend/issues/100#issuecomment-1",
+                schemaVersion: "1",
+                task: String(number),
+                agent: owner,
+            },
+            acceptanceCriteria: [{
+                text: `The task ${title.toLowerCase()} is complete.`,
+                sourceUrl: `https://github.com/${repository}/issues/${number}`,
+            }],
+            acceptanceCriteriaComplete: number !== 2,
+            issueRevision: timestamp,
+            existingImplementation,
+            mechanisms: [
+                { kind: "local-session", availability: "available", reasons: [] },
+                {
+                    kind: "copilot-cloud-agent",
+                    availability: number === 1 ? "policy-blocked" : "available",
+                    reasons: number === 1 ? ["Copilot cloud agent is disabled by repository policy."] : [],
+                },
+                { kind: "squad-implement", availability: "available", reasons: [] },
+                { kind: "manual", availability: "available", reasons: [] },
+            ],
+        },
     };
 }
 
@@ -167,6 +267,7 @@ function fixtureState() {
 
 async function startFixtureServer() {
     let state = fixtureState();
+    let handoffProbeCount = 0;
     const clients = new Set();
     const server = createServer((request, response) => {
         const url = new URL(request.url, "http://127.0.0.1");
@@ -176,6 +277,7 @@ async function startFixtureServer() {
             return;
         }
         if (request.method === "GET" && url.pathname === "/api/state") {
+            if (url.searchParams.has("handoff")) handoffProbeCount += 1;
             response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
             response.end(JSON.stringify(state));
             return;
@@ -212,6 +314,9 @@ async function startFixtureServer() {
         },
         state() {
             return structuredClone(state);
+        },
+        handoffProbeCount() {
+            return handoffProbeCount;
         },
         async close() {
             for (const client of clients) client.end();
@@ -394,6 +499,105 @@ test("does not count or render unknown owners as observed", async ({ page }) => 
     await expect(queuedStage.locator(".stage-agents")).toHaveAttribute("aria-label", "No observed owners");
     await expect(queuedStage.locator(".stage-foot")).toHaveText("0 owners observed");
     await expect(queuedStage.locator(".agent-chip")).toHaveCount(0);
+});
+
+test("renders read-only handoff readiness and probes availability only after opening", async ({ page }) => {
+    expect(fixture.handoffProbeCount()).toBe(0);
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
+
+    const drawer = page.getByRole("dialog");
+    await expect(drawer.getByRole("heading", { name: "Handoff" })).toBeVisible();
+    await expect(drawer.getByLabel("Handoff readiness: ready")).toContainText("ready");
+    await expect(drawer.getByText("All task-readiness checks passed.")).toBeVisible();
+    await expect(drawer.getByRole("link", { name: "octodemo/frontend#100" })).toBeVisible();
+    await expect(drawer.getByText(/The task plan a deliberately long mission control workflow title is complete/)).toBeVisible();
+    await expect(drawer.getByText("Local project session")).toBeVisible();
+    await expect(drawer.getByText("Copilot cloud agent", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("/squad implement", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("Manual handling")).toBeVisible();
+    await expect(drawer.getByText("policy blocked")).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Copy context" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Export context" })).toBeVisible();
+    await expect.poll(() => fixture.handoffProbeCount()).toBe(1);
+
+    await expect(drawer.getByRole("button", { name: /Create|Assign|Dispatch|Launch|Post/i })).toHaveCount(0);
+});
+
+test("keeps incomplete and existing-work states fail closed with open-existing actions", async ({ page }) => {
+    await page.locator('[data-action="expand-stage"][data-phase="researching"]').click();
+    await page.getByRole("button", { name: /Research accessible activity summaries/ }).click();
+    const incompleteDrawer = page.getByRole("dialog");
+    await expect(incompleteDrawer.getByLabel("Handoff readiness: ineligible")).toBeVisible();
+    await expect(incompleteDrawer.getByText("Incomplete source.")).toBeVisible();
+    await expect(incompleteDrawer.getByRole("link", { name: "Open existing" })).toHaveCount(2);
+    await expect(incompleteDrawer.getByRole("link", { name: "Open issue" })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await page.locator('[data-action="expand-stage"][data-phase="reviewing"]').click();
+    await page.getByRole("button", { name: /Review keyboard drawer behavior/ }).click();
+    const activeDrawer = page.getByRole("dialog");
+    await expect(activeDrawer.getByLabel("Handoff readiness: already-in-progress")).toBeVisible();
+    await expect(activeDrawer.getByRole("link", { name: "Open existing" })).toHaveCount(1);
+});
+
+test("keeps stale, partial, capped, and unavailable sources unknown with manual actions", async ({ page }) => {
+    const nextState = fixture.state();
+    const item = nextState.activity.goals[0];
+    item.handoff.readiness.state = "unknown";
+    item.handoff.readiness.reasons = ["Reconciliation sources cannot prove that no implementation exists."];
+    item.handoff.readiness.sourceStates = {
+        issue: "stale",
+        pullRequests: "partial",
+        workflowRuns: "capped",
+        copilotTasks: "unavailable",
+        localSessions: "complete",
+    };
+    item.handoff.readiness.automatedHandoffAvailable = false;
+    fixture.emit(nextState);
+
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", { name: /Plan a deliberately long mission control workflow title/ }).click();
+    const drawer = page.getByRole("dialog");
+
+    await expect(drawer.getByLabel("Handoff readiness: unknown")).toBeVisible();
+    await expect(drawer.getByText("Readiness is fail closed.")).toBeVisible();
+    await expect(drawer.getByText("issue: stale")).toBeVisible();
+    await expect(drawer.getByText("pull requests: partial")).toBeVisible();
+    await expect(drawer.getByText("workflow runs: capped")).toBeVisible();
+    await expect(drawer.getByText("copilot tasks: unavailable")).toBeVisible();
+    await expect(drawer.getByRole("link", { name: "Open issue" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Copy context" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Refresh" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: /Create|Assign|Dispatch|Launch|Post/i })).toHaveCount(0);
+});
+
+test("distinguishes every readiness state without color-only semantics", async ({ page }) => {
+    const nextState = fixture.state();
+    const states = ["ready", "blocked", "already-in-progress", "completed", "ineligible", "unknown"];
+    nextState.activity.goals = states.map((readinessState, index) => {
+        const item = structuredClone(nextState.activity.goals[index]);
+        item.id = `octodemo/frontend#${101 + index}`;
+        item.issue.number = 101 + index;
+        item.issue.title = `${readinessState} handoff`;
+        item.phase = "queued";
+        item.handoff.goalId = item.id;
+        item.handoff.readiness.state = readinessState;
+        item.handoff.readiness.reasons = readinessState === "ready" ? [] : [`${readinessState} reason`];
+        return item;
+    });
+    fixture.emit(nextState);
+
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    for (const readinessState of states) {
+        await page.getByRole("button", { name: new RegExp(`${readinessState} handoff`) }).click();
+        const badge = page.getByLabel(`Handoff readiness: ${readinessState}`);
+        await expect(badge).toBeVisible();
+        await expect(badge).toHaveText(readinessState.replaceAll("-", " "));
+        const pseudoContent = await badge.evaluate(element => getComputedStyle(element, "::before").content);
+        expect(pseudoContent).not.toBe("none");
+        await page.keyboard.press("Escape");
+    }
 });
 
 test("opens blocked goals from the Needs attention section", async ({ page }) => {
