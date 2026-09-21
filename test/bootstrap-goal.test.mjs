@@ -878,6 +878,33 @@ test("links generated implementation goals only from validated activation bindin
     assert.ok(roleCollision.evidence.some((item) =>
         item.kind === "bootstrap-diagnostic" &&
         item.code === "conflicting-generated-goal"));
+
+    const taskIdentityCollisionRoot = goalIssue(6, root.title, [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("activated", {
+            bindings: [
+                bindings[0],
+                {
+                    ...bindings[0],
+                    issue: "#22",
+                },
+            ],
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const taskIdentityCollision = snapshotWithBootstrap({
+        issues: [
+            taskIdentityCollisionRoot,
+            epic,
+            taskIssue,
+            goalIssue(22, "Implement another feature", ["squad", "squad:dev"]),
+        ],
+        bootstrap: snapshot.bootstrap,
+    }).goals.find((goal) => goal.issue.number === 6);
+    assert.deepEqual(taskIdentityCollision.bootstrap.generatedGoals, []);
+    assert.ok(taskIdentityCollision.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "conflicting-generated-goal"));
 });
 
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {

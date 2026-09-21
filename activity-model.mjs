@@ -736,6 +736,7 @@ function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
     }
     const seenTasks = new Set();
     const issueAssignments = new Map();
+    const tasks = new Map();
     const epics = new Map();
     const generated = new Map();
     const assignIssue = (issueNumber, role, identity) => {
@@ -776,6 +777,11 @@ function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
             !assignIssue(epicIssueNumber, "epic", epic)) {
             return { valid: false, goals: [], reason: "conflicting-generated-goal" };
         }
+        const priorTaskIssue = tasks.get(task);
+        if (priorTaskIssue && priorTaskIssue !== issueNumber) {
+            return { valid: false, goals: [], reason: "conflicting-generated-goal" };
+        }
+        tasks.set(task, issueNumber);
         const taskGoal = goalsByNumber.get(issueNumber);
         const epicGoal = goalsByNumber.get(epicIssueNumber);
         if (!taskGoal ||
