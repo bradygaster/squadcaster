@@ -79,60 +79,23 @@ GitHub issue URLs. The aggregate resolves these references against goals in
 other included repositories. Missing or excluded targets remain visible with an
 unknown state instead of being treated as complete.
 
-## CAO compatibility findings
+## Squad compatibility
 
-Research on September 20, 2026 found that GitHub Agentic Workflows remain
-repository-local, stored as a source `.md` file plus compiled `.lock.yml`.
-Organization and enterprise custom agents can be centralized, with repository
-definitions taking precedence, but workflow definitions still need to exist in
-each downstream repository. This supports a hybrid model:
+Squadcaster observes existing Squad workflow output and repository-owned roster
+files. It does not install, update, or execute Squad, and it does not expose a
+setup or onboarding protocol. When Squad is not detected, the canvas links to
+the external Squad installation guidance.
 
-1. centralize reusable agent identities and capabilities;
-2. inject or update reviewable workflow files in each participating repository;
-3. aggregate their GitHub-native evidence in Squadcaster.
-
-Squadcaster deliberately does not depend on a CAO-specific protocol yet. The
-`gh.io/cao` short URL could not be resolved in the research environment, so no
-undocumented contract is assumed. The adapter boundary allows a verified CAO
-event source to be added later without changing the dashboard model.
-
-### Squad in the wizard
-
-Squad should be offered as a reusable team option wherever CAO or `gh aw`
-presents repository setup:
-
-1. **Catalog entry:** list Squad as a maintained workflow bundle with its
-   dispatcher, implementation worker, and independent reviewer shown before
-   installation.
-2. **Repository-aware recommendation:** when a repository has no Squad
-   workflows, offer Squad alongside the standard workflow choices; when it is
-   already installed, offer update or connect rather than duplicate setup.
-3. **Deployment choice:** let the user choose repository-owned agents or
-   organization-provided agent profiles while making clear that workflow source
-   and lock files remain repository-local.
-4. **Reviewable output:** have the wizard create one pull request containing
-   pinned workflow sources and compiled lock files. Never write directly to the
-   default branch or merge the pull request.
-5. **Handoff:** after installation, link directly to this operations canvas so
-   the user moves from configuration to observable goals and evidence.
-
-Until the CAO wizard exposes a verified extension or catalog contract, these
-remain integration requirements rather than a custom protocol implemented by
-Squadcaster. A future wizard adapter should emit the selected repository,
-workflow version/SHA, deployment mode, and resulting pull request URL using the
-same repository identity consumed by the activity adapter.
-
-Authoritative references consulted:
-
-- [About GitHub Agentic Workflows](https://docs.github.com/en/copilot/concepts/agents/about-github-agentic-workflows)
-- [Creating GitHub Agentic Workflows](https://docs.github.com/en/copilot/how-tos/github-agentic-workflows/creating-github-agentic-workflows)
-- [About custom agents](https://docs.github.com/en/copilot/concepts/agents/cloud-agent/about-custom-agents)
-- [Custom agents configuration](https://docs.github.com/en/copilot/reference/custom-agents-configuration)
-- [About the Copilot cloud agent](https://docs.github.com/en/copilot/concepts/agents/cloud-agent/about-cloud-agent)
+The provider contract is limited to opening the canvas, returning current
+read-only state, and refreshing discovery. The loopback HTTP surface similarly
+supports state/events, refresh, and local repository inclusion preferences.
+Legacy persisted state is normalized on load so obsolete onboarding or mission
+fields are ignored rather than restored.
 
 ## Security and failure behavior
 
 - Discovery is read-only.
+- The only POST routes update local inclusion preferences or request read-only refresh.
 - The local renderer binds only to loopback.
 - Renderer output is escaped before insertion.
 - Independent API failures appear in the canvas.
@@ -140,4 +103,7 @@ Authoritative references consulted:
   issue, pull-request, and workflow sources continue to update.
 - Partial snapshots expose source-specific errors and identify retained evidence
   as stale until that source refreshes successfully.
+- Repository and aggregate refresh metadata distinguish the latest attempt from
+  the last complete successful synchronization. Partial or stale snapshots do
+  not advance the successful timestamp.
 - Unknown relationships are not promoted to observed facts.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildActivitySnapshot } from "../activity-model.mjs";
+import { buildActivitySnapshot, isCompleteActivitySnapshot } from "../activity-model.mjs";
 
 const repository = {
     name: "demo",
@@ -265,4 +265,29 @@ test("uses only the latest run outcome for the same workflow branch", () => {
         ],
     });
     assert.equal(snapshot.goals[0].phase, "queued");
+});
+
+test("treats stale or unavailable source state as incomplete without requiring an error", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        fetchedAt: "2026-09-20T13:00:00Z",
+        sourceState: {
+            issues: {
+                data: [issue({ body: "" })],
+                fetchedAt: "2026-09-20T12:00:00Z",
+                status: "stale",
+                error: "",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "unavailable", error: "" },
+        },
+    });
+
+    assert.equal(snapshot.fetchedAt, "2026-09-20T13:00:00.000Z");
+    assert.equal(snapshot.sourceState.issues.fetchedAt, "2026-09-20T12:00:00.000Z");
+    assert.equal(snapshot.partial, true);
+    assert.equal(snapshot.stale, true);
+    assert.deepEqual(snapshot.staleSources, ["issues"]);
+    assert.equal(isCompleteActivitySnapshot(snapshot), false);
 });
