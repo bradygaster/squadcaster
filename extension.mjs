@@ -15,6 +15,10 @@ import {
     GitHubGlobalActivity,
     normalizeRegistry,
 } from "./global-activity.mjs";
+import {
+    applyHandoffMechanismOverlay,
+    HandoffMechanismProbe,
+} from "./handoff-probe.mjs";
 import { utcServerDayBoundary } from "./activity-model.mjs";
 import { normalizePersistedState } from "./persisted-state.mjs";
 import { renderHtml } from "./renderer.mjs";
@@ -374,6 +378,16 @@ async function handleRequest(entry, req, res) {
         return;
     }
     if (req.method === "GET" && url.pathname === "/api/state") {
+        const handoffGoalId = cleanText(url.searchParams.get("handoff"), 300);
+        if (handoffGoalId) {
+            const overlay = await entry.handoffProbe.probe({
+                state: entry.state,
+                goalId: handoffGoalId,
+                force: url.searchParams.get("refresh") === "1",
+            });
+            sendJson(res, 200, applyHandoffMechanismOverlay(entry.state, overlay));
+            return;
+        }
         await refreshRemoteState(entry);
         sendJson(res, 200, entry.state);
         return;
@@ -450,6 +464,10 @@ async function startServer(ctx) {
         lastRemoteCheckAt: 0,
         remoteCheckPromise: null,
         forceAllRefresh: false,
+        handoffProbe: new HandoffMechanismProbe({
+            runJson: runGhJson,
+            cwd: state.repoRoot,
+        }),
     };
     const server = createServer((req, res) => {
         handleRequest(entry, req, res).catch((error) => {

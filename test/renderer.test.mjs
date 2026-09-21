@@ -38,6 +38,14 @@ test("includes accessible drawer, stage, and reduced-motion behavior", () => {
     assert.match(html, /stage expanded/);
     assert.match(html, /filtered by/);
     assert.match(html, /Canvas connection interrupted/);
+    assert.match(html, /Handoff readiness:/);
+    assert.match(html, /readiness\.already-in-progress/);
+    assert.match(html, /readiness\.unknown::before/);
+    assert.match(html, /Mechanism availability/);
+    assert.match(html, /Copy context/);
+    assert.match(html, /Export context/);
+    assert.match(html, /Open existing/);
+    assert.doesNotMatch(html, /data-action="(?:launch|create|assign|dispatch|post)-/);
 });
 
 test("bounds dense collections without changing the authoritative total", () => {
