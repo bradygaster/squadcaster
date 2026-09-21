@@ -900,6 +900,24 @@ export class GitHubSquadActivityAdapter {
             });
         }
 
+        const defaultBranch = repository?.defaultBranchRef?.name || repository?.defaultBranch;
+        const bootstrap = repository?.nameWithOwner && defaultBranch
+            ? await this.discoverBootstrap({
+                repository,
+                previous,
+                attemptedAt,
+                restBudget,
+            })
+            : null;
+        if (bootstrap) sourceState.bootstrap = bootstrap.sourceState;
+        const bootstrapErrors = bootstrap
+            ? Object.entries(bootstrap.sourceState)
+                .filter(([, state]) => state.error)
+                .map(([source, state]) => ({
+                    source: `bootstrap ${source}`,
+                    message: state.error,
+                }))
+            : [];
         const sourceErrors = [
             ...SOURCES
             .map((source) => {
@@ -912,15 +930,16 @@ export class GitHubSquadActivityAdapter {
             sourceState.workflowJobs.error
                 ? { source: "workflow jobs", message: sourceState.workflowJobs.error }
                 : null,
+            ...bootstrapErrors,
         ].filter(Boolean);
         const snapshot = buildActivitySnapshot({
             repository,
             members,
             sourceState,
             errors: [...repositoryErrors, ...sourceErrors],
+            bootstrap: bootstrap?.bootstrap || null,
             fetchedAt: attemptedAt,
         });
-        const defaultBranch = repository?.defaultBranchRef?.name || repository?.defaultBranch;
         if (!repository?.nameWithOwner || !defaultBranch) {
             return {
                 ...snapshot,
@@ -933,21 +952,8 @@ export class GitHubSquadActivityAdapter {
                 },
             };
         }
-        const bootstrap = await this.discoverBootstrap({
-            repository,
-            previous,
-            attemptedAt,
-            restBudget,
-        });
         snapshot.bootstrap = bootstrap.bootstrap;
         snapshot.sourceState.bootstrap = bootstrap.sourceState;
-        const bootstrapErrors = Object.entries(bootstrap.sourceState)
-            .filter(([, state]) => state.error)
-            .map(([source, state]) => ({
-                source: `bootstrap ${source}`,
-                message: state.error,
-            }));
-        snapshot.errors.push(...bootstrapErrors);
         snapshot.partial = snapshot.partial || bootstrap.bootstrap.stale || bootstrapErrors.length > 0;
         snapshot.stale = snapshot.stale || bootstrap.bootstrap.stale;
         snapshot.staleSources.push(

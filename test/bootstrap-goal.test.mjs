@@ -75,18 +75,25 @@ function snapshotWithBootstrap({
     bootstrap = completeBootstrap(),
     bootstrapComments = null,
     bootstrapCommentsState = {},
+    bootstrapPullRequestsState = {},
 }) {
-    const snapshot = buildActivitySnapshot({
-        repository,
-        issues,
-        pullRequests,
-        workflowRuns,
-        fetchedAt: "2026-09-21T12:00:00Z",
-    });
-    if (bootstrapComments) {
-        snapshot.sourceState.bootstrap = {
+    const canonicalIssue = issues.find((issue) =>
+        issue.number === bootstrap.researchIssue?.number);
+    const canonicalComments = bootstrapComments ??
+        (Array.isArray(canonicalIssue?.comments) ? canonicalIssue.comments : []);
+    const sourceState = {
+        bootstrap: {
+            pullRequests: {
+                data: pullRequests,
+                fetchedAt: "2026-09-21T12:00:00Z",
+                status: "fresh",
+                error: "",
+                exhaustive: true,
+                truncated: false,
+                ...bootstrapPullRequestsState,
+            },
             comments: {
-                data: bootstrapComments,
+                data: canonicalComments,
                 fetchedAt: "2026-09-21T12:00:00Z",
                 status: "fresh",
                 error: "",
@@ -94,8 +101,18 @@ function snapshotWithBootstrap({
                 truncated: false,
                 ...bootstrapCommentsState,
             },
-        };
-    }
+        },
+    };
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues,
+        pullRequests,
+        workflowRuns,
+        sourceState,
+        bootstrap,
+        fetchedAt: "2026-09-21T12:00:00Z",
+    });
+    snapshot.sourceState.bootstrap = sourceState.bootstrap;
     return integrateAutomaticBootstrapSnapshot({
         ...snapshot,
         bootstrap,
@@ -238,6 +255,90 @@ test("preserves duplicate exact Cast candidates as ordinary pull request correla
     );
 });
 
+test("preserves all Cast candidates when retained classification is stale", () => {
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research"),
+    ]);
+    const duplicateCasts = [
+        castPullRequest({ body: "Closes #6" }),
+        castPullRequest({
+            number: 4,
+            body: "Closes #6",
+            url: "https://github.com/octodemo/demo/pull/4",
+        }),
+    ];
+    const retained = completeBootstrap();
+    const snapshot = snapshotWithBootstrap({
+        issues: [root],
+        pullRequests: duplicateCasts,
+        bootstrap: {
+            ...retained,
+            stale: true,
+            staleSources: ["pullRequests"],
+        },
+        bootstrapPullRequestsState: {
+            status: "stale",
+        },
+    });
+    const goal = snapshot.goals[0];
+
+    assert.deepEqual(goal.pullRequests.map((pullRequest) => pullRequest.number), [3, 4]);
+    assert.equal(
+        goal.evidence.filter((item) => item.kind === "pull-request").length,
+        2,
+    );
+});
+
+test("suppresses a confirmed canonical Cast pull request from every goal correlation", () => {
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research"),
+    ]);
+    const second = goalIssue(21, "Generated follow-up", ["squad"]);
+    const cast = castPullRequest({
+        body: "Closes #6\nCloses #21",
+        statusCheckRollup: [{
+            name: "Cast validation",
+            conclusion: "FAILURE",
+            detailsUrl: "https://github.com/octodemo/demo/actions/runs/50",
+        }],
+    });
+    const castRun = {
+        databaseId: 50,
+        workflowName: "Cast validation",
+        displayTitle: "Validate Cast",
+        headBranch: "squad/bootstrap-cast",
+        status: "in_progress",
+        conclusion: null,
+        url: "https://github.com/octodemo/demo/actions/runs/50",
+    };
+    const snapshot = snapshotWithBootstrap({
+        issues: [root, second],
+        pullRequests: [cast],
+        workflowRuns: [castRun],
+        bootstrap: completeBootstrap({
+            pullRequests: [cast],
+        }),
+    });
+
+    for (const goal of snapshot.goals) {
+        assert.deepEqual(goal.pullRequests, []);
+        assert.deepEqual(goal.workItems, []);
+        assert.deepEqual(goal.workflowRuns, []);
+        assert.ok(goal.evidence.every((item) =>
+            !["pull-request", "check", "workflow"].includes(item.kind)));
+        assert.equal(goal.handoff.existingImplementation.pullRequests.length, 0);
+        assert.equal(goal.handoff.existingImplementation.workflowRuns.length, 0);
+    }
+    assert.equal(
+        snapshot.goals.find((goal) => goal.issue.number === 6).phase,
+        "researching",
+    );
+    assert.equal(
+        snapshot.goals.find((goal) => goal.issue.number === 21).phase,
+        "queued",
+    );
+});
+
 test("keeps unsupported and malformed artifacts visible without advancing journey or lifecycle", () => {
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
         artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
@@ -301,9 +402,58 @@ test("uses exhaustive canonical comment discovery to advance the authoritative i
         item.kind === "artifact" && item.title.includes("scope-accepted")));
 });
 
+test("uses fresh canonical activation comments for task handoff evidence", () => {
+    const bindings = [{
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    }];
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
+    ]);
+    const activated = artifactComment("activated", {
+        bindings,
+        createdAt: "2026-09-21T11:00:00Z",
+    });
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic 1.1", ["squad", "squad:dev"]),
+            goalIssue(21, "Implement the feature", ["squad", "squad:dev"]),
+        ],
+        bootstrapComments: [
+            artifactComment("research", {
+                createdAt: "2026-09-21T10:15:00Z",
+                url: researchComment().url,
+            }),
+            activated,
+        ],
+    });
+    const rootGoal = snapshot.goals.find((goal) => goal.issue.number === 6);
+    const taskGoal = snapshot.goals.find((goal) => goal.issue.number === 21);
+
+    assert.deepEqual(
+        rootGoal.bootstrap.generatedGoals.map((goal) => goal.issueNumber),
+        [20, 21],
+    );
+    assert.equal(taskGoal.handoff.activation.issueNumber, 21);
+    assert.equal(taskGoal.handoff.activation.rootIssueNumber, 6);
+});
+
 test("keeps retained stale scope acceptance visible without advancing authoritative state", () => {
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
-        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
     ]);
     const accepted = artifactComment("scope-accepted", {
         createdAt: "2026-09-21T11:15:00Z",
@@ -326,6 +476,55 @@ test("keeps retained stale scope acceptance visible without advancing authoritat
         item.kind === "artifact" && item.title.includes("scope-accepted")));
 });
 
+test("marks cached issue artifacts non-advancing when canonical comments are stale", () => {
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
+        artifactComment("scope-accepted", { createdAt: "2026-09-21T11:15:00Z" }),
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [root],
+        bootstrapCommentsState: {
+            status: "stale",
+        },
+    });
+    const goal = snapshot.goals[0];
+
+    assert.equal(
+        goal.artifacts.find((artifact) => artifact.kind === "research").advancing,
+        true,
+    );
+    assert.equal(
+        goal.artifacts.find((artifact) => artifact.kind === "scope-accepted").advancing,
+        false,
+    );
+    assert.equal(goal.phase, "researching");
+    assert.equal(goal.bootstrap.journeyPhase, "cast-review");
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+});
+
+test("does not substitute a different cached research artifact for the retained canonical one", () => {
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: "https://github.com/octodemo/demo/issues/6#issuecomment-fake",
+        }),
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [root],
+        bootstrapCommentsState: {
+            status: "stale",
+        },
+    });
+    const goal = snapshot.goals[0];
+
+    assert.equal(goal.artifacts[0].advancing, false);
+    assert.equal(goal.phase, "queued");
+    assert.equal(goal.bootstrap.journeyPhase, "cast-review");
+});
+
 test("keeps partial activation metadata visible without linking generated goals", () => {
     const bindings = [{
         task: "1",
@@ -337,8 +536,16 @@ test("keeps partial activation metadata visible without linking generated goals"
         label: "squad:dev",
         epic_label: "squad:dev",
     }];
+    const activated = artifactComment("activated", {
+        bindings,
+        createdAt: "2026-09-21T11:00:00Z",
+    });
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
-        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
+        activated,
     ]);
     const partial = classifyAutomaticBootstrap(classifyInput({
         issues: [researchIssue()],
@@ -351,10 +558,7 @@ test("keeps partial activation metadata visible without linking generated goals"
             goalIssue(21, "Implement the feature", ["squad", "squad:dev"]),
         ],
         bootstrap: partial,
-        bootstrapComments: [artifactComment("activated", {
-            bindings,
-            createdAt: "2026-09-21T11:00:00Z",
-        })],
+        bootstrapComments: [activated],
         bootstrapCommentsState: {
             status: "partial",
             exhaustive: false,
@@ -362,12 +566,68 @@ test("keeps partial activation metadata visible without linking generated goals"
         },
     });
     const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+    const taskGoal = snapshot.goals.find((candidate) => candidate.issue.number === 21);
     const activatedArtifact = goal.artifacts.find((artifact) =>
         artifact.kind === "activated");
 
     assert.equal(activatedArtifact.advancing, false);
     assert.equal(goal.phase, "researching");
     assert.equal(goal.bootstrap.journeyPhase, "research");
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+    assert.equal(
+        goal.evidence.filter((item) => item.kind === "generated-goal").length,
+        0,
+    );
+    assert.equal(taskGoal.handoff.activation, null);
+    assert.equal(taskGoal.handoff.readiness.state, "unknown");
+    assert.ok(taskGoal.handoff.readiness.reasons.includes(
+        "Canonical bootstrap activation comments are incomplete.",
+    ));
+});
+
+test("rejects duplicate activation binding blocks before linking generated goals", () => {
+    const bindings = [{
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    }];
+    const activated = artifactComment("activated", {
+        bindings,
+        createdAt: "2026-09-21T11:00:00Z",
+    });
+    activated.body = activated.body.replace(
+        "Structured data:",
+        `Activation bindings:\n\`\`\`json\n${JSON.stringify([{
+            ...bindings[0],
+            issue: "#22",
+        }])}\n\`\`\`\nStructured data:`,
+    );
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
+        activated,
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic 1.1", ["squad", "squad:dev"]),
+            goalIssue(21, "Implement the feature", ["squad", "squad:dev"]),
+            goalIssue(22, "Conflicting feature", ["squad", "squad:dev"]),
+        ],
+    });
+    const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+    const activatedArtifact = goal.artifacts.find((artifact) =>
+        artifact.kind === "activated");
+
+    assert.equal(activatedArtifact.validation, "malformed");
+    assert.equal(activatedArtifact.validationReason, "duplicate-activation-bindings");
     assert.deepEqual(goal.bootstrap.generatedGoals, []);
     assert.equal(
         goal.evidence.filter((item) => item.kind === "generated-goal").length,
