@@ -55,19 +55,10 @@ function hasSquadSignal(repository) {
     );
 }
 
-function repositoryFromSearch(result) {
+function repositoryNameFromSearch(result) {
     const value = result?.repository;
     const nameWithOwner = clean(value?.nameWithOwner || value?.fullName, 300);
-    if (!nameWithOwner.includes("/")) return null;
-    return {
-        name: nameWithOwner.split("/").at(-1),
-        nameWithOwner,
-        url: clean(value?.url || `https://github.com/${nameWithOwner}`),
-        viewerPermission: "read",
-        squadSource: {},
-        issues: { totalCount: 1 },
-        pullRequests: { totalCount: 0 },
-    };
+    return nameWithOwner.includes("/") ? nameWithOwner : "";
 }
 
 function registryRepository(repository, previous = {}) {
@@ -143,6 +134,7 @@ export class GitHubGlobalActivity {
             this.registry.repositories.map((repository) => [repository.nameWithOwner.toLowerCase(), repository]),
         );
         const repositories = [];
+        const affiliated = new Map();
         let cursor = null;
         let viewer = "";
         let rateLimit = null;
@@ -155,7 +147,9 @@ export class GitHubGlobalActivity {
                 rateLimit = page?.data?.rateLimit || rateLimit;
                 const connection = page?.data?.viewer?.repositories;
                 for (const repository of connection?.nodes || []) {
-                    if (repository?.isArchived || !hasSquadSignal(repository)) continue;
+                    if (repository?.isArchived) continue;
+                    affiliated.set(String(repository.nameWithOwner).toLowerCase(), repository);
+                    if (!hasSquadSignal(repository)) continue;
                     repositories.push(registryRepository(
                         repository,
                         previous.get(String(repository.nameWithOwner).toLowerCase()),
@@ -178,14 +172,19 @@ export class GitHubGlobalActivity {
             for (const result of searches) {
                 if (result.status !== "fulfilled") continue;
                 for (const item of Array.isArray(result.value) ? result.value : []) {
-                    const repository = repositoryFromSearch(item);
-                    if (!repository || byName.has(repository.nameWithOwner.toLowerCase())) continue;
+                    const nameWithOwner = repositoryNameFromSearch(item);
+                    const key = nameWithOwner.toLowerCase();
+                    const repository = affiliated.get(key);
+                    if (!repository || byName.has(key)) continue;
                     const normalized = registryRepository(
-                        repository,
-                        previous.get(repository.nameWithOwner.toLowerCase()),
+                        {
+                            ...repository,
+                            issues: { totalCount: 1 },
+                        },
+                        previous.get(key),
                     );
                     repositories.push(normalized);
-                    byName.set(normalized.nameWithOwner.toLowerCase(), normalized);
+                    byName.set(key, normalized);
                 }
             }
 
