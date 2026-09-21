@@ -100,7 +100,7 @@ export function renderHtml() {
     main {
       width: min(1120px, calc(100% - 32px));
       margin: 0 auto;
-      padding: 38px 0 64px;
+      padding: 28px 0 52px;
     }
     h1 {
       max-width: 760px;
@@ -116,10 +116,10 @@ export function renderHtml() {
     h3 { font-size: var(--text-body-large, 15px); }
     .lede {
       max-width: 700px;
-      margin: 16px 0 0;
+      margin: 9px 0 0;
       color: var(--muted);
-      font-size: var(--text-body-large, 16px);
-      line-height: 1.55;
+      font-size: var(--text-body-medium, 14px);
+      line-height: 1.45;
     }
     .hero-actions { margin-top: 24px; }
     .button {
@@ -545,25 +545,25 @@ export function renderHtml() {
       justify-content: space-between;
       gap: 20px;
     }
-    .ops-heading h1 { font-size: clamp(28px, 4vw, 40px); }
+    .ops-heading h1 { font-size: clamp(27px, 3.4vw, 36px); }
     .refresh-status { color: var(--muted); font-size: var(--text-body-small, 12px); white-space: nowrap; }
     .metrics {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
-      margin-top: 20px;
+      margin-top: 16px;
       overflow: hidden;
       border: 1px solid var(--border);
       border-radius: 11px;
     }
     .metric {
       min-width: 0;
-      padding: 13px 14px;
+      padding: 11px 14px;
       border-right: 1px solid var(--border);
       background: var(--surface);
     }
     .metric:last-child { border-right: 0; }
-    .metric strong { display: block; font-size: 22px; line-height: 1.1; font-variant-numeric: tabular-nums; }
-    .metric span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .metric strong { display: block; font-size: 20px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .metric span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
     .metric.danger strong { color: var(--danger); }
     .metric.warning strong { color: var(--warning); }
     .filters {
@@ -594,7 +594,7 @@ export function renderHtml() {
       background: var(--soft);
     }
     .filter-disclosure {
-      margin-top: 16px;
+      margin-top: 14px;
       border: 1px solid var(--border);
       border-radius: 11px;
       background: var(--surface);
@@ -638,9 +638,9 @@ export function renderHtml() {
     .current-repository { box-shadow: inset 3px 0 0 var(--accent); }
     .mission-layout {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
-      gap: 18px;
-      margin-top: 18px;
+      grid-template-columns: minmax(0, 1fr) minmax(250px, 300px);
+      gap: 14px;
+      margin-top: 14px;
       align-items: start;
     }
     .mission-layout > * { min-width: 0; }
@@ -668,10 +668,11 @@ export function renderHtml() {
     }
     .pipeline {
       display: grid;
-      grid-template-columns: repeat(5, minmax(148px, 1fr));
-      min-width: 760px;
-      gap: 10px;
-      padding: 14px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      width: 100%;
+      min-width: 0;
+      gap: 8px;
+      padding: 12px;
     }
     .stage-card {
       min-width: 0;
@@ -683,12 +684,12 @@ export function renderHtml() {
     .stage-card.selected { border-color: var(--accent); background: var(--accent-soft); }
     .stage-button {
       width: 100%;
-      min-height: 74px;
+      min-height: 66px;
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
       gap: 8px;
-      padding: 12px;
+      padding: 10px;
       border: 0;
       background: transparent;
       color: var(--text);
@@ -697,12 +698,12 @@ export function renderHtml() {
     }
     .stage-button strong { display: block; text-transform: capitalize; }
     .stage-button small { display: block; margin-top: 4px; color: var(--muted); }
-    .stage-count { font-size: 24px; line-height: 1; font-weight: var(--font-weight-semibold, 600); font-variant-numeric: tabular-nums; }
-    .stage-preview { display: grid; gap: 6px; padding: 0 8px 8px; }
+    .stage-count { font-size: 20px; line-height: 1; font-weight: var(--font-weight-semibold, 600); font-variant-numeric: tabular-nums; }
+    .stage-preview { display: grid; gap: 6px; padding: 0 7px 7px; }
     .goal-trigger {
       width: 100%;
       min-height: 44px;
-      padding: 8px 9px;
+      padding: 7px 8px;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: var(--surface);
@@ -728,13 +729,25 @@ export function renderHtml() {
     .exception-lane h3 { display: flex; justify-content: space-between; gap: 8px; }
     .exception-lane .stage-goals { grid-template-columns: 1fr; }
     .activity-panel { position: sticky; top: 14px; }
-    .activity-stream { max-height: min(620px, calc(100vh - 190px)); overflow: auto; margin: 0; padding: 0; list-style: none; }
+    .activity-stream { margin: 0; padding: 0; list-style: none; }
     .activity-item { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 9px; padding: 11px 14px; border-top: 1px solid var(--border); }
     .activity-item:first-child { border-top: 0; }
     .activity-dot { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
     .activity-item a { color: var(--text); font-weight: var(--font-weight-semibold, 600); text-decoration: none; }
     .activity-item a:hover { color: var(--focus); text-decoration: underline; }
     .activity-item small { display: block; margin-top: 3px; color: var(--muted); }
+    .activity-more {
+      border-top: 1px solid var(--border);
+    }
+    .activity-more > summary {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      color: var(--focus);
+      cursor: pointer;
+      font-weight: var(--font-weight-semibold, 600);
+    }
     .goal-list { display: grid; gap: 12px; }
     .goal-card {
       overflow: hidden;
@@ -906,8 +919,23 @@ export function renderHtml() {
       .goal-details-body { grid-template-columns: 1fr; }
       .mission-layout { grid-template-columns: 1fr; }
       .activity-panel { position: static; }
-      .activity-stream { max-height: 360px; }
       .exception-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 1040px) and (min-width: 801px) {
+      .pipeline {
+        grid-template-columns: repeat(5, minmax(132px, 1fr));
+        min-width: 700px;
+      }
+    }
+    @media (max-width: 1200px) and (min-width: 801px) {
+      .mission-layout { grid-template-columns: 1fr; }
+      .activity-panel { position: static; }
+      .activity-stream {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .activity-item:nth-child(2) { border-top: 0; }
+      .activity-item:nth-child(odd) { border-right: 1px solid var(--border); }
     }
     @media (max-width: 420px) {
       main { width: 100%; padding: 18px 12px 42px; }
@@ -1495,6 +1523,16 @@ export function renderHtml() {
         (goal.evidence || []).map(item => ({ ...item, goal })))
         .sort((left, right) => String(right.timestamp || "").localeCompare(String(left.timestamp || "")))
         .slice(0, 18);
+      const visibleActivity = activity.slice(0, 8);
+      const olderActivity = activity.slice(8);
+      const itemsHtml = items => items.map(item => \`
+        <li class="activity-item">
+          <span class="activity-dot" aria-hidden="true"></span>
+          <div>
+            <a href="\${esc(item.url || item.goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
+            <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))}\${item.confidence === "inferred" ? " · inferred" : ""}</small>
+          </div>
+        </li>\`).join("");
       return \`
         <aside class="activity-panel" aria-labelledby="activity-title">
           <div class="panel-header">
@@ -1503,16 +1541,14 @@ export function renderHtml() {
           </div>
           \${activity.length ? \`
             <ol class="activity-stream">
-              \${activity.map(item => \`
-                <li class="activity-item">
-                  <span class="activity-dot" aria-hidden="true"></span>
-                  <div>
-                    <a href="\${esc(item.url || item.goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
-                    <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))}\${item.confidence === "inferred" ? " · inferred" : ""}</small>
-                  </div>
-                </li>\`).join("")}
-            </ol>\`
-            : '<p class="help" style="padding:14px">No correlated evidence is available for the current filters.</p>'}
+              \${itemsHtml(visibleActivity)}
+            </ol>
+            \${olderActivity.length ? \`
+              <details class="activity-more">
+                <summary>Show \${olderActivity.length} older events</summary>
+                <ol class="activity-stream">\${itemsHtml(olderActivity)}</ol>
+              </details>\` : ""}
+            \` : '<p class="help" style="padding:14px">No correlated evidence is available for the current filters.</p>'}
         </aside>\`;
     }
 
