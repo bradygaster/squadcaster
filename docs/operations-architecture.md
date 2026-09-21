@@ -31,6 +31,39 @@ planning state: closed or merged work is complete; unresolved dependencies are
 blocked; current workflow/check failure is failed; a ready PR is reviewing; a
 draft PR or active run is implementing.
 
+## Observed lifecycle history
+
+Lifecycle history is persisted separately from GitHub evidence in registry
+contract version 2. It begins with the first eligible observation after the
+feature is enabled. That observation establishes a baseline only, so every goal
+reports that history is incomplete before its first observation. Squadcaster
+does not inspect existing issue, pull request, check, artifact, workflow, or
+run timestamps to manufacture earlier transitions.
+
+A transition record contains only repository and goal identity, `from`, `to`,
+the Squadcaster `observedAt` timestamp, and the freshness of each source used by
+that snapshot. Complete observations and explicitly partial observations with
+at least one fresh source may append a transition. Intentionally skipped
+sources make the observation partial; they are never labeled complete. A
+stale-only, unavailable-only, failed, or unrefreshed snapshot cannot append
+one. Partial transitions remain visibly labeled partial. Cross-repository
+dependency changes are observed at the aggregate boundary and include the
+dependency repositories' source freshness.
+
+Observation timestamps order the local log; they are not GitHub or Squad action
+times. If the local clock moves backward or repeats a timestamp, Squadcaster
+advances the next observation by one millisecond from the prior observation so
+the persisted order remains deterministic without claiming external timing.
+Each goal retains the newest 100 transitions. Older entries are dropped; there
+is no time-based deletion and no reconstruction after retention.
+
+Excluding a repository suspends observation. Re-enabling it requires a new
+baseline, so a phase difference spanning the exclusion window is not recorded
+as if Squadcaster had observed the transition. Registry version 1 and malformed
+history migrate to an empty version 2 history. Persisted baselines and
+transitions survive extension and process restarts; missing pre-feature history
+remains explicitly incomplete.
+
 ## Correlation rules
 
 The GitHub adapter reads repository metadata, issues, pull requests, and Actions

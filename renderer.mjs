@@ -1083,6 +1083,29 @@ export function renderHtml() {
         </ol>\`;
     }
 
+    function lifecycleHistoryHtml(goal) {
+      const history = goal.lifecycleHistory || {};
+      const transitions = Array.isArray(history.transitions) ? [...history.transitions].reverse() : [];
+      const incomplete = history.incompleteBeforeFirstObservation !== false;
+      return \`
+        <div class="history-note">
+          <strong>Observed lifecycle history</strong>
+          <p>\${incomplete
+            ? "History is incomplete before Squadcaster's first observation. "
+            : ""}Times below are when Squadcaster observed a phase change, not when GitHub or Squad performed it.</p>
+        </div>
+        \${transitions.length ? \`
+          <ol class="timeline">
+            \${transitions.map(item => \`
+              <li>
+                <strong>\${esc(item.from)} → \${esc(item.to)}</strong>
+                <small>observed \${esc(formatTime(item.observedAt))} · \${esc(item.freshness?.status || "partial")} source observation</small>
+              </li>\`).join("")}
+          </ol>\`
+          : \`<p class="help">No later phase change has been observed\${history.firstObservedAt ? " since " + esc(formatTime(history.firstObservedAt)) : " yet"}.</p>\`}
+      \`;
+    }
+
     function relatedArtifactsHtml(goal) {
       const links = [
         ...goal.pullRequests.map(item => ({
@@ -1368,6 +1391,7 @@ export function renderHtml() {
             <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Pull requests and checks</h3>\${pullRequestItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Workflow runs</h3>\${workflowItemsHtml(goal)}</section>
+            <section class="drawer-section"><h3>Lifecycle history</h3><div style="margin-top:10px">\${lifecycleHistoryHtml(goal)}</div></section>
             <section class="drawer-section"><h3>Evidence</h3><div style="margin-top:10px">\${timelineHtml(goal)}</div></section>
           </div>
         </aside>\`;

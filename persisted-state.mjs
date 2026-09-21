@@ -64,6 +64,19 @@ function normalizeGoal(goal) {
         evidence: recordArray(goal.evidence),
         pullRequests: recordArray(goal.pullRequests),
         workflowRuns: recordArray(goal.workflowRuns),
+        lifecycleHistory: isRecord(goal.lifecycleHistory)
+            ? {
+                incompleteBeforeFirstObservation: true,
+                firstObservedAt: goal.lifecycleHistory.firstObservedAt || null,
+                lastObservedAt: goal.lifecycleHistory.lastObservedAt || null,
+                transitions: recordArray(goal.lifecycleHistory.transitions),
+            }
+            : {
+                incompleteBeforeFirstObservation: true,
+                firstObservedAt: null,
+                lastObservedAt: null,
+                transitions: [],
+            },
     };
 }
 

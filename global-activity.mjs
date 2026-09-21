@@ -1,5 +1,11 @@
 import { aggregateActivitySnapshots, isCompleteActivitySnapshot } from "./activity-model.mjs";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
+import {
+    attachLifecycleHistory,
+    normalizeLifecycleHistory,
+    observeLifecycleSnapshot,
+    setLifecycleRepositoryIncluded,
+} from "./lifecycle-history.mjs";
 import { normalizeMembers, parseTeamMarkdown } from "./squad-roster.mjs";
 
 const DISCOVERY_TTL = 15 * 60 * 1000;
@@ -219,7 +225,7 @@ async function mapConcurrent(items, limit, mapper) {
 
 export function normalizeRegistry(value = {}) {
     return {
-        version: 1,
+        version: 2,
         viewer: clean(value.viewer, 120),
         discoveredAt: value.discoveredAt || null,
         rateLimit: value.rateLimit || null,
@@ -235,6 +241,7 @@ export function normalizeRegistry(value = {}) {
             )
             : {},
         rosters: value.rosters && typeof value.rosters === "object" ? value.rosters : {},
+        lifecycleHistory: normalizeLifecycleHistory(value.lifecycleHistory),
         discoveryError: clean(value.discoveryError, 800),
     };
 }
@@ -500,7 +507,14 @@ export class GitHubGlobalActivity {
         const repository = this.registry.repositories.find(
             (candidate) => candidate.nameWithOwner.toLowerCase() === String(nameWithOwner).toLowerCase(),
         );
-        if (repository) repository.included = Boolean(included);
+        if (repository) {
+            repository.included = Boolean(included);
+            this.registry.lifecycleHistory = setLifecycleRepositoryIncluded(
+                this.registry.lifecycleHistory,
+                repository.nameWithOwner,
+                repository.included,
+            );
+        }
         return Boolean(repository);
     }
 
@@ -514,12 +528,14 @@ export class GitHubGlobalActivity {
         forceAll = false,
     }) {
         const currentKey = String(currentRepository || "").toLowerCase();
+        const observedKeys = new Set();
         const previousCurrent = this.registry.repositories.find(
             (repository) => repository.nameWithOwner.toLowerCase() === currentKey,
         );
         await this.discoverRepositories({ force: forceDiscovery });
         if (currentSnapshot?.repository?.nameWithOwner) {
             this.registry.snapshots[currentKey] = currentSnapshot;
+            if (currentSnapshotRefreshed) observedKeys.add(currentKey);
             let current = this.registry.repositories.find(
                 (repository) => repository.nameWithOwner.toLowerCase() === currentKey,
             );
@@ -606,6 +622,7 @@ export class GitHubGlobalActivity {
                         ["stale", "unavailable"].includes(previous?.sourceState?.workflowRuns?.status),
                 }), roster);
                 this.registry.snapshots[key] = snapshot;
+                observedKeys.add(key);
                 if (isCompleteActivitySnapshot(snapshot)) {
                     repository.lastSuccessfulRefresh = snapshot.fetchedAt;
                 }
@@ -624,10 +641,10 @@ export class GitHubGlobalActivity {
         });
 
         const included = this.registry.repositories.filter((repository) => repository.included);
-        const snapshots = included
+        let snapshots = included
             .map((repository) => this.registry.snapshots[repository.nameWithOwner.toLowerCase()])
             .filter(Boolean);
-        return aggregateActivitySnapshots({
+        const preliminary = aggregateActivitySnapshots({
             snapshots,
             currentRepository,
             viewer: this.registry.viewer,
@@ -642,6 +659,79 @@ export class GitHubGlobalActivity {
                             : "Background refresh paused due to the low GitHub API rate limit; the current repository still refreshes.",
                     }]
                     : [],
+        });
+        const snapshotByRepository = new Map(snapshots.map((snapshot) => [
+            snapshot.repository?.nameWithOwner?.toLowerCase(),
+            snapshot,
+        ]));
+        for (const repository of included) {
+            const key = repository.nameWithOwner.toLowerCase();
+            const snapshot = this.registry.snapshots[key];
+            if (!snapshot) continue;
+            const aggregateGoals = preliminary.goals.filter(
+                (goal) => goal.repository?.nameWithOwner?.toLowerCase() === key,
+            );
+            const dependencyKeys = [...new Set(aggregateGoals.flatMap((goal) =>
+                (goal.dependencies || []).map((dependency) => dependency.repository?.toLowerCase())
+                    .filter(Boolean)))];
+            const dependencySnapshots = dependencyKeys
+                .map((dependencyKey) => snapshotByRepository.get(dependencyKey))
+                .filter(Boolean);
+            const dependencySourceState = Object.fromEntries(dependencySnapshots.flatMap(
+                (dependencySnapshot) => Object.entries(dependencySnapshot.sourceState || {})
+                    .map(([source, state]) => [
+                        `dependency:${dependencySnapshot.repository.nameWithOwner}:${source}`,
+                        state,
+                    ]),
+            ));
+            const dependencyChanged = dependencyKeys.some((dependencyKey) => observedKeys.has(dependencyKey));
+            const observingOwner = observedKeys.has(key);
+            const aggregateSnapshot = {
+                ...snapshot,
+                fetchedAt: observingOwner ? snapshot.fetchedAt : preliminary.fetchedAt,
+                goals: aggregateGoals,
+                sourceState: {
+                    ...snapshot.sourceState,
+                    ...dependencySourceState,
+                },
+                partial: Boolean(snapshot.partial) ||
+                    !observingOwner ||
+                    dependencySnapshots.some((dependencySnapshot) =>
+                        dependencySnapshot.partial || dependencySnapshot.stale),
+                stale: Boolean(snapshot.stale) ||
+                    dependencySnapshots.some((dependencySnapshot) => dependencySnapshot.stale),
+                errors: [
+                    ...(snapshot.errors || []),
+                    ...dependencySnapshots.flatMap((dependencySnapshot) =>
+                        dependencySnapshot.errors || []),
+                ],
+            };
+            if (observingOwner || dependencyChanged) {
+                const observed = observeLifecycleSnapshot(
+                    this.registry.lifecycleHistory,
+                    aggregateSnapshot,
+                    { included: true },
+                );
+                this.registry.lifecycleHistory = observed.lifecycleHistory;
+                this.registry.snapshots[key] = observed.snapshot;
+            } else {
+                this.registry.snapshots[key] = attachLifecycleHistory(
+                    aggregateSnapshot,
+                    this.registry.lifecycleHistory,
+                );
+            }
+        }
+        snapshots = included
+            .map((repository) => this.registry.snapshots[repository.nameWithOwner.toLowerCase()])
+            .filter(Boolean);
+        return aggregateActivitySnapshots({
+            snapshots,
+            currentRepository,
+            viewer: this.registry.viewer,
+            repositories: this.registry.repositories.map(({ ...repository }) => repository),
+            errors: preliminary.errors
+                .filter((error) => !error.repository)
+                .map(({ source, message: errorMessage }) => ({ source, message: errorMessage })),
         });
     }
 }
