@@ -549,7 +549,7 @@ export function renderHtml() {
     .refresh-status { color: var(--muted); font-size: var(--text-body-small, 12px); white-space: nowrap; }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       margin-top: 0;
       overflow: hidden;
       border: 1px solid var(--border);
@@ -557,15 +557,19 @@ export function renderHtml() {
     }
     .metric {
       min-width: 0;
-      padding: 12px 14px;
+      min-height: 116px;
+      padding: 14px 16px;
       border-right: 1px solid var(--border);
       background: var(--surface);
     }
     .metric:last-child { border-right: 0; }
-    .metric strong { display: block; font-size: 20px; line-height: 1.1; font-variant-numeric: tabular-nums; }
-    .metric span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
-    .metric.danger strong { color: var(--danger); }
-    .metric.warning strong { color: var(--warning); }
+    .metric-label { display: block; color: var(--muted); font-size: 12px; }
+    .metric-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; margin-top: 7px; }
+    .metric-value strong { font-size: 24px; line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .metric-value small { color: var(--muted); font-size: 12px; }
+    .metric-detail { display: block; margin-top: 17px; color: var(--muted); font-size: 12px; }
+    .metric.danger .metric-value strong { color: var(--danger); }
+    .metric.warning .metric-value strong { color: var(--warning); }
     .filters {
       display: flex;
       flex-wrap: wrap;
@@ -1476,8 +1480,13 @@ export function renderHtml() {
       return \`\${Math.floor(hours / 24)}d ago\`;
     }
 
-    function metricHtml(value, label, tone = "") {
-      return \`<div class="metric \${tone}"><strong>\${esc(value)}</strong><span>\${esc(label)}</span></div>\`;
+    function metricHtml(value, label, { tone = "", aside = "", detail = "" } = {}) {
+      return \`
+        <div class="metric \${tone}">
+          <span class="metric-label">\${esc(label)}</span>
+          <span class="metric-value"><strong>\${esc(value)}</strong>\${aside ? \`<small>\${esc(aside)}</small>\` : ""}</span>
+          \${detail ? \`<span class="metric-detail">\${esc(detail)}</span>\` : ""}
+        </div>\`;
     }
 
     function goalMatchesFilter(goal) {
@@ -1836,14 +1845,29 @@ export function renderHtml() {
       const summary = activity.summary || {};
       const goals = (activity.goals || []).filter(goalMatchesFilter).filter(goalMatchesScope);
       const lifecycle = ["queued", "researching", "implementing", "reviewing", "completed"];
+      const repositories = (activity.repositories || []).filter(repository => repository.included).length;
+      const inProgress = (summary.queued || 0) + (summary.researching || 0) + (summary.implementing || 0);
+      const needsAttention = (summary.blocked || 0) + (summary.failed || 0);
       return \`
         <section>
           <div class="metrics">
-            \${metricHtml(summary.active || 0, "Active goals")}
-            \${metricHtml(summary.blocked || 0, "Blocked", summary.blocked ? "danger" : "")}
-            \${metricHtml(summary.failed || 0, "Failed", summary.failed ? "danger" : "")}
-            \${metricHtml(summary.awaitingReview || 0, "Awaiting review", summary.awaitingReview ? "warning" : "")}
-            \${metricHtml(summary.completed || 0, "Completed")}
+            \${metricHtml(activity.goals?.length || 0, "Goals in view", {
+              detail: \`\${summary.active || 0} active · \${summary.completed || 0} completed\`
+            })}
+            \${metricHtml(inProgress, "In progress", {
+              aside: \`\${summary.queued || 0} queued\`,
+              detail: \`\${summary.researching || 0} researching · \${summary.implementing || 0} implementing\`
+            })}
+            \${metricHtml(needsAttention, "Needs attention", {
+              tone: needsAttention ? "danger" : "",
+              aside: \`\${summary.failed || 0} failed\`,
+              detail: \`\${summary.blocked || 0} blocked\`
+            })}
+            \${metricHtml(summary.completed || 0, "Delivery", {
+              tone: summary.awaitingReview ? "warning" : "",
+              aside: \`\${summary.awaitingReview || 0} awaiting review\`,
+              detail: \`\${repositories} repos · synced \${formatTime(activity.fetchedAt)}\`
+            })}
           </div>
           \${activity.errors?.length ? \`
             <div class="sync-warning" role="alert"><strong>Some GitHub data could not be refreshed.</strong>
