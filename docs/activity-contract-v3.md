@@ -1,12 +1,54 @@
-# Activity contract v2 design
+# Activity contract v3 design
 
 ## Scope and compatibility
 
-Repository activity snapshots use `schemaVersion: 2`. Version 2 is additive:
-all version 1 fields remain available, and pull requests add authoritative
-review summaries. User-wide aggregate snapshots remain `schemaVersion: 2`
-because their envelope is unchanged; each nested goal carries the repository
-contract's additive pull-request shape.
+Repository and user-wide activity snapshots use `schemaVersion: 3`. Version 3
+retains the version 2 authoritative review summaries and adds an explicit,
+normalized calendar-day contract. No daily aggregate is introduced by this
+version.
+
+```js
+dayBoundary: {
+  version: 1,
+  kind: "utc-server-day",
+  timeZone: "UTC",
+  snapshotDay: "2026-09-21",
+  startsAt: "2026-09-21T00:00:00.000Z",
+  nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+  cacheKey: "day-boundary-v1:utc:2026-09-21"
+}
+```
+
+`fetchedAt`, `startsAt`, `nextBoundaryAt`, and all event timestamps are ISO 8601
+UTC timestamps. For a complete repository snapshot, `snapshotDay` is derived
+from `fetchedAt`. If a refresh retains stale source data, `snapshotDay` remains
+the earliest retained stale source day until a complete refresh succeeds. The
+browser locale and viewer timezone never select or rewrite it. A UTC server day begins at
+`00:00:00.000Z` and ends at the exclusive `nextBoundaryAt`. UTC has no
+daylight-saving transition, so spring-forward and fall-back changes in a
+viewer's locale do not shorten, lengthen, repeat, or skip a contract day.
+
+The day-boundary cache key includes the boundary contract version, timezone
+semantics, and UTC date. Repository snapshots are refreshed when this key
+changes even if their ordinary active/inactive TTL has not expired. A failed
+refresh retains the prior `snapshotDay`; the renderer therefore cannot present
+stale data as belonging to the new day. User-wide aggregate snapshots describe
+their observation day in `dayBoundary` and list distinct repository input days
+in `snapshotDays`. When those differ or span multiple days, the renderer labels
+the input range and the aggregate observation day as refresh-pending.
+
+Persisted activity schema v2 and registry v1 snapshots migrate on load to
+schema v3 by deriving `dayBoundary` from their normalized `fetchedAt`. Malformed
+or unsupported snapshots are discarded through the existing safe defaults.
+Persisted state is version 4 and the repository registry is version 2.
+
+The renderer labels the effective rule as `UTC server day YYYY-MM-DD
+(00:00–24:00 UTC)`. For retained or mixed-day inputs it instead labels
+`UTC server-day data START–END ... aggregate observed YYYY-MM-DD; refresh
+pending`. These are contract labels only; they do not imply that any daily
+count exists.
+
+## Review summaries retained from v2
 
 ```js
 pullRequest: {
@@ -77,7 +119,7 @@ checks, authorship, assignees, or goal ownership.
 | Stable agent identity and avatar | No validated Squad source currently exists in this repository | Unknown until Squad publishes a durable identity/provenance record; GitHub actor lookup alone is insufficient | Must remain unavailable, not copied from assignees, reviewers, PR authors, branches, or roster display names | Renderer needs a distinct agent identity surface separate from goal owner and GitHub participants | Blocked follow-up |
 | Lifecycle transition history | Future persisted observation log or an authoritative event stream | Snapshot polling alone cannot reconstruct transitions between observations; timeline APIs add pagination and still do not define Squad lifecycle transitions | Record only transitions observed after the feature is enabled, with observation time and source freshness; never backfill inferred history | Explicitly label observed-at time, source state, and incomplete history | Follow-up |
 | Durable goal/run/PR/session links | Existing closing references and explicit Squad markers cover goals, runs, and PRs; no validated implementation-session identifier exists | Existing correlations are bounded; session linkage requires an explicit producer contract | Preserve explicit identifiers only; unknown session link remains absent | Separate observed durable links from inferred branch correlation | Follow-up |
-| Daily aggregate timezone | No daily aggregate exists in the current contract | No API cost until introduced | A future aggregate must carry an explicit IANA timezone or UTC server-day definition | Label the day boundary and timezone | Defer until a daily aggregate is proposed |
+| Daily aggregate timezone | The v3 snapshot contract defines UTC server-day without adding a daily aggregate | No API cost | Any future daily aggregate must use the normalized `dayBoundary` and its cache key; stale prior-day snapshots stay prior-day | Already labels UTC server-day and date | Contract implemented; metric deferred |
 
 ## Independently shippable slices
 
@@ -96,5 +138,5 @@ checks, authorship, assignees, or goal ownership.
    this consumer. The consumer validation gate and current correlation audit
    are documented in
    [the implementation session provenance consumer contract](session-provenance-consumer-contract.md).
-6. **Daily aggregation semantics:** define timezone and day-boundary fields only
-   with the first actual daily aggregate.
+6. **Daily aggregation semantics:** reuse the v3 `dayBoundary` contract when an
+   actual daily aggregate is proposed; do not infer a browser-local day.

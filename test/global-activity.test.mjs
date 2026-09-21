@@ -6,6 +6,7 @@ import {
     GitHubGlobalActivity,
     normalizeRegistry,
     refreshPolicy,
+    snapshotCrossedDayBoundary,
 } from "../global-activity.mjs";
 
 const repository = (nameWithOwner) => ({
@@ -257,10 +258,14 @@ test("dependency resolution does not depend on snapshot order", () => {
 });
 
 test("registry normalization preserves inclusion preferences and snapshots", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/demo"),
+        fetchedAt: "2026-09-20T12:00:00Z",
+    });
     const registry = normalizeRegistry({
         viewer: "octocat",
         repositories: [{ nameWithOwner: "octodemo/demo", included: false }],
-        snapshots: { "octodemo/demo": { goals: [] } },
+        snapshots: { "octodemo/demo": snapshot },
         restRateLimit: { remaining: 4321, reset: 1790028000 },
         discoverySignals: {
             "OCTODEMO/DEMO": {
@@ -526,6 +531,17 @@ test("dependency observation does not contaminate raw repository snapshots acros
     assert.equal(recovered.stale, false);
     assert.deepEqual(recovered.errors, []);
     assert.deepEqual(global.registry.snapshots[frontendName].errors, []);
+});
+
+test("registry normalization discards malformed and unsupported snapshots", () => {
+    const registry = normalizeRegistry({
+        snapshots: {
+            unsupported: { schemaVersion: 99, fetchedAt: "2026-09-20T12:00:00Z", goals: [{ id: "bad" }] },
+            malformed: { schemaVersion: 2, fetchedAt: "not-a-date", goals: [{ id: "bad" }] },
+        },
+    });
+
+    assert.deepEqual(registry.snapshots, {});
 });
 
 test("repository discovery preserves exclusions and ignores non-Squad repositories", async () => {
@@ -1057,6 +1073,39 @@ test("fallback discovery keeps every paginated affiliated repository eligible", 
 test("refresh policy gives active repositories a shorter interval", () => {
     assert.ok(refreshPolicy.activeMilliseconds < refreshPolicy.inactiveMilliseconds);
     assert.ok(refreshPolicy.inactiveMilliseconds < refreshPolicy.discoveryMilliseconds);
+});
+
+test("cache validity ends at UTC midnight even before the ordinary TTL", () => {
+    const snapshot = buildActivitySnapshot({
+        repository: repository("octodemo/frontend"),
+        fetchedAt: "2026-09-21T23:59:59Z",
+    });
+
+    assert.equal(snapshotCrossedDayBoundary(snapshot, Date.parse("2026-09-21T23:59:59.999Z")), false);
+    assert.equal(snapshotCrossedDayBoundary(snapshot, Date.parse("2026-09-22T00:00:00.000Z")), true);
+});
+
+test("registry migration versions and partitions cached snapshots by UTC day", () => {
+    const registry = normalizeRegistry({
+        version: 1,
+        snapshots: {
+            "OCTODEMO/FRONTEND": {
+                ...buildActivitySnapshot({
+                    repository: repository("octodemo/frontend"),
+                    fetchedAt: "2026-09-21T18:00:00Z",
+                }),
+                schemaVersion: 2,
+                dayBoundary: undefined,
+            },
+        },
+    });
+
+    assert.equal(registry.version, 2);
+    assert.equal(registry.snapshots["octodemo/frontend"].schemaVersion, 3);
+    assert.equal(
+        registry.snapshots["octodemo/frontend"].dayBoundary.cacheKey,
+        "day-boundary-v1:utc:2026-09-21",
+    );
 });
 
 test("aggregate refresh skips excluded repositories and reuses the current snapshot", async () => {

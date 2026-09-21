@@ -26,8 +26,10 @@ test("normalizes legacy state without restoring mutation fields", () => {
         onboarding: { cast: { command: "/squad cast" } },
     });
 
-    assert.equal(normalized.version, 3);
-    assert.equal(normalized.activity.fetchedAt, activity.fetchedAt);
+    assert.equal(normalized.version, 4);
+    assert.equal(normalized.activity.schemaVersion, 3);
+    assert.equal(normalized.activity.dayBoundary.snapshotDay, "2026-09-21");
+    assert.equal(normalized.activity.fetchedAt, "2026-09-21T12:00:00.000Z");
     assert.equal(normalized.activity.goals[0].id, activity.goals[0].id);
     assert.deepEqual(normalized.activity.goals[0].pullRequests, []);
     assert.deepEqual(normalized.activity.goals[0].lifecycleHistory, {
@@ -48,7 +50,7 @@ test("normalizes legacy state without restoring mutation fields", () => {
 test("defaults malformed and unsupported persisted values safely", () => {
     for (const value of [null, undefined, "legacy", 42, [], { activity: { schemaVersion: 1 } }]) {
         const normalized = normalizePersistedState(value);
-        assert.equal(normalized.version, 3);
+        assert.equal(normalized.version, 4);
         assert.deepEqual(normalized.activity, emptyActivity());
     }
 });
@@ -64,10 +66,11 @@ test("ignores legacy proposal and unknown fields", () => {
     assert.equal("unknown" in normalized, false);
 });
 
-test("coerces malformed schema-v2 activity into renderer-safe shapes", () => {
+test("migrates schema-v2 activity and coerces it into renderer-safe shapes", () => {
     const normalized = normalizePersistedState({
         activity: {
             schemaVersion: 2,
+            fetchedAt: "2026-03-08T09:30:00-07:00",
             repository: [],
             repositories: {},
             summary: [],
@@ -84,6 +87,10 @@ test("coerces malformed schema-v2 activity into renderer-safe shapes", () => {
         },
     });
 
+    assert.equal(normalized.activity.schemaVersion, 3);
+    assert.equal(normalized.activity.fetchedAt, "2026-03-08T16:30:00.000Z");
+    assert.equal(normalized.activity.dayBoundary.snapshotDay, "2026-03-08");
+    assert.equal(normalized.activity.dayBoundary.timeZone, "UTC");
     assert.deepEqual(normalized.activity.repository, {});
     assert.deepEqual(normalized.activity.repositories, []);
     assert.deepEqual(normalized.activity.summary, emptyActivity().summary);
@@ -218,4 +225,28 @@ test("recursively drops unvalidated implementation session provenance from persi
     assert.equal(goal.evidence[0].title, "Observed");
     assert.equal(goal.pullRequests[0].number, 44);
     assert.equal(goal.workflowRuns[0].id, 77);
+});
+
+test("preserves a stale v3 snapshot boundary across persisted-state reload", () => {
+    const normalized = normalizePersistedState({
+        version: 4,
+        activity: {
+            schemaVersion: 3,
+            fetchedAt: "2026-09-22T00:05:00.000Z",
+            dayBoundary: {
+                version: 1,
+                kind: "utc-server-day",
+                timeZone: "UTC",
+                snapshotDay: "2026-09-21",
+                startsAt: "2026-09-21T00:00:00.000Z",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+                cacheKey: "day-boundary-v1:utc:2026-09-21",
+            },
+            snapshotDays: ["2026-09-21"],
+        },
+    });
+
+    assert.equal(normalized.activity.fetchedAt, "2026-09-22T00:05:00.000Z");
+    assert.equal(normalized.activity.dayBoundary.snapshotDay, "2026-09-21");
+    assert.deepEqual(normalized.activity.snapshotDays, ["2026-09-21"]);
 });

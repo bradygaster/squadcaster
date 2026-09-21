@@ -90,6 +90,16 @@ function fixtureState() {
         activity: {
             currentRepository: "octodemo/frontend",
             fetchedAt: "2026-09-20T18:00:00Z",
+            dayBoundary: {
+                version: 1,
+                kind: "utc-server-day",
+                timeZone: "UTC",
+                snapshotDay: "2026-09-20",
+                startsAt: "2026-09-20T00:00:00.000Z",
+                nextBoundaryAt: "2026-09-21T00:00:00.000Z",
+                cacheKey: "day-boundary-v1:utc:2026-09-20",
+            },
+            snapshotDays: ["2026-09-20"],
             lastAttemptedRefresh: "2026-09-20T18:00:00Z",
             lastSuccessfulRefresh: "2026-09-20T18:00:00Z",
             repositories: [
@@ -433,9 +443,19 @@ test("distinguishes observed and inferred correlation evidence", async ({ page }
 
 test("labels partial refresh attempts separately from successful syncs", async ({ page }) => {
     await expect(page.locator("#repo-header")).toContainText(/synced/);
+    await expect(page.locator("#repo-header")).toContainText("UTC server day 2026-09-20");
 
     const partialState = fixture.state();
     partialState.activity.fetchedAt = "2026-09-21T20:00:00Z";
+    partialState.activity.dayBoundary = {
+        version: 1,
+        kind: "utc-server-day",
+        timeZone: "UTC",
+        snapshotDay: "2026-09-21",
+        startsAt: "2026-09-21T00:00:00.000Z",
+        nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+        cacheKey: "day-boundary-v1:utc:2026-09-21",
+    };
     partialState.activity.lastAttemptedRefresh = "2026-09-21T20:00:00Z";
     partialState.activity.lastSuccessfulRefresh = "2026-09-20T18:00:00Z";
     partialState.activity.partial = true;
@@ -444,6 +464,8 @@ test("labels partial refresh attempts separately from successful syncs", async (
 
     await expect(page.locator("#repo-header")).toContainText("refresh attempted");
     await expect(page.locator("#repo-header")).toContainText("last fully synced");
+    await expect(page.locator("#repo-header")).toContainText("UTC server-day data 2026-09-20");
+    await expect(page.locator("#repo-header")).toContainText("aggregate observed 2026-09-21");
 });
 
 test("preserves filters, expansion, and drawer state across live rerenders", async ({ page }) => {

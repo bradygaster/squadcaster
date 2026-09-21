@@ -15,6 +15,7 @@ import {
     GitHubGlobalActivity,
     normalizeRegistry,
 } from "./global-activity.mjs";
+import { utcServerDayBoundary } from "./activity-model.mjs";
 import { normalizePersistedState } from "./persisted-state.mjs";
 import { renderHtml } from "./renderer.mjs";
 import { normalizeMembers, parseTeamMarkdown } from "./squad-roster.mjs";
@@ -145,7 +146,7 @@ async function loadState(workingDirectory) {
         return {
             statePath,
             state: {
-                version: 3,
+                version: 4,
                 mode: "unavailable",
                 workingDirectory: workingDirectory || "",
                 repoRoot: "",
@@ -168,7 +169,7 @@ async function loadState(workingDirectory) {
     return {
         statePath,
         state: {
-            version: 3,
+            version: 4,
             mode: initialized ? "active" : "setup",
             workingDirectory,
             repoRoot,
@@ -302,9 +303,12 @@ async function refreshRemoteState(entry, { force = false } = {}) {
             });
         } catch (error) {
             const message = cleanText(error?.message || error, 1200);
+            const attemptedAt = new Date().toISOString();
             await updateState(entry, (state) => {
                 state.activity ||= {
-                    schemaVersion: 2,
+                    schemaVersion: 3,
+                    fetchedAt: attemptedAt,
+                    dayBoundary: utcServerDayBoundary(attemptedAt),
                     repositories: [],
                     summary: {
                         active: 0,
@@ -322,7 +326,7 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 state.activity.errors = [{ source: "GitHub", message }];
                 state.activity.stale = true;
                 state.activity.partial = true;
-                state.activity.lastAttemptedRefresh = new Date().toISOString();
+                state.activity.lastAttemptedRefresh = attemptedAt;
             });
         } finally {
             entry.remoteCheckPromise = null;

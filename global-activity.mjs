@@ -1,4 +1,9 @@
-import { aggregateActivitySnapshots, isCompleteActivitySnapshot } from "./activity-model.mjs";
+import {
+    aggregateActivitySnapshots,
+    isCompleteActivitySnapshot,
+    normalizeActivityContract,
+    utcServerDayBoundary,
+} from "./activity-model.mjs";
 import { GitHubSquadActivityAdapter } from "./github-activity.mjs";
 import {
     attachLifecycleHistory,
@@ -200,8 +205,14 @@ function registryRepository(repository, previous = {}) {
     };
 }
 
+export function snapshotCrossedDayBoundary(snapshot, now = Date.now()) {
+    const currentKey = utcServerDayBoundary(new Date(now).toISOString()).cacheKey;
+    return snapshot?.dayBoundary?.cacheKey !== currentKey;
+}
+
 function due(repository, snapshot, currentRepository, now) {
     if (repository.nameWithOwner.toLowerCase() === String(currentRepository || "").toLowerCase()) return true;
+    if (snapshotCrossedDayBoundary(snapshot, now)) return true;
     const last = repository.lastAttemptedRefresh
         ? Date.parse(repository.lastAttemptedRefresh)
         : Number.NaN;
@@ -224,6 +235,11 @@ async function mapConcurrent(items, limit, mapper) {
 }
 
 export function normalizeRegistry(value = {}) {
+    const snapshots = value.snapshots && typeof value.snapshots === "object"
+        ? Object.fromEntries(Object.entries(value.snapshots)
+            .map(([key, snapshot]) => [key.toLowerCase(), normalizeActivityContract(snapshot)])
+            .filter(([, snapshot]) => snapshot))
+        : {};
     return {
         version: 2,
         viewer: clean(value.viewer, 120),
@@ -231,7 +247,7 @@ export function normalizeRegistry(value = {}) {
         rateLimit: value.rateLimit || null,
         restRateLimit: normalizedRestRateLimit(value.restRateLimit),
         repositories: Array.isArray(value.repositories) ? value.repositories : [],
-        snapshots: value.snapshots && typeof value.snapshots === "object" ? value.snapshots : {},
+        snapshots,
         discoverySignals: value.discoverySignals && typeof value.discoverySignals === "object"
             ? Object.fromEntries(
                 Object.entries(value.discoverySignals).map(([key, signal]) => [

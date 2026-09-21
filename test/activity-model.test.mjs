@@ -6,6 +6,7 @@ import {
     compareNewestFirst,
     dedupeSemantic,
     isCompleteActivitySnapshot,
+    utcServerDayBoundary,
 } from "../activity-model.mjs";
 
 const repository = {
@@ -144,7 +145,7 @@ test("normalizes authoritative pull request review states and requests", () => {
     });
 
     const pullRequest = snapshot.goals[0].pullRequests[0];
-    assert.equal(snapshot.schemaVersion, 2);
+    assert.equal(snapshot.schemaVersion, 3);
     assert.equal(pullRequest.reviewDecision, "changes_requested");
     assert.deepEqual(pullRequest.reviews, [
         {
@@ -526,4 +527,100 @@ test("treats stale or unavailable source state as incomplete without requiring a
     assert.equal(snapshot.stale, true);
     assert.deepEqual(snapshot.staleSources, ["issues"]);
     assert.equal(isCompleteActivitySnapshot(snapshot), false);
+});
+
+test("rolls the UTC server-day contract at midnight with an exclusive next boundary", () => {
+    const beforeMidnight = utcServerDayBoundary("2026-09-21T23:59:59.999Z");
+    const atMidnight = utcServerDayBoundary("2026-09-22T00:00:00.000Z");
+
+    assert.deepEqual(beforeMidnight, {
+        version: 1,
+        kind: "utc-server-day",
+        timeZone: "UTC",
+        snapshotDay: "2026-09-21",
+        startsAt: "2026-09-21T00:00:00.000Z",
+        nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+        cacheKey: "day-boundary-v1:utc:2026-09-21",
+    });
+    assert.equal(atMidnight.snapshotDay, "2026-09-22");
+    assert.equal(atMidnight.startsAt, beforeMidnight.nextBoundaryAt);
+    assert.notEqual(atMidnight.cacheKey, beforeMidnight.cacheKey);
+});
+
+test("keeps UTC days fixed across viewer DST forward and backward transitions", () => {
+    const springForward = utcServerDayBoundary("2026-03-08T09:30:00-07:00");
+    const fallBack = utcServerDayBoundary("2026-11-01T01:30:00-08:00");
+
+    assert.equal(springForward.snapshotDay, "2026-03-08");
+    assert.equal(
+        Date.parse(springForward.nextBoundaryAt) - Date.parse(springForward.startsAt),
+        24 * 60 * 60 * 1000,
+    );
+    assert.equal(fallBack.snapshotDay, "2026-11-01");
+    assert.equal(
+        Date.parse(fallBack.nextBoundaryAt) - Date.parse(fallBack.startsAt),
+        24 * 60 * 60 * 1000,
+    );
+});
+
+test("uses the same day boundary for viewers in different locales", () => {
+    const fetchedAt = "2026-09-22T00:30:00Z";
+    const snapshot = buildActivitySnapshot({ repository, fetchedAt });
+    const tokyo = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        viewer: "tokyo-viewer",
+        fetchedAt,
+    });
+    const losAngeles = aggregateActivitySnapshots({
+        snapshots: [snapshot],
+        viewer: "los-angeles-viewer",
+        fetchedAt,
+    });
+
+    assert.deepEqual(tokyo.dayBoundary, losAngeles.dayBoundary);
+    assert.equal(tokyo.dayBoundary.snapshotDay, "2026-09-22");
+});
+
+test("keeps stale evidence on the snapshot day when refresh crosses midnight", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        fetchedAt: "2026-09-22T00:05:00Z",
+        sourceState: {
+            issues: {
+                data: [issue({ body: "" })],
+                fetchedAt: "2026-09-21T23:50:00Z",
+                status: "stale",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+
+    assert.equal(snapshot.stale, true);
+    assert.equal(snapshot.dayBoundary.snapshotDay, "2026-09-21");
+    assert.equal(snapshot.fetchedAt, "2026-09-22T00:05:00.000Z");
+    assert.equal(snapshot.sourceState.issues.fetchedAt, "2026-09-21T23:50:00.000Z");
+});
+
+test("reports retained repository days separately from aggregate observation day", () => {
+    const stale = buildActivitySnapshot({
+        repository,
+        fetchedAt: "2026-09-22T00:05:00Z",
+        sourceState: {
+            issues: {
+                data: [issue({ body: "" })],
+                fetchedAt: "2026-09-21T23:50:00Z",
+                status: "stale",
+            },
+            pullRequests: { data: [], status: "fresh" },
+            workflowRuns: { data: [], status: "fresh" },
+        },
+    });
+    const aggregate = aggregateActivitySnapshots({
+        snapshots: [stale],
+        fetchedAt: "2026-09-22T00:06:00Z",
+    });
+
+    assert.equal(aggregate.dayBoundary.snapshotDay, "2026-09-22");
+    assert.deepEqual(aggregate.snapshotDays, ["2026-09-21"]);
 });

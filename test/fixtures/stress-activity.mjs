@@ -96,16 +96,25 @@ export function createStressCanvasState() {
     const count = (phase) => goals.filter((item) => item.phase === phase).length;
 
     return {
-        version: 2,
+        version: 4,
         mode: "active",
         repoName: "stress-fixture",
         members: [],
         operation: null,
         squad: { installed: true, rosterAvailable: false, memberCount: 0 },
         activity: {
-            schemaVersion: 2,
+            schemaVersion: 3,
             scope: "user",
             fetchedAt: timestamp(0),
+            dayBoundary: {
+                version: 1,
+                kind: "utc-server-day",
+                timeZone: "UTC",
+                snapshotDay: "2026-09-21",
+                startsAt: "2026-09-21T00:00:00.000Z",
+                nextBoundaryAt: "2026-09-22T00:00:00.000Z",
+                cacheKey: "day-boundary-v1:utc:2026-09-21",
+            },
             currentRepository: repositories[0].nameWithOwner,
             repositories,
             goals,
