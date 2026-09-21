@@ -848,9 +848,52 @@ export function renderHtml() {
     .run-side strong { display: block; color: var(--warning); font-weight: var(--font-weight-semibold, 600); text-transform: capitalize; }
     .activity-panel { position: sticky; top: 14px; }
     .activity-stream { margin: 0; padding: 0; list-style: none; }
-    .activity-item { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 9px; padding: 11px 14px; border-top: 1px solid var(--border); }
+    .activity-item {
+      position: relative;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 11px;
+      align-items: start;
+      min-height: 66px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--border);
+    }
     .activity-item:first-child { border-top: 0; }
-    .activity-dot { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
+    .activity-item::before {
+      content: "";
+      position: absolute;
+      z-index: 0;
+      top: 0;
+      bottom: 0;
+      left: 30px;
+      width: 2px;
+      background: var(--border);
+    }
+    .activity-item:first-child::before { top: 28px; }
+    .activity-item:last-child::before { bottom: calc(100% - 28px); }
+    .activity-marker {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border-radius: 50%;
+      color: var(--color-white, #fff);
+    }
+    .activity-marker svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+    .activity-marker.running {
+      border: 2px solid var(--warning);
+      background: color-mix(in srgb, var(--warning) 13%, var(--bg));
+      box-shadow: 0 0 0 7px color-mix(in srgb, var(--warning) 13%, transparent);
+      color: var(--warning);
+    }
+    .activity-marker.running svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
+    .activity-marker.success { background: var(--success); }
+    .activity-marker.failure { background: var(--danger); }
+    .activity-marker.pull-request, .activity-marker.artifact { background: #8957e5; }
+    .activity-marker.issue { background: var(--focus); }
+    .activity-marker.owner { background: var(--accent); }
     .activity-item a { color: var(--text); font-weight: var(--font-weight-semibold, 600); text-decoration: none; }
     .activity-item a:hover { color: var(--focus); text-decoration: underline; }
     .activity-item small { display: block; margin-top: 3px; color: var(--muted); }
@@ -1699,6 +1742,29 @@ export function renderHtml() {
         </section>\`;
     }
 
+    function activityMarkerHtml(item) {
+      const title = String(item.title || "").toLowerCase();
+      if (item.kind === "pull-request") {
+        return '<span class="activity-marker pull-request" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="5" cy="3" r="1.5"></circle><circle cx="11" cy="13" r="1.5"></circle><circle cx="5" cy="13" r="1.5"></circle><path d="M5 4.5v7M6.5 5.5h2A2.5 2.5 0 0 1 11 8v3.5"></path></svg></span>';
+      }
+      if (item.kind === "workflow" && !/(success|failure|cancel|complete)/.test(title)) {
+        return '<span class="activity-marker running" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5.5 3.5 12 8l-6.5 4.5z"></path></svg></span>';
+      }
+      if (/(failure|failed|error|cancel)/.test(title)) {
+        return '<span class="activity-marker failure" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"></path></svg></span>';
+      }
+      if (item.kind === "workflow" || item.kind === "check" || title.includes("closed")) {
+        return '<span class="activity-marker success" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m3 8.5 3.2 3.2L13 4.8"></path></svg></span>';
+      }
+      if (item.kind === "artifact") {
+        return '<span class="activity-marker artifact" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3M6 8h4M6 10.5h4"></path></svg></span>';
+      }
+      if (item.kind === "owner") {
+        return '<span class="activity-marker owner" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"></circle><path d="M3.5 13c.5-2.5 2-3.7 4.5-3.7s4 1.2 4.5 3.7"></path></svg></span>';
+      }
+      return '<span class="activity-marker issue" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v3.5M8 11h.01"></path></svg></span>';
+    }
+
     function recentActivityHtml(goals) {
       const activity = goals.flatMap(goal =>
         (goal.evidence || []).map(item => ({ ...item, goal })))
@@ -1708,7 +1774,7 @@ export function renderHtml() {
       const olderActivity = activity.slice(8);
       const itemsHtml = items => items.map(item => \`
         <li class="activity-item">
-          <span class="activity-dot" aria-hidden="true"></span>
+          \${activityMarkerHtml(item)}
           <div>
             <a href="\${esc(item.url || item.goal.issue.url)}" target="_blank" rel="noreferrer">\${esc(item.title)}</a>
             <small>#\${esc(item.goal.issue.number)} · \${esc(item.goal.repository.nameWithOwner)} · \${esc(formatTime(item.timestamp))}\${item.confidence === "inferred" ? " · inferred" : ""}</small>
