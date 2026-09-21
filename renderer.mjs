@@ -661,6 +661,11 @@ export function renderHtml() {
       background: var(--soft);
     }
     .panel-header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+    .floor-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 14px; color: var(--muted); font-size: 11px; }
+    .floor-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .legend-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+    .legend-dot.reviewing { background: var(--accent); }
+    .legend-dot.completed { background: var(--success); }
     .pipeline-scroll {
       overflow-x: auto;
       overscroll-behavior-x: contain;
@@ -695,22 +700,69 @@ export function renderHtml() {
     .stage-card.selected { border-color: var(--accent); background: var(--accent-soft); }
     .stage-button {
       width: 100%;
-      min-height: 72px;
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 10px;
+      min-height: 108px;
+      display: block;
+      padding: 14px 14px 8px;
       border: 0;
       background: transparent;
       color: var(--text);
       text-align: left;
       cursor: pointer;
     }
-    .stage-button strong { display: block; text-transform: capitalize; }
-    .stage-button small { display: block; margin-top: 4px; color: var(--muted); }
-    .stage-count { font-size: 20px; line-height: 1; font-weight: var(--font-weight-semibold, 600); font-variant-numeric: tabular-nums; }
-    .stage-preview { min-width: 0; display: grid; gap: 6px; padding: 0 9px 9px; }
+    .stage-heading { display: flex; align-items: center; gap: 8px; }
+    .stage-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
+    .stage-icon {
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 15px;
+      line-height: 1;
+    }
+    .stage-load { display: flex; align-items: baseline; gap: 7px; margin-top: 20px; }
+    .stage-load b { color: var(--warning); font-size: 28px; line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .stage-load span { color: var(--muted); font-size: 12px; }
+    .stage-preview {
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 44px;
+      padding: 0 14px 10px;
+    }
+    .stage-goal-chip, .stage-more {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+      background: var(--bg);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: var(--font-weight-semibold, 600);
+      font-variant-numeric: tabular-nums;
+    }
+    .stage-goal-chip:hover, .stage-more:hover { border-color: var(--warning); }
+    .stage-card.researching .stage-goal-chip,
+    .stage-card.implementing .stage-goal-chip { border-color: var(--warning); }
+    .stage-card.reviewing .stage-goal-chip { border-color: var(--accent); }
+    .stage-card.completed .stage-goal-chip { border-color: var(--success); }
+    .stage-more { color: var(--muted); font-size: 11px; font-weight: 400; }
+    .stage-foot {
+      min-height: 35px;
+      padding: 8px 14px 10px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .stage-foot strong { color: var(--text); font-weight: var(--font-weight-semibold, 600); }
     .goal-trigger {
       width: 100%;
       min-width: 0;
@@ -748,6 +800,15 @@ export function renderHtml() {
     .stage-detail {
       padding: 14px;
       border-top: 1px solid var(--border);
+    }
+    .pipeline-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 9px 14px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
     }
     .stage-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
     .stage-detail-heading h3 { text-transform: capitalize; }
@@ -1508,18 +1569,38 @@ export function renderHtml() {
     }
 
     function stageHtml(phase, goals) {
-      const preview = goals.slice(0, 3);
+      const preview = goals.slice(0, 2);
       const selected = expandedStage === phase;
+      const icons = {
+        queued: "▣",
+        researching: "⌕",
+        implementing: "<>",
+        reviewing: "◇",
+        completed: "✓"
+      };
+      const pullRequests = goals.reduce((total, goal) => total + (goal.pullRequests?.length || 0), 0);
+      const workflowRuns = goals.reduce((total, goal) => total + (goal.workflowRuns?.length || 0), 0);
       return \`
-        <section class="stage-card \${selected ? "selected" : ""}">
+        <section class="stage-card \${esc(phase)} \${selected ? "selected" : ""}">
           <button class="stage-button" data-action="expand-stage" data-phase="\${phase}" type="button"
             aria-expanded="\${selected}" aria-controls="stage-detail">
-            <span><strong>\${esc(phase)}</strong><small>\${goals.length ? "Current Squad goals" : "No goals in this stage"}</small></span>
-            <span class="stage-count">\${goals.length}</span>
+            <span class="stage-heading">
+              <span class="stage-icon" aria-hidden="true">\${icons[phase] || "·"}</span>
+              <strong>\${esc(phase)}</strong>
+            </span>
+            <span class="stage-load"><b>\${goals.length}</b><span>\${goals.length === 1 ? "goal" : "goals"}</span></span>
           </button>
-          \${preview.length ? \`<div class="stage-preview">\${preview.map(goal => goalTriggerHtml(goal, true)).join("")}\${
-            goals.length > preview.length ? \`<small class="help">+\${goals.length - preview.length} more in stage details</small>\` : ""
-          }</div>\` : ""}
+          <div class="stage-preview">
+            \${preview.map(goal => \`
+              <button class="stage-goal-chip" data-action="open-goal" data-goal-id="\${esc(goal.id)}" type="button"
+                aria-label="Open #\${esc(goal.issue.number)}: \${esc(goal.issue.title)}">#\${esc(goal.issue.number)}</button>
+            \`).join("")}
+            \${goals.length > preview.length ? \`
+              <button class="stage-more" data-action="expand-stage" data-phase="\${phase}" type="button"
+                aria-label="Inspect \${goals.length - preview.length} more \${esc(phase)} goals">+\${goals.length - preview.length}</button>
+            \` : ""}
+          </div>
+          <div class="stage-foot"><strong>\${pullRequests}</strong> PR\${pullRequests === 1 ? "" : "s"} · <strong>\${workflowRuns}</strong> run\${workflowRuns === 1 ? "" : "s"}</div>
         </section>\`;
     }
 
@@ -1789,8 +1870,12 @@ export function renderHtml() {
             <div>
               <section class="pipeline-panel" aria-labelledby="pipeline-title">
                 <div class="panel-header">
-                  <div><h2 id="pipeline-title">Factory floor</h2><p>Select a stage to inspect its goals. Blocked and failed work stays separate.</p></div>
-                  <span class="evidence-count">\${goals.length} visible</span>
+                  <div><h2 id="pipeline-title">Factory floor</h2></div>
+                  <div class="floor-legend" aria-label="Factory floor status legend">
+                    <span><i class="legend-dot" aria-hidden="true"></i> active</span>
+                    <span><i class="legend-dot reviewing" aria-hidden="true"></i> reviewing</span>
+                    <span><i class="legend-dot completed" aria-hidden="true"></i> completed</span>
+                  </div>
                 </div>
                 <div class="pipeline-scroll" role="region" aria-label="Factory floor stages" tabindex="0">
                   <div class="pipeline">
@@ -1798,6 +1883,7 @@ export function renderHtml() {
                   </div>
                 </div>
                 \${stageDetailHtml(goals)}
+                <div class="pipeline-footer"><span>Select a stage to inspect its goals. Blocked and failed work stays separate.</span><span>\${goals.length} visible</span></div>
               </section>
               <section class="exceptions" aria-labelledby="exceptions-title">
                 <div class="panel-header">
