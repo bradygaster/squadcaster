@@ -43,7 +43,9 @@ test("extension keeps only supported POST routes and canvas actions", async () =
     assert.match(source, /url\.pathname === "\/api\/repositories"/);
     assert.match(source, /url\.pathname === "\/api\/refresh"/);
     assert.match(source, /url\.searchParams\.get\("handoff"\)/);
-    assert.match(source, /force: Boolean\(handoffGoalId\)/);
+    assert.match(source, /entry\.handoffProbe\.probe/);
+    assert.match(source, /applyHandoffMechanismOverlay/);
+    assert.doesNotMatch(source, /refreshRemoteState\(entry, \{ force: Boolean\(handoffGoalId\) \}\)/);
     assert.match(source, /name: "get_state"/);
     assert.match(source, /name: "refresh"/);
     assert.match(source, /tools: \[\]/);

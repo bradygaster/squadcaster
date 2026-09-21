@@ -559,6 +559,8 @@ test("renders read-only handoff readiness and probes availability only after ope
     const handoffRequests = fixture.requests().filter(request => request.search.includes("handoff="));
     expect(handoffRequests).toHaveLength(2);
     expect(handoffRequests.every(request => request.method === "GET" && request.pathname === "/api/state")).toBe(true);
+    expect(handoffRequests[0].search).not.toContain("refresh=1");
+    expect(handoffRequests[1].search).toContain("refresh=1");
     const containment = await drawer.evaluate(element => ({
         clientWidth: element.clientWidth,
         scrollWidth: element.scrollWidth,
