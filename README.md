@@ -23,9 +23,12 @@ in-browser filters. GitHub and repository content remain read-only.
 
 ## What the canvas shows
 
-- Summary counts for active, blocked, failed, awaiting-review, and completed goals
+- A compact **Factory Mission Control** summary with tracked, in-progress, attention, and delivery counts
+- A **Factory floor** lifecycle for queued, researching, implementing, reviewing, and completed work
+- Active workflow runs with repository identity, goal, branch, owner, status, timestamp, and source link
+- A semantic recent-activity timeline and accessible goal-details drawer
 - One combined view of every discovered Squad repository the authenticated user can read
-- Owner, repository, current-repository, status, active-work, and text filters
+- Progressive owner, repository, current-repository, status, active-work, and text filters
 - Every discoverable issue carrying `squad`/`squad:*` labels, a Squad command, or structured Squad artifact
 - Derived lifecycle state: queued, researching, implementing, reviewing, blocked, completed, or failed
 - Squad member ownership from repository labels, with GitHub assignment fallback
@@ -36,7 +39,9 @@ in-browser filters. GitHub and repository content remain read-only.
 
 Every conclusion links to its source on GitHub. Relationships inferred from
 branch or run metadata are explicitly marked `inferred`; missing ownership and
-other ambiguous data remain `Unknown`.
+other ambiguous data remain `Unknown`. The canvas follows the operating
+system's light or dark color preference by default and uses semantic theme
+tokens for both schemes.
 
 ## Install
 
@@ -114,16 +119,13 @@ normalized model, correlation rules, adapter boundary, and compatibility notes.
 
 ## Development
 
-The project has no package-manager dependency or build step. Validate it with:
+Configure the package proxy, restore dependencies, and run the complete syntax,
+unit, and browser regression suite:
 
 ```bash
-node --check activity-model.mjs
-node --check github-activity.mjs
-node --check global-activity.mjs
-node --check squad-roster.mjs
-node --check extension.mjs
-node --check renderer.mjs
-node --test test/*.test.mjs
+npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
+npm install
+npm run test:all
 ```
 
 ## How it is organized

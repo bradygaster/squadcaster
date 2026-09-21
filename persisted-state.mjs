@@ -4,7 +4,16 @@ export function emptyActivity() {
         fetchedAt: null,
         repository: {},
         repositories: [],
-        summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+        summary: {
+            active: 0,
+            queued: 0,
+            researching: 0,
+            implementing: 0,
+            blocked: 0,
+            failed: 0,
+            awaitingReview: 0,
+            completed: 0,
+        },
         goals: [],
         errors: [],
     };

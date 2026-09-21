@@ -150,7 +150,7 @@ async function loadState(workingDirectory) {
                 workingDirectory: workingDirectory || "",
                 repoRoot: "",
                 repoName: "",
-                message: "Open Squadcaster from a Copilot project session.",
+                message: "Open Factory Mission Control from a Copilot project session.",
                 members: [],
                 activity: persisted.activity,
             },
@@ -306,7 +306,16 @@ async function refreshRemoteState(entry, { force = false } = {}) {
                 state.activity ||= {
                     schemaVersion: 2,
                     repositories: [],
-                    summary: { active: 0, blocked: 0, failed: 0, awaitingReview: 0, completed: 0 },
+                    summary: {
+                        active: 0,
+                        queued: 0,
+                        researching: 0,
+                        implementing: 0,
+                        blocked: 0,
+                        failed: 0,
+                        awaitingReview: 0,
+                        completed: 0,
+                    },
                     goals: [],
                     errors: [],
                 };
@@ -460,7 +469,7 @@ async function refreshEntry(entry) {
 
 const canvas = createCanvas({
     id: "squadcaster",
-    displayName: "Squadcaster",
+    displayName: "Factory Mission Control",
     description: "Observe Squad goals, issues, pull requests, workflow runs, checks, blockers, and evidence.",
     inputSchema: {
         type: "object",
@@ -478,7 +487,7 @@ const canvas = createCanvas({
             description: "Return user-wide Squad activity and the current repository context.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
-                if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
+                if (!entry) throw new CanvasError("squadcaster_not_open", "The activity canvas is not open.");
                 await refreshRemoteState(entry, { force: true });
                 return entry.state;
             },
@@ -488,7 +497,7 @@ const canvas = createCanvas({
             description: "Rediscover and refresh user-wide Squad activity.",
             handler: async (ctx) => {
                 const entry = servers.get(ctx.instanceId);
-                if (!entry) throw new CanvasError("squadcaster_not_open", "Squadcaster is not open.");
+                if (!entry) throw new CanvasError("squadcaster_not_open", "The activity canvas is not open.");
                 await refreshEntry(entry);
                 return entry.state;
             },
@@ -498,7 +507,7 @@ const canvas = createCanvas({
         let entry = servers.get(ctx.instanceId);
         if (!entry) entry = await startServer(ctx);
         return {
-            title: entry.state.repoName ? `All Squads · ${entry.state.repoName}` : "All Squads",
+            title: "Factory Mission Control",
             status: entry.state.activity?.summary?.active
                 ? `${entry.state.activity.summary.active} active`
                 : "Watching",

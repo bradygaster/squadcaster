@@ -483,6 +483,7 @@ export function buildActivitySnapshot({
         },
         summary: {
             active: goals.filter((goal) => ACTIVE_STATES.has(goal.phase)).length,
+            queued: count(["queued"]),
             blocked: count(["blocked"]),
             failed: count(["failed"]),
             awaitingReview: count(["reviewing"]),
@@ -600,6 +601,7 @@ export function aggregateActivitySnapshots({
         repositories,
         summary: {
             active: goals.filter((goal) => ACTIVE_STATES.has(goal.phase)).length,
+            queued: count(["queued"]),
             blocked: count(["blocked"]),
             failed: count(["failed"]),
             awaitingReview: count(["reviewing"]),
