@@ -13,7 +13,7 @@ const SOURCES = [
         key: "pullRequests",
         args: [
             "pr", "list", "--state", "all", "--limit", "1000",
-            "--json", "number,title,body,state,url,isDraft,headRefName,author,labels,createdAt,updatedAt,closedAt,mergedAt,reviewDecision,statusCheckRollup,closingIssuesReferences",
+            "--json", "number,title,body,state,url,isDraft,headRefName,author,labels,createdAt,updatedAt,closedAt,mergedAt,reviewDecision,latestReviews,reviewRequests,statusCheckRollup,closingIssuesReferences",
         ],
     },
     {
@@ -95,6 +95,20 @@ function priorPullRequests(previous) {
                 isDraft: pullRequest.draft,
                 headRefName: pullRequest.branch,
                 reviewDecision: pullRequest.reviewDecision,
+                ...(Array.isArray(pullRequest.reviews)
+                    ? {
+                        latestReviews: pullRequest.reviews.map((review) => ({
+                            author: review.actor,
+                            state: review.state,
+                            submittedAt: review.submittedAt,
+                        })),
+                    }
+                    : {}),
+                ...(Array.isArray(pullRequest.reviewRequests)
+                    ? {
+                        reviewRequests: pullRequest.reviewRequests.map((request) => request.actor),
+                    }
+                    : {}),
                 createdAt: pullRequest.createdAt,
                 updatedAt: pullRequest.updatedAt,
                 mergedAt: pullRequest.mergedAt,

@@ -33,6 +33,16 @@ function pullRequest(overrides = {}) {
         headRefName: "squad/implement-12-dashboard",
         isDraft: false,
         updatedAt: "2026-09-20T12:00:00Z",
+        reviewDecision: "REVIEW_REQUIRED",
+        latestReviews: [{
+            author: { login: "reviewer" },
+            state: "COMMENTED",
+            submittedAt: "2026-09-20T12:00:00Z",
+        }],
+        reviewRequests: [{
+            __typename: "User",
+            login: "maintainer",
+        }],
         ...overrides,
     };
 }
@@ -94,6 +104,8 @@ test("preserves successful sources when another GitHub source fails", async () =
     assert.equal(result.goals[0].phase, "reviewing");
     assert.equal(result.goals[0].issue.title, "Updated dashboard");
     assert.equal(result.goals[0].pullRequests[0].number, 44);
+    assert.equal(result.goals[0].pullRequests[0].reviews[0].actor.login, "reviewer");
+    assert.equal(result.goals[0].pullRequests[0].reviewRequests[0].actor.login, "maintainer");
     assert.equal(result.partial, true);
     assert.equal(result.stale, true);
     assert.deepEqual(result.staleSources, ["pullRequests"]);
@@ -182,6 +194,66 @@ test("keeps a never-successful source unavailable across repeated failures", asy
     assert.equal(second.sourceState.issues.status, "unavailable");
     assert.equal(second.stale, false);
     assert.deepEqual(second.staleSources, []);
+});
+
+test("keeps review connections unavailable when pull request discovery has never succeeded", async () => {
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue()];
+            if (args[0] === "pr") throw new Error("pull request access denied");
+            return [];
+        },
+    });
+
+    const result = await adapter.discover();
+    assert.equal(result.sourceState.pullRequests.status, "unavailable");
+    assert.equal(result.goals[0].pullRequests.length, 0);
+});
+
+test("preserves unavailable legacy review connections while stale and populates them after recovery", async () => {
+    const previous = buildActivitySnapshot({
+        repository,
+        issues: [issue()],
+        pullRequests: [pullRequest({
+            latestReviews: undefined,
+            reviewRequests: undefined,
+        })],
+    });
+    delete previous.sourceState;
+
+    const failingAdapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue()];
+            if (args[0] === "pr") throw new Error("temporary pull request failure");
+            return [];
+        },
+    });
+    const stale = await failingAdapter.discover({ previous });
+    assert.equal(stale.goals[0].pullRequests[0].reviews, null);
+    assert.equal(stale.goals[0].pullRequests[0].reviewRequests, null);
+    assert.equal(stale.sourceState.pullRequests.status, "stale");
+
+    const recoveredAdapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            if (args[0] === "repo") return repository;
+            if (args[0] === "issue") return [issue()];
+            if (args[0] === "pr") return [pullRequest({
+                reviewDecision: "",
+                latestReviews: [],
+                reviewRequests: [],
+            })];
+            return [];
+        },
+    });
+    const recovered = await recoveredAdapter.discover({ previous: stale });
+    assert.deepEqual(recovered.goals[0].pullRequests[0].reviews, []);
+    assert.deepEqual(recovered.goals[0].pullRequests[0].reviewRequests, []);
+    assert.equal(recovered.sourceState.pullRequests.status, "fresh");
 });
 
 test("legacy snapshot recovery preserves pull requests linked to multiple goals", async () => {

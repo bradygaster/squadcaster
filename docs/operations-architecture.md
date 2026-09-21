@@ -10,6 +10,15 @@
   artifacts, pull requests, workflow runs, next action, and evidence
 - `errors`: source-specific discovery failures
 
+Repository snapshots use activity contract version 2. Pull requests retain the
+version 1 fields and add `reviews` and `reviewRequests`. `reviews` contains the
+latest review exposed by GitHub for each reviewer, with the observed review
+state and submission timestamp. `reviewRequests` contains the currently
+requested GitHub users or teams. Actor identity is limited to the login or team
+name and an observed GraphQL type when available; it is not treated as Squad
+agent identity. A successful response with no entries is `[]`; legacy or
+unavailable review connections are `null`.
+
 The supported lifecycle is `queued`, `researching`, `implementing`, `reviewing`,
 `blocked`, `completed`, and `failed`. GitHub state has precedence over inferred
 planning state: closed or merged work is complete; unresolved dependencies are

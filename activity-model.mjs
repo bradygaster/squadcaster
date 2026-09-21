@@ -189,9 +189,39 @@ function normalizeCheck(check) {
     };
 }
 
+function normalizeReviewActor(actor) {
+    const type = text(actor?.__typename || actor?.type, 40).toLowerCase();
+    return {
+        login: text(actor?.login || actor?.name, 120),
+        type: ["user", "team", "bot", "mannequin", "organization"].includes(type)
+            ? type
+            : "unknown",
+    };
+}
+
+function normalizeReview(review) {
+    return {
+        actor: normalizeReviewActor(review?.author || review?.actor),
+        state: text(review?.state || "unknown", 40).toLowerCase(),
+        submittedAt: timestamp(review?.submittedAt || review?.submitted_at),
+    };
+}
+
+function normalizeReviewRequest(request) {
+    return {
+        actor: normalizeReviewActor(request?.requestedReviewer || request?.actor || request),
+    };
+}
+
 function normalizePullRequest(pullRequest) {
     const checks = (Array.isArray(pullRequest?.statusCheckRollup) ? pullRequest.statusCheckRollup : [])
         .map(normalizeCheck);
+    const reviews = Array.isArray(pullRequest?.latestReviews)
+        ? pullRequest.latestReviews.map(normalizeReview)
+        : null;
+    const reviewRequests = Array.isArray(pullRequest?.reviewRequests)
+        ? pullRequest.reviewRequests.map(normalizeReviewRequest)
+        : null;
     const state = pullRequest?.mergedAt
         ? "merged"
         : text(pullRequest?.state || "unknown", 40).toLowerCase();
@@ -207,6 +237,8 @@ function normalizePullRequest(pullRequest) {
         updatedAt: timestamp(pullRequest?.updatedAt),
         mergedAt: timestamp(pullRequest?.mergedAt),
         checks,
+        reviews,
+        reviewRequests,
     };
 }
 
@@ -473,7 +505,7 @@ export function buildActivitySnapshot({
     const incompleteSources = Object.values(normalizedSources)
         .some((state) => ["stale", "unavailable"].includes(state.status));
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         fetchedAt: timestamp(fetchedAt) || new Date().toISOString(),
         repository: {
             name: text(repository?.name, 160),
@@ -631,5 +663,5 @@ export function isCompleteActivitySnapshot(snapshot) {
 
 export const activityModel = {
     phases: ["queued", "researching", "implementing", "reviewing", "blocked", "completed", "failed"],
-    schemaVersion: 1,
+    schemaVersion: 2,
 };
