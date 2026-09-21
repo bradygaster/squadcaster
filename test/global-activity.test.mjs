@@ -926,6 +926,61 @@ test("current repository identity is resolved before excluded activity is refres
     assert.deepEqual(calls.map((args) => args[0]), ["repo"]);
 });
 
+test("forced discovery omission preserves the current repository exclusion", async () => {
+    const nameWithOwner = "octodemo/frontend";
+    const cached = buildActivitySnapshot({
+        repository: repository(nameWithOwner),
+        issues: [issue(nameWithOwner, 57)],
+    });
+    const calls = [];
+    const global = new GitHubGlobalActivity({
+        cwd: "/repo",
+        registry: {
+            repositories: [
+                { ...repository(nameWithOwner), owner: "octodemo", included: false },
+            ],
+            snapshots: { [nameWithOwner]: cached },
+        },
+        runJson: async (args) => {
+            calls.push(args);
+            if (args[0] !== "api") throw new Error(`Unexpected activity call: ${args[0]}`);
+            return {
+                data: {
+                    viewer: {
+                        login: "octocat",
+                        repositories: {
+                            nodes: [],
+                            pageInfo: { hasNextPage: false, endCursor: null },
+                        },
+                    },
+                    rateLimit: { remaining: 4999, resetAt: "2026-09-21T22:00:00Z" },
+                },
+            };
+        },
+    });
+
+    const aggregate = await global.refresh({
+        currentRepository: nameWithOwner,
+        currentSnapshot: cached,
+        forceDiscovery: true,
+        forceAll: true,
+    });
+    const excludedSnapshot = await discoverCurrentRepositoryActivity({
+        runJson: global.runJson,
+        cwd: global.cwd,
+        registry: global.registry,
+        currentRepository: nameWithOwner,
+        previous: cached,
+    });
+
+    assert.deepEqual(calls.map((args) => args[0]), ["api"]);
+    assert.equal(global.registry.repositories.length, 1);
+    assert.equal(global.registry.repositories[0].included, false);
+    assert.equal(global.registry.snapshots[nameWithOwner], cached);
+    assert.equal(excludedSnapshot, cached);
+    assert.equal(aggregate.goals.length, 0);
+});
+
 test("combined rate-limit guard reports the later limiting reset", async () => {
     const current = buildActivitySnapshot({
         repository: repository("octodemo/frontend"),

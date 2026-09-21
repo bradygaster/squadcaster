@@ -507,8 +507,11 @@ export class GitHubGlobalActivity {
         forceDiscovery = false,
         forceAll = false,
     }) {
-        await this.discoverRepositories({ force: forceDiscovery });
         const currentKey = String(currentRepository || "").toLowerCase();
+        const previousCurrent = this.registry.repositories.find(
+            (repository) => repository.nameWithOwner.toLowerCase() === currentKey,
+        );
+        await this.discoverRepositories({ force: forceDiscovery });
         if (currentSnapshot?.repository?.nameWithOwner) {
             this.registry.snapshots[currentKey] = currentSnapshot;
             let current = this.registry.repositories.find(
@@ -519,7 +522,7 @@ export class GitHubGlobalActivity {
                     ...currentSnapshot.repository,
                     nameWithOwner: currentRepository,
                     squadSource: {},
-                });
+                }, previousCurrent);
                 this.registry.repositories.unshift(current);
             }
             if (current) {
