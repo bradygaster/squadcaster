@@ -1160,12 +1160,15 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
             rootGoal.artifacts,
         );
         const activationArtifacts = advancingArtifacts(rootGoal.artifacts)
-            .filter((artifact) => ACTIVATION_ARTIFACT_KINDS.has(artifact.kind))
-            .reverse();
+            .filter((artifact) => ACTIVATION_ARTIFACT_KINDS.has(artifact.kind));
+        const activationArtifact = activationArtifacts.at(-1);
         let generated = { valid: false, goals: [], reason: "" };
-        for (const artifact of activationArtifacts) {
-            generated = validateGeneratedGoals(artifact, rootGoal, goalsByNumber);
-            if (generated.valid) break;
+        if (activationArtifact) {
+            generated = validateGeneratedGoals(
+                activationArtifact,
+                rootGoal,
+                goalsByNumber,
+            );
         }
         const extraEvidence = [
             ...addedArtifacts.map((artifact) => artifactEvidence(artifact, rootGoal.issue)),
@@ -1177,16 +1180,16 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
                     kind: "generated-goal",
                     title: `Generated ${goal.relation} goal #${goal.issueNumber}: ${goal.title}`,
                     url: goal.url,
-                    timestamp: activationArtifacts[0]?.createdAt || rootGoal.updatedAt,
+                    timestamp: activationArtifact?.createdAt || rootGoal.updatedAt,
                     confidence: "observed",
                 });
             }
-        } else if (activationArtifacts.length > 0 && generated.reason) {
+        } else if (activationArtifact && generated.reason) {
             extraEvidence.push({
                 kind: "bootstrap-diagnostic",
                 title: "Activation metadata could not be validated; generated goals were not linked.",
-                url: activationArtifacts[0].url || rootGoal.issue.url,
-                timestamp: activationArtifacts[0].createdAt,
+                url: activationArtifact.url || rootGoal.issue.url,
+                timestamp: activationArtifact.createdAt,
                 confidence: "derived",
                 code: generated.reason,
                 source: "artifacts",

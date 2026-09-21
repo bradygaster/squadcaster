@@ -1048,6 +1048,52 @@ test("rejects task and epic role collisions in generated goal metadata", () => {
     }
 });
 
+test("does not fall back to older activation metadata when the latest artifact is invalid", () => {
+    const validBinding = {
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    };
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research", {
+            createdAt: "2026-09-21T10:15:00Z",
+            url: researchComment().url,
+        }),
+        artifactComment("activated", {
+            bindings: [validBinding],
+            createdAt: "2026-09-21T11:00:00Z",
+            url: "https://github.com/octodemo/demo/issues/6#issuecomment-activated-old",
+        }),
+        artifactComment("activated", {
+            bindings: [{
+                ...validBinding,
+                issue: "#20",
+            }],
+            createdAt: "2026-09-21T12:00:00Z",
+            url: "https://github.com/octodemo/demo/issues/6#issuecomment-activated-latest",
+        }),
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic", ["squad", "squad:dev"]),
+            goalIssue(21, "Task", ["squad", "squad:dev"]),
+        ],
+    });
+    const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+    assert.ok(goal.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "conflicting-generated-goal" &&
+        item.url.endsWith("issuecomment-activated-latest")));
+});
+
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
         artifactComment("research"),
