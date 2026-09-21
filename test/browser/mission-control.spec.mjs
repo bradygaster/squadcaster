@@ -269,9 +269,11 @@ function fixtureState() {
 async function startFixtureServer() {
     let state = fixtureState();
     let handoffProbeCount = 0;
+    const requests = [];
     const clients = new Set();
     const server = createServer((request, response) => {
         const url = new URL(request.url, "http://127.0.0.1");
+        requests.push({ method: request.method, pathname: url.pathname, search: url.search });
         if (request.method === "GET" && url.pathname === "/") {
             response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
             response.end(renderHtml());
@@ -318,6 +320,9 @@ async function startFixtureServer() {
         },
         handoffProbeCount() {
             return handoffProbeCount;
+        },
+        requests() {
+            return structuredClone(requests);
         },
         async close() {
             for (const client of clients) client.end();
@@ -522,6 +527,11 @@ test("renders read-only handoff readiness and probes availability only after ope
     await expect(drawer.getByRole("button", { name: "Copy context" })).toBeVisible();
     await expect(drawer.getByRole("button", { name: "Export context" })).toBeVisible();
     await expect.poll(() => fixture.handoffProbeCount()).toBe(1);
+    await drawer.getByRole("button", { name: "Refresh" }).click();
+    await expect.poll(() => fixture.handoffProbeCount()).toBe(2);
+    const handoffRequests = fixture.requests().filter(request => request.search.includes("handoff="));
+    expect(handoffRequests).toHaveLength(2);
+    expect(handoffRequests.every(request => request.method === "GET" && request.pathname === "/api/state")).toBe(true);
     const containment = await drawer.evaluate(element => ({
         clientWidth: element.clientWidth,
         scrollWidth: element.scrollWidth,
