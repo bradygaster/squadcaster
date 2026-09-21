@@ -5,10 +5,10 @@ import { renderHtml } from "../renderer.mjs";
 test("renders the read-only mission control prototype surfaces", () => {
     const html = renderHtml();
 
-    assert.match(html, /Mission control/);
+    assert.match(html, /Factory Mission Control/);
     assert.doesNotMatch(html, />Squadcaster</);
     assert.doesNotMatch(html, />SC</);
-    assert.match(html, /Goal lifecycle/);
+    assert.match(html, /Factory floor/);
     assert.match(html, />Activity</);
     assert.match(html, /Needs attention/);
     assert.match(html, /role="dialog"/);

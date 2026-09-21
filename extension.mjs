@@ -916,7 +916,7 @@ async function refreshEntry(entry) {
 
 const canvas = createCanvas({
     id: "squadcaster",
-    displayName: "All Squads",
+    displayName: "Factory Mission Control",
     description: "Observe Squad goals, issues, pull requests, workflow runs, checks, blockers, and evidence.",
     inputSchema: {
         type: "object",
@@ -954,7 +954,7 @@ const canvas = createCanvas({
         let entry = servers.get(ctx.instanceId);
         if (!entry) entry = await startServer(ctx);
         return {
-            title: entry.state.repoName ? `All Squads · ${entry.state.repoName}` : "All Squads",
+            title: "Factory Mission Control",
             status: entry.state.activity?.summary?.active
                 ? `${entry.state.activity.summary.active} active`
                 : "Watching",

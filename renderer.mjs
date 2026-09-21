@@ -4,7 +4,7 @@ export function renderHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>All Squads</title>
+  <title>Factory Mission Control</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -987,7 +987,7 @@ export function renderHtml() {
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><span>Mission control</span></div>
+      <div class="brand"><span>Factory Mission Control</span></div>
       <div class="repo" id="repo-header"></div>
     </header>
     <main id="app"></main>
@@ -1789,10 +1789,10 @@ export function renderHtml() {
             <div>
               <section class="pipeline-panel" aria-labelledby="pipeline-title">
                 <div class="panel-header">
-                  <div><h2 id="pipeline-title">Goal lifecycle</h2><p>Select a stage to inspect its goals. Blocked and failed work stays separate.</p></div>
+                  <div><h2 id="pipeline-title">Factory floor</h2><p>Select a stage to inspect its goals. Blocked and failed work stays separate.</p></div>
                   <span class="evidence-count">\${goals.length} visible</span>
                 </div>
-                <div class="pipeline-scroll" role="region" aria-label="Squad goal lifecycle stages" tabindex="0">
+                <div class="pipeline-scroll" role="region" aria-label="Factory floor stages" tabindex="0">
                   <div class="pipeline">
                     \${lifecycle.map(phase => stageHtml(phase, goals.filter(goal => goal.phase === phase))).join("")}
                   </div>
