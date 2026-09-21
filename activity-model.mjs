@@ -110,7 +110,7 @@ export function normalizeActivityContract(snapshot) {
 }
 
 function normalizedSourceState(value, data, fetchedAt) {
-    const status = ["fresh", "stale", "unavailable", "skipped"].includes(value?.status)
+    const status = ["fresh", "partial", "stale", "unavailable", "skipped"].includes(value?.status)
         ? value.status
         : "fresh";
     return {
@@ -371,6 +371,50 @@ function normalizeRun(run) {
     };
 }
 
+function normalizeStep(step) {
+    return {
+        number: Number(step?.number) || null,
+        name: text(step?.name, 240),
+        status: text(step?.status, 40).toLowerCase(),
+        conclusion: text(step?.conclusion, 40).toLowerCase(),
+        startedAt: timestamp(step?.started_at || step?.startedAt),
+        completedAt: timestamp(step?.completed_at || step?.completedAt),
+    };
+}
+
+function normalizeJob(job) {
+    return {
+        id: Number(job?.id) || null,
+        name: text(job?.name, 240),
+        status: text(job?.status, 40).toLowerCase(),
+        conclusion: text(job?.conclusion, 40).toLowerCase(),
+        url: text(job?.html_url || job?.url, 500),
+        startedAt: timestamp(job?.started_at || job?.startedAt),
+        completedAt: timestamp(job?.completed_at || job?.completedAt),
+        steps: (Array.isArray(job?.steps) ? job.steps : []).map(normalizeStep),
+    };
+}
+
+function normalizeWorkflowJobs(runId, workflowJobs) {
+    const entry = workflowJobs.get(runId);
+    if (!entry) {
+        return {
+            status: "not_selected",
+            fetchedAt: null,
+            error: "",
+            truncated: false,
+            jobs: null,
+        };
+    }
+    return {
+        status: text(entry.status, 40).toLowerCase(),
+        fetchedAt: timestamp(entry.fetchedAt),
+        error: text(entry.error, 800),
+        truncated: Boolean(entry.truncated),
+        jobs: Array.isArray(entry.jobs) ? entry.jobs.map(normalizeJob) : null,
+    };
+}
+
 function ownerFor(issue, members) {
     const labels = normalizedLabelsOf(issue);
     const member = (Array.isArray(members) ? members : []).find((candidate) => {
@@ -489,6 +533,7 @@ export function buildActivitySnapshot({
     issues = [],
     pullRequests = [],
     workflowRuns = [],
+    workflowJobs = [],
     members = [],
     errors = [],
     sourceState = null,
@@ -498,10 +543,12 @@ export function buildActivitySnapshot({
         issues: normalizedSourceState(sourceState?.issues, issues, fetchedAt),
         pullRequests: normalizedSourceState(sourceState?.pullRequests, pullRequests, fetchedAt),
         workflowRuns: normalizedSourceState(sourceState?.workflowRuns, workflowRuns, fetchedAt),
+        workflowJobs: normalizedSourceState(sourceState?.workflowJobs, workflowJobs, fetchedAt),
     };
     issues = normalizedSources.issues.data;
     pullRequests = normalizedSources.pullRequests.data;
     workflowRuns = normalizedSources.workflowRuns.data;
+    workflowJobs = normalizedSources.workflowJobs.data;
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
     const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
     const repositoryKey = repositoryName.toLowerCase();
@@ -532,6 +579,13 @@ export function buildActivitySnapshot({
         (run) => run.id || run.url ||
             `${run.workflow}|${run.branch}|${run.createdAt}|${run.value.status}|${run.value.conclusion}`,
     );
+    const workflowJobsByRun = new Map(workflowJobs
+        .map((entry) => [Number(entry?.runId), entry])
+        .filter(([runId]) => Number.isInteger(runId) && runId > 0));
+    for (const run of normalizedRuns) {
+        run.value.jobsState = normalizeWorkflowJobs(run.value.id, workflowJobsByRun);
+        run.value.jobs = run.value.jobsState.jobs;
+    }
     const goals = [];
 
     for (const issue of issues) {
@@ -654,7 +708,7 @@ export function buildActivitySnapshot({
         .filter(([, state]) => state.status === "stale")
         .map(([source]) => source);
     const incompleteSources = Object.values(normalizedSources)
-        .some((state) => ["stale", "unavailable"].includes(state.status));
+        .some((state) => ["partial", "stale", "unavailable"].includes(state.status));
     const normalizedFetchedAt = timestamp(fetchedAt) || new Date().toISOString();
     const retainedStaleFetchedAt = earliestTimestamp(
         Object.values(normalizedSources)
@@ -826,7 +880,7 @@ export function isCompleteActivitySnapshot(snapshot) {
         !snapshot.stale &&
         !(snapshot.errors?.length) &&
         !Object.values(snapshot.sourceState || {})
-            .some((state) => ["stale", "unavailable"].includes(state?.status));
+            .some((state) => ["partial", "stale", "unavailable"].includes(state?.status));
 }
 
 export const activityModel = {

@@ -841,6 +841,24 @@ export function renderHtml() {
       font-size: var(--text-body-small, 12px);
     }
     .artifact a { color: var(--focus); }
+    .workflow-drilldown { display: grid; gap: 10px; }
+    .workflow-job-run, .workflow-job {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--bg);
+    }
+    .workflow-job-run > header, .workflow-job > header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .workflow-job-run header small, .workflow-job header small { color: var(--muted); }
+    .workflow-jobs { display: grid; gap: 8px; margin-top: 9px; }
+    .workflow-steps { margin: 8px 0 0; padding-left: 22px; color: var(--muted); }
+    .workflow-steps li { padding: 2px 0; }
+    .workflow-source-note { margin: 8px 0 0; color: var(--warning); }
     .sync-warning {
       margin-top: 16px;
       padding: 12px 14px;
@@ -1597,6 +1615,47 @@ export function renderHtml() {
         </div>\`).join("")}</div>\`;
     }
 
+    function workflowJobItemsHtml(goal) {
+      const selectedRuns = (goal.workflowRuns || [])
+        .filter(run => run.jobsState?.status && run.jobsState.status !== "not_selected");
+      if (!selectedRuns.length) {
+        return '<p class="help">No workflow run was selected for bounded job drill-down.</p>';
+      }
+      return \`<div class="workflow-drilldown">\${selectedRuns.map(run => {
+        const state = run.jobsState || {};
+        const stateLabel = String(state.status || "unavailable").replaceAll("_", " ");
+        let jobsHtml = "";
+        if (Array.isArray(run.jobs) && run.jobs.length === 0) {
+          jobsHtml = '<p class="help">GitHub reported no jobs for this run.</p>';
+        } else if (!Array.isArray(run.jobs)) {
+          jobsHtml = '<p class="help">Workflow jobs are unavailable for this run.</p>';
+        } else {
+          jobsHtml = \`<div class="workflow-jobs">\${run.jobs.map(job => \`
+            <article class="workflow-job">
+              <header>
+                \${job.url ? \`<a href="\${esc(job.url)}" target="_blank" rel="noreferrer">\${esc(job.name || "Unnamed job")}</a>\` : \`<strong>\${esc(job.name || "Unnamed job")}</strong>\`}
+                <small>\${esc(job.conclusion || job.status || "No status reported")}</small>
+              </header>
+              \${job.startedAt || job.completedAt ? \`<small>\${job.startedAt ? "started " + esc(formatTime(job.startedAt)) : ""}\${job.startedAt && job.completedAt ? " · " : ""}\${job.completedAt ? "completed " + esc(formatTime(job.completedAt)) : ""}</small>\` : ""}
+              \${job.steps?.length ? \`<ol class="workflow-steps">\${job.steps.map(step => \`
+                <li>
+                  <span>\${esc(step.name || "Unnamed step")}</span>
+                  <small> · \${esc(step.conclusion || step.status || "No status reported")}\${step.startedAt ? " · started " + esc(formatTime(step.startedAt)) : ""}\${step.completedAt ? " · completed " + esc(formatTime(step.completedAt)) : ""}</small>
+                </li>\`).join("")}</ol>\` : '<p class="help">GitHub reported no steps for this job.</p>'}
+            </article>\`).join("")}</div>\`;
+        }
+        return \`
+          <section class="workflow-job-run">
+            <header>
+              <strong>\${esc(run.workflow || run.name || "Workflow run")}</strong>
+              <small>run \${esc(run.id)} · \${esc(stateLabel)}</small>
+            </header>
+            \${jobsHtml}
+            \${state.error ? \`<p class="workflow-source-note">\${esc(state.error)}</p>\` : ""}
+          </section>\`;
+      }).join("")}</div>\`;
+    }
+
     function goalDrawerHtml() {
       const goal = goalById(selectedGoalId);
       if (!goal) return "";
@@ -1626,6 +1685,7 @@ export function renderHtml() {
             <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Pull requests and checks</h3>\${pullRequestItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Workflow runs</h3>\${workflowItemsHtml(goal)}</section>
+            <section class="drawer-section"><h3>Workflow jobs and steps</h3>\${workflowJobItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Lifecycle history</h3><div style="margin-top:10px">\${lifecycleHistoryHtml(goal)}</div></section>
             <section class="drawer-section"><h3>Evidence</h3><div style="margin-top:10px">\${timelineHtml(goal)}</div></section>
           </div>

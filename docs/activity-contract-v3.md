@@ -3,9 +3,9 @@
 ## Scope and compatibility
 
 Repository and user-wide activity snapshots use `schemaVersion: 3`. Version 3
-retains the version 2 authoritative review summaries and adds an explicit,
-normalized calendar-day contract. No daily aggregate is introduced by this
-version.
+retains the version 2 authoritative review summaries and workflow job/step
+drill-down, and adds an explicit, normalized calendar-day contract. No daily
+aggregate is introduced by this version.
 
 ```js
 dayBoundary: {
@@ -48,7 +48,7 @@ The renderer labels the effective rule as `UTC server day YYYY-MM-DD
 pending`. These are contract labels only; they do not imply that any daily
 count exists.
 
-## Review summaries retained from v2
+## Additive v2 fields retained
 
 ```js
 pullRequest: {
@@ -78,6 +78,58 @@ current review requests. An empty array means GitHub returned no entries. A
 never been fetched successfully. A missing login, type, or timestamp remains
 empty, `unknown`, or `null`; the adapter does not infer it. These actors are
 pull-request participants, not Squad agents and not goal owners.
+
+```js
+workflowRun: {
+  // Existing v1 fields remain unchanged.
+  jobsState: {
+    status: "fresh" | "partial" | "stale" | "unavailable" | "not_selected",
+    fetchedAt: string | null,
+    error: string,
+    truncated: boolean
+  },
+  jobs: null | [{
+    id: number | null,
+    name: string,
+    status: string,
+    conclusion: string,
+    url: string,
+    startedAt: string | null,
+    completedAt: string | null,
+    steps: [{
+      number: number | null,
+      name: string,
+      status: string,
+      conclusion: string,
+      startedAt: string | null,
+      completedAt: string | null
+    }]
+  }]
+}
+```
+
+Jobs come from `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`. The
+selection bound is fixed before any jobs request: for each correlated goal,
+select its two newest runs by observed `updatedAt`, then `createdAt`, then run
+ID; deduplicate shared runs; sort the combined set by the same keys; and keep at
+most 20 runs per repository refresh. Runs outside that set use
+`jobsState.status: "not_selected"` and do not trigger a request.
+
+Each selected run is fetched with `per_page=100`, one page at a time, stopping
+when GitHub returns fewer than 100 jobs, the observed `total_count` is reached,
+or 10 pages have been read. Reaching the 1,000-job ceiling before
+`total_count` marks that run and the `workflowJobs` source `partial`; returned
+jobs remain the authoritative observed prefix. Requests include
+`filter=latest`, so a successful refresh replaces cached jobs with the latest
+attempt for that run ID. Positive job IDs repeated across pages are
+deduplicated; entries without a positive ID are preserved because they cannot
+be proven identical. Completion and ceiling checks use the deduplicated
+observed count. Polling never requests workflow logs.
+
+Job and step names, IDs, URLs, statuses, conclusions, and timestamps are copied
+only from GitHub's response. Missing values remain empty or `null`. The model
+does not calculate progress, duration, failure reason, causal relationships, or
+state transitions.
 
 ## Source, cost, permissions, and cache behavior
 
@@ -109,13 +161,38 @@ connections from successful empty arrays, displays only returned participants,
 and never derives approval, identity, or pending-review state from comments,
 checks, authorship, assignees, or goal ownership.
 
+Workflow jobs belong to an independent `workflowJobs` source. A jobs failure
+does not discard or stale issues, pull requests, workflow runs, or other cached
+evidence. Cache entries are maintained per selected run. A failed refresh keeps
+that run's last successful jobs and marks its jobs state `stale`; a run that
+has never returned jobs is `unavailable`. A successful `{ jobs: [] }` response
+is `fresh` with an empty array and is not treated as unavailable. Mixed fresh
+and unavailable or pagination-limited results mark the source `partial`.
+
+The jobs endpoint requires Actions read access to the repository. GitHub App
+and fine-grained token configurations need Actions repository permission;
+classic tokens need repository access appropriate to the repository
+visibility. Permission errors remain source-specific and retain any prior
+successful per-run jobs.
+
+Every page reserves one observed REST core request before it is sent. A refresh
+shares one mutable budget across repositories and never reduces the observed
+remaining count below the 100-request reserve. Therefore the jobs slice issues
+at most `min(200, max(0, observedRemaining - 100))` REST calls per refresh:
+20 selected runs times 10 pages is the absolute ceiling, while the reserve is
+the effective ceiling. If the budget is exhausted before a run starts, cached
+jobs become stale or uncached jobs are unavailable. If it is exhausted after
+one or more pages and no successful cache exists, the observed prefix is
+partial. A later successful latest-attempt response replaces stale or partial
+jobs for that run.
+
 ## Candidate field audit
 
 | Candidate | Authoritative source | API and permission impact | Missing, stale, and partial semantics | Renderer requirement | Slice |
 |---|---|---|---|---|---|
 | Review participants and decision | Pull request `reviewDecision`, `latestReviews`, and `reviewRequests` | Existing GraphQL PR query; repository read access; larger nested response but no extra request | Empty only after a successful source response; retained and marked stale with the PR source | Show latest observed states and pending requests; never equate reviewer with agent or owner | Implemented in v2 |
-| Workflow jobs and steps | `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` | At least one paginated REST request per selected run; repository read access, `repo` scope for classic tokens on private repositories | Separate jobs source per repository or run; retain last successful jobs independently; distinguish unavailable from a successful empty job list | Lazy or bounded drill-down; show observed status/conclusion/timestamps only | Follow-up |
-| Workflow failure detail | Job and step conclusions; optional logs only with an explicit bounded fetch | Job calls above; log downloads add redirects, large payloads, and short-lived URLs | No synthesized reason when GitHub exposes only `failure`; logs must fail independently and expire | Display conclusion separately from optional log excerpt; never generate a causal explanation | Follow-up with jobs |
+| Workflow jobs and steps | `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?filter=latest` | Up to `min(200, max(0, observedRemaining - 100))` calls: 20 selected runs, 10 pages per run, 100 jobs per page; Actions read access | Independent `workflowJobs` source and per-run cache; retain last successful jobs; distinguish fresh empty, partial, stale, unavailable, and not selected | Separate bounded drill-down; show observed fields only | Implemented in v2 |
+| Workflow failure detail | Job and step conclusions; optional logs only with an explicit bounded fetch | Job calls above; log downloads add redirects, large payloads, and short-lived URLs | No synthesized reason when GitHub exposes only `failure`; logs must fail independently and expire | Display conclusion without a causal explanation; no logs in polling | Job conclusions implemented; logs deferred |
 | Stable agent identity and avatar | No validated Squad source currently exists in this repository | Unknown until Squad publishes a durable identity/provenance record; GitHub actor lookup alone is insufficient | Must remain unavailable, not copied from assignees, reviewers, PR authors, branches, or roster display names | Renderer needs a distinct agent identity surface separate from goal owner and GitHub participants | Blocked follow-up |
 | Lifecycle transition history | Future persisted observation log or an authoritative event stream | Snapshot polling alone cannot reconstruct transitions between observations; timeline APIs add pagination and still do not define Squad lifecycle transitions | Record only transitions observed after the feature is enabled, with observation time and source freshness; never backfill inferred history | Explicitly label observed-at time, source state, and incomplete history | Follow-up |
 | Durable goal/run/PR/session links | Existing closing references and explicit Squad markers cover goals, runs, and PRs; no validated implementation-session identifier exists | Existing correlations are bounded; session linkage requires an explicit producer contract | Preserve explicit identifiers only; unknown session link remains absent | Separate observed durable links from inferred branch correlation | Follow-up |
@@ -125,9 +202,9 @@ checks, authorship, assignees, or goal ownership.
 
 1. **Review drill-down:** ship the additive review arrays, adapter query fields,
    stale preservation, renderer output, tests, and this contract documentation.
-2. **Workflow job drill-down:** add a separately cached `workflowJobs` source,
-   fetch jobs only for a bounded set of relevant runs, and render jobs and steps
-   without logs or inferred failure reasons.
+2. **Workflow job drill-down:** implemented with a separately cached
+   `workflowJobs` source, fixed run and pagination bounds, and a distinct
+   job/step renderer without logs or inferred failure reasons.
 3. **Optional failure evidence:** add an explicit on-demand log fetch with size,
    lifetime, permission, and redaction rules. Do not persist expiring URLs.
 4. **Observed lifecycle history:** persist transitions seen by Squadcaster after

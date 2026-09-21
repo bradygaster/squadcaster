@@ -454,6 +454,7 @@ test("uses only the latest run outcome for the same workflow branch", () => {
             },
         ],
     });
+
     assert.equal(snapshot.goals[0].phase, "queued");
 });
 
@@ -502,6 +503,49 @@ test("orders missing and equal timestamps deterministically", () => {
         ).map((item) => item.timestamp),
         ["2026-09-20T13:00:00Z"],
     );
+});
+
+test("normalizes authoritative workflow jobs and steps without inferred metrics or reasons", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        issues: [issue({ body: "" })],
+        workflowRuns: [{
+            databaseId: 78,
+            workflowName: "Squad Implement Worker",
+            displayTitle: "Implement #12",
+            status: "completed",
+            conclusion: "failure",
+        }],
+        workflowJobs: [{
+            runId: 78,
+            fetchedAt: "2026-09-20T12:02:00Z",
+            status: "fresh",
+            jobs: [{
+                id: 901,
+                name: "test",
+                status: "completed",
+                conclusion: "failure",
+                started_at: "2026-09-20T12:00:00Z",
+                completed_at: "2026-09-20T12:01:00Z",
+                steps: [{
+                    number: 1,
+                    name: "Run tests",
+                    status: "completed",
+                    conclusion: "failure",
+                }],
+            }],
+        }],
+    });
+    const run = snapshot.goals[0].workflowRuns[0];
+
+    assert.equal(run.jobsState.status, "fresh");
+    assert.equal(run.jobs[0].conclusion, "failure");
+    assert.equal(run.jobs[0].steps[0].conclusion, "failure");
+    assert.equal(run.jobs[0].startedAt, "2026-09-20T12:00:00.000Z");
+    assert.equal("duration" in run.jobs[0], false);
+    assert.equal("progress" in run.jobs[0], false);
+    assert.equal("reason" in run.jobs[0], false);
+    assert.equal("cause" in run.jobs[0], false);
 });
 
 test("treats stale or unavailable source state as incomplete without requiring an error", () => {

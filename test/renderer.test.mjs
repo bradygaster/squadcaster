@@ -185,6 +185,10 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /Observed lifecycle history/);
     assert.match(html, /not when GitHub or Squad performed it/);
     assert.match(html, /source observation/);
+    assert.match(html, /Workflow jobs and steps/);
+    assert.match(html, /GitHub reported no jobs for this run/);
+    assert.match(html, /Workflow jobs are unavailable for this run/);
+    assert.doesNotMatch(html, /job duration|failure reason|percent complete/i);
     assert.match(html, /last fully synced/);
     assert.match(html, /refresh attempted/);
     assert.match(html, /UTC server day/);
