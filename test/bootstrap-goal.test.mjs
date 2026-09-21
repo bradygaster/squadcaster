@@ -686,6 +686,62 @@ test("stale embedded activation metadata cannot bypass canonical comment freshne
     assert.deepEqual(goal.bootstrap.generatedGoals, []);
 });
 
+test("fresh edited activation comments replace cached bindings with the same metadata", () => {
+    const validBinding = {
+        task: "1",
+        issue: "#21",
+        epic: "1.1",
+        epic_issue: "#20",
+        agent: "Dev",
+        epic_agents: ["dev"],
+        label: "squad:dev",
+        epic_label: "squad:dev",
+    };
+    const activationUrl =
+        "https://github.com/octodemo/demo/issues/6#issuecomment-activation-edited";
+    const activationCreatedAt = "2026-09-21T11:00:00Z";
+    const research = artifactComment("research", {
+        createdAt: "2026-09-21T10:15:00Z",
+        url: researchComment().url,
+    });
+    const cachedActivation = artifactComment("activated", {
+        bindings: [validBinding],
+        createdAt: activationCreatedAt,
+        url: activationUrl,
+    });
+    const editedActivation = artifactComment("activated", {
+        bindings: [{
+            ...validBinding,
+            issue: "#20",
+        }],
+        createdAt: activationCreatedAt,
+        url: activationUrl,
+    });
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        research,
+        cachedActivation,
+    ]);
+    const snapshot = snapshotWithBootstrap({
+        issues: [
+            root,
+            goalIssue(20, "Epic", ["squad", "squad:dev"]),
+            goalIssue(21, "Task", ["squad", "squad:dev"]),
+        ],
+        bootstrapComments: [research, editedActivation],
+    });
+    const goal = snapshot.goals.find((candidate) => candidate.issue.number === 6);
+
+    assert.deepEqual(goal.bootstrap.generatedGoals, []);
+    assert.equal(
+        goal.artifacts.filter((artifact) => artifact.url === activationUrl).length,
+        1,
+    );
+    assert.ok(goal.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "conflicting-generated-goal" &&
+        item.url === activationUrl));
+});
+
 test("duplicate activation binding blocks fail closed", () => {
     const binding = {
         task: "1",

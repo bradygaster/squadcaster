@@ -1121,20 +1121,22 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         const retainedResearchKey = retainedResearchCandidates.length === 1
             ? artifactKey(retainedResearchCandidates[0])
             : "";
-        rootGoal.artifacts = rootGoal.artifacts.map((artifact) => ({
-            ...artifact,
-            advancing: Boolean((
-                commentsAreAuthoritative &&
-                discoveredArtifactKeys.has(artifactKey(artifact))
-            ) || (
-                retainedResearchKey &&
-                artifactKey(artifact) === retainedResearchKey
-            )),
-        }));
         const addedArtifacts = discoveredArtifacts
-            .filter((artifact) => !existingArtifactKeys.has(artifactKey(artifact)));
+            .filter((artifact) =>
+                commentsAreAuthoritative ||
+                !existingArtifactKeys.has(artifactKey(artifact)));
         rootGoal.artifacts = [
-            ...rootGoal.artifacts,
+            ...rootGoal.artifacts
+                .filter((artifact) =>
+                    !commentsAreAuthoritative ||
+                    !discoveredArtifactKeys.has(artifactKey(artifact)))
+                .map((artifact) => ({
+                    ...artifact,
+                    advancing: Boolean(
+                        retainedResearchKey &&
+                        artifactKey(artifact) === retainedResearchKey
+                    ),
+                })),
             ...addedArtifacts.map((artifact) => ({
                 ...artifact,
                 advancing: commentsAreAuthoritative,
