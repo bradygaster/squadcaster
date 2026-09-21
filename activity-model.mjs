@@ -97,22 +97,45 @@ function isSquadGoal(issue, artifacts) {
         /^squad\b|\[squad\]/i.test(text(issue?.title));
 }
 
-function linkedIssueNumbers(pullRequest) {
-    const numbers = new Set(
+function issueKey(repository, number) {
+    const repositoryKey = text(repository, 300).toLowerCase();
+    const issueNumber = Number(number);
+    return repositoryKey && Number.isInteger(issueNumber)
+        ? `${repositoryKey}#${issueNumber}`
+        : "";
+}
+
+function closingReferenceRepository(reference, currentRepository) {
+    const repository = reference?.repository;
+    return text(
+        repository?.nameWithOwner ||
+        (repository?.owner?.login && repository?.name
+            ? `${repository.owner.login}/${repository.name}`
+            : "") ||
+        currentRepository,
+        300,
+    ).toLowerCase();
+}
+
+function linkedIssueKeys(pullRequest, currentRepository) {
+    const keys = new Set(
         (Array.isArray(pullRequest?.closingIssuesReferences) ? pullRequest.closingIssuesReferences : [])
-            .map((issue) => Number(issue?.number))
-            .filter(Number.isInteger),
+            .map((reference) => issueKey(
+                closingReferenceRepository(reference, currentRepository),
+                reference?.number,
+            ))
+            .filter(Boolean),
     );
     for (const match of String(pullRequest?.body || "").matchAll(
-        /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#([1-9][0-9]*)\b/gi,
+        /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#([1-9][0-9]*)\b/gi,
     )) {
-        numbers.add(Number(match[1]));
+        keys.add(issueKey(match[1] || currentRepository, match[2]));
     }
     const marker = String(pullRequest?.body || "").match(/<!--\s*squad:implement\s+issue=([1-9][0-9]*)\s+run=/i);
-    if (marker) numbers.add(Number(marker[1]));
+    if (marker) keys.add(issueKey(currentRepository, marker[1]));
     const branch = String(pullRequest?.headRefName || "").match(/^squad\/implement-([1-9][0-9]*)-/i);
-    if (branch) numbers.add(Number(branch[1]));
-    return [...numbers];
+    if (branch) keys.add(issueKey(currentRepository, branch[1]));
+    return [...keys].filter(Boolean);
 }
 
 function linkedRunNumbers(run) {
@@ -288,10 +311,12 @@ export function buildActivitySnapshot({
     fetchedAt = new Date().toISOString(),
 } = {}) {
     const issueByNumber = new Map(issues.map((issue) => [Number(issue?.number), issue]));
+    const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
+    const repositoryKey = repositoryName.toLowerCase();
     const normalizedPullRequests = pullRequests.map((pullRequest) => ({
         source: pullRequest,
         value: normalizePullRequest(pullRequest),
-        issueNumbers: linkedIssueNumbers(pullRequest),
+        issueKeys: linkedIssueKeys(pullRequest, repositoryKey),
     }));
     const normalizedRuns = workflowRuns.map((run) => ({
         source: run,
@@ -299,15 +324,14 @@ export function buildActivitySnapshot({
         issueNumbers: linkedRunNumbers(run),
     }));
     const goals = [];
-    const repositoryName = text(repository?.nameWithOwner || repository?.name || "repository", 300);
-    const repositoryKey = repositoryName.toLowerCase();
 
     for (const issue of issues) {
         const artifacts = parseArtifacts(issue?.comments);
         if (!isSquadGoal(issue, artifacts)) continue;
         const number = Number(issue?.number);
+        const goalKey = issueKey(repositoryKey, number);
         const relatedPullRequests = normalizedPullRequests
-            .filter((pullRequest) => pullRequest.issueNumbers.includes(number))
+            .filter((pullRequest) => pullRequest.issueKeys.includes(goalKey))
             .map((pullRequest) => pullRequest.value);
         const relatedRuns = normalizedRuns
             .filter((run) => run.issueNumbers.includes(number) ||
