@@ -7,7 +7,8 @@
 - `repository`: GitHub identity, URL, and default branch
 - `summary`: active, blocked, failed, awaiting-review, and completed counts
 - `goals`: issue-backed intents with lifecycle, owner, work items, blockers,
-  artifacts, pull requests, workflow runs, next action, and evidence
+  artifacts, pull requests, workflow runs, next action, evidence, and a
+  read-only `handoff` readiness contract
 - `errors`: source-specific discovery failures
 
 Repository snapshots use activity contract version 3. Pull requests retain the
@@ -136,6 +137,39 @@ retry. Dependencies come from `Depends on:` or `Blocked by:` issue-body lines;
 an unavailable referenced issue remains an explicit unknown blocker rather than
 being silently ignored.
 
+## Read-only handoff readiness
+
+`handoff-readiness.mjs` derives `goal.handoff` without exposing a launch or
+mutation adapter. The contract records:
+
+- the exact root issue, activation artifact, task, task issue, epic, epic
+  issue, agent, agent set, and reported labels from one recognized
+  `activated`, `phases-activated`, `plan-accepted`, or `phases-accepted`
+  artifact;
+- acceptance criteria extracted from the untruncated task issue body, together
+  with the issue revision and an explicit completeness marker;
+- native GitHub parent/sub-issue evidence plus the supported `Parent:` and
+  `Sub-issues:` body fallback;
+- repository-qualified dependency observations;
+- correlated pull requests, workflow runs, actual Copilot assignment/tasks
+  when enabled, and app-local session bindings when enabled;
+- source-by-source completeness and mechanism availability as independent
+  dimensions.
+
+Activation bindings are mandatory, non-empty JSON. References must be resolved
+`#<number>` strings. Malformed JSON, surviving `#aw_*` references, missing
+issues, duplicate or ambiguous bindings, label mismatches, stale evidence,
+authorization failures, and capped results all fail closed as `unknown`.
+`squad:copilot` is activation routing provenance only; actual assignment
+requires an observed Copilot assignee or authoritative task evidence.
+
+Readiness is `ready` only for an open activated leaf with complete acceptance
+criteria, completed dependencies, exhaustive fresh enabled sources, and no
+existing implementation. Active work is `already-in-progress`; a closed issue
+or merged pull request is `completed`; a closed-unmerged pull request is an
+ambiguous prior attempt and remains `unknown`. Cross-repository aggregation
+reconciles dependency states without weakening any other readiness gate.
+
 ## User-wide aggregation
 
 `GitHubSquadActivityAdapter` implements discovery and returns the normalized
@@ -197,13 +231,13 @@ Legacy persisted state is normalized on load so obsolete onboarding or mission
 fields are ignored rather than restored. Persisted activity v2 and registry v1
 snapshots migrate to activity v3 by deriving their UTC boundary from `fetchedAt`.
 
-The proposed optional transition from activated work to an implementation
-mechanism is documented in
+The optional transition from activated work to an implementation mechanism is
+documented in
 [the handoff design](optional-handoff-design.md). The design keeps this
-read-only architecture as the baseline: mutation is deferred until activation
-provenance, acceptance criteria, readiness, existing-work reconciliation,
-permissions, confirmation, and idempotency are implemented as separately
-approved slices.
+read-only architecture as the baseline. Activation provenance, acceptance
+criteria, readiness, source completeness, and existing-work reconciliation are
+now normalized; mutation, permission checks, confirmation, and idempotent
+launch adapters remain separately approved slices.
 
 Automatic bootstrap is a repository-level, read-only status facet rather than
 a new goal lifecycle phase. The canonical research-proposals issue remains the

@@ -5,7 +5,7 @@ const SOURCES = [
         name: "issues",
         args: [
             "issue", "list", "--state", "all", "--limit", "1000",
-            "--json", "number,title,body,state,url,labels,assignees,author,createdAt,updatedAt,closedAt,comments,milestone",
+            "--json", "number,title,body,state,url,labels,assignees,author,createdAt,updatedAt,closedAt,comments,milestone,parent,subIssues,subIssuesSummary",
         ],
     },
     {
@@ -361,6 +361,27 @@ async function workflowJobsSource({
     };
 }
 
+function exhaustiveState(state, exhaustive) {
+    return {
+        ...state,
+        status: state.status === "fresh" && !exhaustive ? "incomplete" : state.status,
+        exhaustive,
+        truncated: !exhaustive,
+    };
+}
+
+function embeddedSourceState(sourceState, key, exhaustive) {
+    const issues = sourceState.issues;
+    return {
+        data: [],
+        fetchedAt: issues.fetchedAt,
+        status: issues.status === "fresh" && !exhaustive ? "incomplete" : issues.status,
+        error: issues.error,
+        exhaustive,
+        truncated: !exhaustive,
+    };
+}
+
 export class GitHubSquadActivityAdapter {
     constructor({ runJson, cwd, repository = "" }) {
         this.runJson = runJson;
@@ -406,7 +427,10 @@ export class GitHubSquadActivityAdapter {
                 ? previousSource(previous, "workflowRuns")
                 : {
                     ...previousSource(previous, "workflowRuns"),
-                    status: previous?.sourceState?.workflowRuns?.status || "skipped",
+                    status: "skipped",
+                    error: "",
+                    exhaustive: false,
+                    truncated: false,
                 },
             workflowJobs: includeWorkflowRuns
                 ? previousSource(previous, "workflowJobs")
@@ -424,6 +448,8 @@ export class GitHubSquadActivityAdapter {
                     fetchedAt: attemptedAt,
                     status: "fresh",
                     error: "",
+                    exhaustive: result.value.length < 1000,
+                    truncated: result.value.length >= 1000,
                 };
             } else {
                 const message = result.status === "rejected"
@@ -439,6 +465,44 @@ export class GitHubSquadActivityAdapter {
                 };
             }
         });
+        sourceState.issues = exhaustiveState(
+            sourceState.issues,
+            sourceState.issues.status !== "fresh" ||
+                sourceState.issues.data.length < 1000,
+        );
+        sourceState.pullRequests = exhaustiveState(
+            sourceState.pullRequests,
+            sourceState.pullRequests.status !== "fresh" ||
+                sourceState.pullRequests.data.length < 1000,
+        );
+        sourceState.workflowRuns = exhaustiveState(
+            sourceState.workflowRuns,
+            sourceState.workflowRuns.status !== "fresh" ||
+                sourceState.workflowRuns.data.length < 1000,
+        );
+        const issueCommentsExhaustive = sourceState.issues.status !== "fresh" ||
+            sourceState.issues.data.every((issue) =>
+                !Array.isArray(issue?.comments) || issue.comments.length < 100);
+        const subIssuesExhaustive = sourceState.issues.status !== "fresh" ||
+            sourceState.issues.data.every((issue) => {
+                const observed = Array.isArray(issue?.subIssues) ? issue.subIssues.length : 0;
+                const total = Number(
+                    issue?.subIssuesSummary?.total ||
+                    issue?.subIssuesSummary?.totalCount ||
+                    observed,
+                );
+                return !Number.isFinite(total) || total <= observed;
+            });
+        sourceState.issueComments = embeddedSourceState(
+            sourceState,
+            "issueComments",
+            issueCommentsExhaustive,
+        );
+        sourceState.subIssues = embeddedSourceState(
+            sourceState,
+            "subIssues",
+            subIssuesExhaustive,
+        );
 
         const provisional = buildActivitySnapshot({
             repository,

@@ -22,6 +22,16 @@ offer batch filtering, readiness review, and context export without starting
 work. It must never start implementation merely because Squad activated an
 issue.
 
+## Implementation status
+
+Issue #54 implements the first recommended slice: every normalized goal now has
+a read-only `handoff` object with activation provenance, untruncated acceptance
+criteria, leaf and dependency evidence, exhaustive source states, existing-work
+reconciliation, independent mechanism availability, and fail-closed readiness.
+No launch, assignment, workflow dispatch, branch, pull-request, or local-session
+creation behavior is included. The goal drawer and every mutating mechanism
+remain separate follow-up slices.
+
 ## Existing source contract
 
 Squadcaster's normalized activity snapshot already provides the stable identity

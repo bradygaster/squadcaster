@@ -36,6 +36,10 @@ in-browser filters. GitHub and repository content remain read-only.
 - Actions runs correlated by issue or implementation branch
 - Current checks, dependencies, next actions, and an expandable evidence timeline
 - Persisted lifecycle transitions observed by Squadcaster after history is enabled
+- A normalized, read-only `goal.handoff` contract for activated leaf tasks,
+  including exact activation provenance, untruncated acceptance criteria,
+  source completeness, existing-work reconciliation, and per-mechanism
+  availability
 - Partial-sync warnings while retaining the last known goal state when issue discovery is unavailable
 
 Every conclusion links to its source on GitHub. Relationships inferred from
@@ -107,7 +111,9 @@ existence with a one-item request while respecting the REST core budget; it does
 not use a capped global search or treat a failed probe as a negative result.
 Squadcaster reads up to 1,000 issues and pull requests per included repository;
 Actions runs are refreshed for the current repository and repositories with
-active work.
+active work. A result that reaches one of those caps is explicitly incomplete
+and can never make handoff readiness `ready`. Nested issue comments and native
+sub-issues are also truncation-aware; capped evidence yields `unknown`.
 
 Independent GitHub sources are fetched separately, so a permissions or
 rate-limit failure in one source does not discard data from the others. Failed
@@ -127,8 +133,10 @@ See [the operations architecture](docs/operations-architecture.md) for the
 normalized model, correlation rules, adapter boundary, and compatibility notes.
 See [the optional implementation handoff design](docs/optional-handoff-design.md)
 for the recommended gated path from activated Squad tasks to local Copilot
-sessions, Copilot cloud agent, or `/squad implement`. The current product
-remains read-only; that document does not enable mutation.
+sessions, Copilot cloud agent, or `/squad implement`. Squadcaster now implements
+the design's read-only normalization slice, but the current product still has
+no launch, assignment, dispatch, branch, pull-request, or session-creation
+behavior.
 The
 [automatic-bootstrap observability decision](docs/automatic-bootstrap-observability.md)
 defines the fail-closed state model for Squad's deterministic Cast pull request,
@@ -152,6 +160,7 @@ npm run test:all
 ## How it is organized
 
 - `activity-model.mjs` — normalized goals, lifecycle derivation, and evidence correlation
+- `handoff-readiness.mjs` — fail-closed activation, criteria, leaf, reconciliation, and readiness normalization
 - `github-activity.mjs` — read-only GitHub/Squad discovery adapter
 - `global-activity.mjs` — user-wide registry, discovery, adaptive refresh, and aggregation
 - `lifecycle-history.mjs` — observation-only lifecycle history, migration, retention, and exclusion gaps

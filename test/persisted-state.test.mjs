@@ -103,6 +103,128 @@ test("migrates schema-v2 activity and coerces it into renderer-safe shapes", () 
     assert.deepEqual(normalized.activity.goals[0].evidence, [{ title: "Observed" }]);
     assert.deepEqual(normalized.activity.goals[0].pullRequests, []);
     assert.deepEqual(normalized.activity.goals[0].workflowRuns, [{ workflow: "Squad" }]);
+    assert.equal(normalized.activity.goals[0].handoff, null);
+});
+
+test("preserves normalized read-only handoff readiness across cache migration", () => {
+    const normalized = normalizePersistedState({
+        version: 2,
+        activity: {
+            ...emptyActivity(),
+            schemaVersion: 2,
+            goals: [{
+                id: "octodemo/demo#12",
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        state: "ready",
+                        reasons: [],
+                        sourceStates: {
+                            issue: "complete",
+                            issueAssignees: "complete",
+                            issueComments: "complete",
+                            subIssues: "complete",
+                            dependencies: "complete",
+                            pullRequests: "complete",
+                            workflowRuns: "complete",
+                        },
+                        automatedHandoffAvailable: false,
+                    },
+                    activation: { issue: "octodemo/demo#12" },
+                    acceptanceCriteria: [{ text: "Ship it", sourceUrl: "https://example.test/12" }],
+                    acceptanceCriteriaComplete: true,
+                    leaf: { subIssues: [], complete: true },
+                    existingImplementation: {
+                        state: "none",
+                        pullRequests: [],
+                        workflowRuns: [],
+                        sessions: [],
+                        links: [],
+                    },
+                    mechanisms: [{ kind: "manual", availability: "available", reasons: [] }],
+                },
+            }],
+        },
+    });
+
+    const handoff = normalized.activity.goals[0].handoff;
+    assert.equal(handoff.readiness.state, "ready");
+    assert.equal(handoff.activation.issue, "octodemo/demo#12");
+    assert.equal(handoff.acceptanceCriteria[0].text, "Ship it");
+    assert.equal(handoff.existingImplementation.state, "none");
+});
+
+test("coerces malformed handoff cache fields into renderer-safe shapes", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            ...emptyActivity(),
+            schemaVersion: 2,
+            goals: [{
+                id: "octodemo/demo#12",
+                handoff: {
+                    schemaVersion: 1,
+                    readiness: {
+                        reasons: "invalid",
+                        sourceStates: [],
+                        automatedHandoffAvailable: "yes",
+                    },
+                    activation: [],
+                    acceptanceCriteria: [null, { text: "Observed" }],
+                    leaf: { subIssues: "invalid" },
+                    existingImplementation: {
+                        pullRequests: "invalid",
+                        workflowRuns: [null, { id: 1 }],
+                    },
+                    mechanisms: "invalid",
+                },
+            }],
+        },
+    });
+
+    const handoff = normalized.activity.goals[0].handoff;
+    assert.equal(handoff.readiness.state, "unknown");
+    assert.deepEqual(handoff.readiness.reasons, []);
+    assert.deepEqual(handoff.readiness.sourceStates, {});
+    assert.equal(handoff.activation, null);
+    assert.deepEqual(handoff.acceptanceCriteria, [{ text: "Observed" }]);
+    assert.deepEqual(handoff.leaf.subIssues, []);
+    assert.deepEqual(handoff.existingImplementation.pullRequests, []);
+    assert.deepEqual(handoff.existingImplementation.workflowRuns, [{ id: 1 }]);
+    assert.deepEqual(handoff.mechanisms, []);
+});
+
+test("fails closed on unsupported or incomplete cached ready contracts", () => {
+    for (const handoff of [
+        {
+            schemaVersion: 99,
+            readiness: {
+                state: "ready",
+                automatedHandoffAvailable: true,
+            },
+        },
+        {
+            schemaVersion: 1,
+            readiness: {
+                state: "ready",
+                sourceStates: { issue: "complete" },
+                automatedHandoffAvailable: true,
+            },
+            acceptanceCriteria: [],
+            acceptanceCriteriaComplete: false,
+            leaf: { subIssues: [], complete: false },
+            existingImplementation: { state: "none" },
+        },
+    ]) {
+        const normalized = normalizePersistedState({
+            activity: {
+                ...emptyActivity(),
+                schemaVersion: 2,
+                goals: [{ id: "octodemo/demo#12", handoff }],
+            },
+        }).activity.goals[0].handoff;
+        assert.equal(normalized.readiness.state, "unknown");
+        assert.equal(normalized.readiness.automatedHandoffAvailable, false);
+    }
 });
 
 function containsAgentIdentity(value) {
