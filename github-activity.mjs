@@ -1,4 +1,7 @@
-import { buildActivitySnapshot } from "./activity-model.mjs";
+import {
+    buildActivitySnapshot,
+    integrateAutomaticBootstrapSnapshot,
+} from "./activity-model.mjs";
 import {
     BOOTSTRAP_IDENTIFIERS,
     classifyAutomaticBootstrap,
@@ -109,12 +112,14 @@ function priorIssues(previous) {
     for (const goal of previous?.goals || []) {
         const labels = goal.issue?.labels || [];
         const comments = (goal.artifacts || []).map((artifact) => ({
-            body: `\`\`\`json\n${JSON.stringify({
-                squad_artifact: artifact.kind,
-                schema_version: artifact.schemaVersion,
-                origin_issue: artifact.originIssue,
-                phases: artifact.phases,
-            })}\n\`\`\``,
+            body: `${Array.isArray(artifact.bindings)
+                ? `Activation bindings:\n\`\`\`json\n${JSON.stringify(artifact.bindings)}\n\`\`\`\n`
+                : ""}Structured data:\n\`\`\`json\n${JSON.stringify({
+                    squad_artifact: artifact.kind,
+                    schema_version: artifact.schemaVersion,
+                    origin_issue: artifact.originIssue,
+                    phases: artifact.phases,
+                })}\n\`\`\``,
             createdAt: artifact.createdAt,
             url: artifact.url,
         }));
@@ -942,7 +947,7 @@ export class GitHubSquadActivityAdapter {
         snapshot.staleSources.push(
             ...bootstrap.bootstrap.staleSources.map((source) => `bootstrap.${source}`),
         );
-        return snapshot;
+        return integrateAutomaticBootstrapSnapshot(snapshot);
     }
 }
 

@@ -266,6 +266,46 @@ cached evidence for the next refresh. The classifier's guarded
 `lastClassified` state is therefore the sole authority for last-complete
 retention; discovery does not duplicate or weaken its precedence rules.
 
+## Goal and evidence integration
+
+`integrateAutomaticBootstrapSnapshot` consumes the classifier result without
+reclassifying it. When the classifier exposes a uniquely valid research issue,
+that existing issue-backed goal receives a `bootstrap` facet with the
+classifier fields, a separately derived `journeyPhase`, and validated
+`generatedGoals`. Squadcaster never creates a synthetic bootstrap goal. An
+`ambiguous`, `malformed`, or `unknown` classifier result remains repository
+level because selecting a goal in those states would guess at identity.
+
+The exact Cast pull request and canonical default-branch bootstrap attempts are
+removed from ordinary implementation correlation before goal phases are
+derived. They appear only as observed `bootstrap-cast` and
+`bootstrap-workflow` evidence. The research issue and canonical research
+envelope similarly produce observed `bootstrap-issue` and
+`bootstrap-research` evidence. Classifier reasons produce
+`bootstrap-diagnostic` evidence with `confidence: "derived"`. This separation
+keeps existing pull-request, check, and workflow behavior unchanged for all
+non-bootstrap delivery work.
+
+Schema-1 artifacts with the matching `origin_issue` may advance the documented
+journey. Unsupported kinds or schema versions and malformed envelopes remain
+in the artifact/evidence timeline with their validation result but cannot
+advance either `journeyPhase` or the existing lifecycle `phase`.
+
+Generated implementation goals are linked only from the `Activation bindings:`
+JSON carried by a supported activation artifact. Every task and epic reference
+must resolve to a local Squad goal, issue references and ownership metadata
+must be structurally valid, duplicate/conflicting mappings are rejected, and
+the reported `squad`/`squad:{agent}` label outcome must match the observed
+target issue. Incidental issue-number text, tables, titles, and prose are never
+used for this relationship. Invalid bindings remain visible as a derived
+diagnostic and produce no generated-goal links.
+
+Repository summaries expose bootstrap counts by classifier status plus `total`
+for known classifications and `stale` for guarded results. User-wide
+aggregation exposes one repository-qualified entry per discovered
+classification under `bootstraps` and sums the same counters without changing
+the existing lifecycle summary.
+
 ## Renderer direction
 
 The dashboard should add:

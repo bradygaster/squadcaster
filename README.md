@@ -141,7 +141,10 @@ The
 [automatic-bootstrap observability decision](docs/automatic-bootstrap-observability.md)
 defines the fail-closed state model for Squad's deterministic Cast pull request,
 research-proposals issue, workflow attempts, and downstream research-to-
-activation journey.
+activation journey. The normalized model keeps that bootstrap status separate
+from lifecycle phase, attaches exact observed evidence to the authoritative
+research goal, and links generated delivery goals only from validated Squad
+activation metadata.
 The future Squad implementation-session integration is explicitly gated by the
 [provenance consumer contract](docs/session-provenance-consumer-contract.md);
 Squadcaster does not derive session identity from existing GitHub evidence.

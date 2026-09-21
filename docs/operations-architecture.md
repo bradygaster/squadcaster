@@ -5,10 +5,12 @@
 `activity-model.mjs` produces a versioned repository snapshot:
 
 - `repository`: GitHub identity, URL, and default branch
-- `summary`: active, blocked, failed, awaiting-review, and completed counts
+- `summary`: lifecycle counts plus repository bootstrap status totals
 - `goals`: issue-backed intents with lifecycle, owner, work items, blockers,
   artifacts, pull requests, workflow runs, next action, evidence, and a
-  read-only `handoff` readiness contract
+  read-only `handoff` readiness contract plus an optional bootstrap facet on
+  the canonical research goal
+- `bootstrap`: the repository-level automatic-bootstrap classification
 - `errors`: source-specific discovery failures
 
 Repository snapshots use activity contract version 3. Pull requests retain the
@@ -131,6 +133,12 @@ remains unknown until Squad publishes and validates a versioned producer
 payload; the consumer gate is defined in
 [`session-provenance-consumer-contract.md`](session-provenance-consumer-contract.md).
 
+The canonical Cast pull request and exact default-branch `Squad Bootstrap` runs
+are excluded from those implementation rules. They attach to the canonical
+research goal as observed bootstrap evidence and never become work items,
+closing pull requests, or ordinary inferred workflow evidence. All other
+pull-request and workflow correlation remains unchanged.
+
 Only the newest run for a workflow and branch affects failure state. Historical
 failed attempts remain visible as evidence but do not override a successful
 retry. Dependencies come from `Depends on:` or `Blocked by:` issue-body lines;
@@ -217,6 +225,12 @@ GitHub issue URLs. The aggregate resolves these references against goals in
 other included repositories. Missing or excluded targets remain visible with an
 unknown state instead of being treated as complete.
 
+Repository bootstrap classifications aggregate separately under `bootstraps`.
+Each entry retains its repository identity, status, stale guard, reasons, and
+canonical links. Aggregate bootstrap summary counts include unknown, partial,
+malformed, and every other classifier state without adding a lifecycle column
+or changing active-goal totals.
+
 ## Squad compatibility
 
 Squadcaster observes existing Squad workflow output and repository-owned roster
@@ -245,7 +259,15 @@ goal; the deterministic Cast pull request and bootstrap workflow attempts are
 attached as bootstrap evidence without pretending the Cast pull request closes
 the issue. Candidate validation is exact and fail-closed, closed-unmerged Cast
 pull requests are explicit human opt-outs, and stale sources retain the last
-complete classification. See
+complete classification.
+
+Downstream `journeyPhase` is distinct from the goal's lifecycle `phase`.
+Supported schema-1 artifacts can move the journey through research, triage,
+planning, acceptance, activation, generated delivery, and done while existing
+goal phases remain authoritative. Unsupported and malformed artifacts stay
+visible but non-advancing. Generated task and epic goals are linked only from
+validated activation bindings whose structured references and observed Squad
+labels agree; issue-number prose is never sufficient. See
 [Automatic-bootstrap observability](automatic-bootstrap-observability.md) for
 the authoritative state model, evidence mapping, and renderer decision.
 

@@ -375,3 +375,23 @@ test("preserves a stale v3 snapshot boundary across persisted-state reload", () 
     assert.equal(normalized.activity.dayBoundary.snapshotDay, "2026-09-21");
     assert.deepEqual(normalized.activity.snapshotDays, ["2026-09-21"]);
 });
+
+test("adds bootstrap defaults to older schema-v2 activity", () => {
+    const normalized = normalizePersistedState({
+        activity: {
+            schemaVersion: 2,
+            fetchedAt: "2026-09-21T12:00:00Z",
+            summary: {
+                active: 1,
+                queued: 1,
+            },
+            goals: [],
+        },
+    });
+
+    assert.equal(normalized.activity.summary.active, 1);
+    assert.equal(normalized.activity.summary.queued, 1);
+    assert.equal(normalized.activity.summary.bootstrap.total, 0);
+    assert.equal(normalized.activity.summary.bootstrap.unknown, 0);
+    assert.deepEqual(normalized.activity.bootstraps, []);
+});

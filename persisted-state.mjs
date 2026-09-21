@@ -18,8 +18,23 @@ export function emptyActivity() {
             failed: 0,
             awaitingReview: 0,
             completed: 0,
+            bootstrap: {
+                total: 0,
+                pending: 0,
+                delayed: 0,
+                partial: 0,
+                failed: 0,
+                retried: 0,
+                complete: 0,
+                ambiguous: 0,
+                malformed: 0,
+                opted_out: 0,
+                unknown: 0,
+                stale: 0,
+            },
         },
         goals: [],
+        bootstraps: [],
         errors: [],
     };
 }
@@ -202,6 +217,16 @@ export function normalizeActivity(value) {
             ? { ...value, dayBoundary: null }
             : null);
     if (!contract) return emptyActivity();
+    const defaults = emptyActivity();
+    const summary = isRecord(contract.summary)
+        ? {
+            ...defaults.summary,
+            ...contract.summary,
+            bootstrap: isRecord(contract.summary.bootstrap)
+                ? { ...defaults.summary.bootstrap, ...contract.summary.bootstrap }
+                : defaults.summary.bootstrap,
+        }
+        : defaults.summary;
     return {
         ...contract,
         schemaVersion: 3,
@@ -211,8 +236,9 @@ export function normalizeActivity(value) {
             : [],
         repository: isRecord(contract.repository) ? contract.repository : {},
         repositories: recordArray(contract.repositories).map(normalizeRepository),
-        summary: isRecord(contract.summary) ? contract.summary : emptyActivity().summary,
+        summary,
         goals: recordArray(contract.goals).map(normalizeGoal),
+        bootstraps: recordArray(contract.bootstraps),
         errors: recordArray(contract.errors),
     };
 }
