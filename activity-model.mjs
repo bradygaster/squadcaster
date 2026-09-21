@@ -43,6 +43,10 @@ function labelsOf(item) {
         .filter(Boolean);
 }
 
+function normalizedLabelsOf(item) {
+    return labelsOf(item).map((label) => label.toLowerCase());
+}
+
 function peopleOf(item) {
     return (Array.isArray(item?.assignees) ? item.assignees : [])
         .map((person) => text(person?.login || person?.name, 120))
@@ -101,7 +105,7 @@ function parseArtifacts(comments) {
 }
 
 function isSquadGoal(issue, artifacts) {
-    const labels = labelsOf(issue);
+    const labels = normalizedLabelsOf(issue);
     const comments = Array.isArray(issue?.comments) ? issue.comments : [];
     return labels.some((label) => label === "squad" || label.startsWith("squad:")) ||
         artifacts.length > 0 ||
@@ -205,7 +209,7 @@ function normalizeRun(run) {
 }
 
 function ownerFor(issue, members) {
-    const labels = labelsOf(issue);
+    const labels = normalizedLabelsOf(issue);
     const member = (Array.isArray(members) ? members : []).find((candidate) => {
         const id = text(candidate?.id).toLowerCase();
         const name = text(candidate?.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");

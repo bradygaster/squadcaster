@@ -46,6 +46,22 @@ test("derives blockers and Squad ownership from observed issue data", () => {
     assert.equal(snapshot.goals[0].blockers[0].issueNumber, 9);
 });
 
+test("normalizes mixed-case Squad labels for goal and owner matching", () => {
+    const snapshot = buildActivitySnapshot({
+        repository,
+        members: [{ id: "frontend", name: "Frontend", role: "UI" }],
+        issues: [issue({
+            body: "",
+            labels: [{ name: "Squad:Frontend" }],
+        })],
+    });
+
+    assert.equal(snapshot.goals.length, 1);
+    assert.equal(snapshot.goals[0].owner.name, "Frontend");
+    assert.equal(snapshot.goals[0].owner.source, "squad-label");
+    assert.deepEqual(snapshot.goals[0].issue.labels, ["Squad:Frontend"]);
+});
+
 test("correlates durable worker provenance, checks, and workflow runs", () => {
     const snapshot = buildActivitySnapshot({
         repository,

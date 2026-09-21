@@ -51,19 +51,23 @@ snapshot without exposing GitHub CLI response shapes to the renderer.
 user across owner, collaborator, and organization-member affiliations. It
 maintains a user-level registry and combines repository snapshots using
 `repository.nameWithOwner` plus the immutable issue number as the goal key.
-Workflow, roster, and exact `squad` label signals are read during paginated
-affiliation discovery. Repositories without those direct signals receive
-repository-scoped, fully paginated open-label discovery for `squad:*`, followed
-by the repository-scoped structured-artifact fallback. These paths never add a
+Workflow and roster-file presence plus exact `squad` label signals are read
+during paginated affiliation discovery. Repositories without those direct
+signals use cached repository-scoped prefix discovery: Squad-prefixed label
+definitions are paged, then exact-label open existence is checked with
+`per_page=1` until a match is found. The probe accounts for the REST core budget,
+keeps prior positive signals when a refresh is inconclusive, and is followed by
+the repository-scoped structured-artifact fallback. These paths never add a
 repository outside the affiliated set and deduplicate identities
-case-insensitively.
+case-insensitively. Roster-file content loading is a separate refresh concern.
 
 The repository used to open the canvas is refreshed every 10 seconds. Other
 repositories with active work refresh every minute, and inactive repositories
 refresh every ten minutes. Repository discovery runs every fifteen minutes.
 Actions are queried for the current repository and repositories already known
-to have active work. A low GraphQL rate-limit budget pauses background refresh
-until reset while preserving current-repository refresh and cached state.
+to have active work. A low GraphQL or REST core rate-limit budget pauses
+background refresh until the limiting budgets reset while preserving
+current-repository refresh and cached state.
 
 Users may include or exclude discovered repositories locally. Aggregation does
 not weaken GitHub permissions: only repositories readable through the active

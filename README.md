@@ -76,17 +76,21 @@ Squadcaster discovers repositories through the authenticated user's owner,
 collaborator, and organization-member affiliations. A repository is included
 when it has a Squad workflow, roster, open `squad`/`squad:*` issue or pull
 request, or searchable structured Squad artifact. Prefix-label and artifact
-fallbacks are scoped to each affiliated repository; open labels are fully
-paginated rather than discovered through a capped global search. Squadcaster
-reads up to 1,000 issues and pull requests per included repository; Actions runs
-are refreshed for the current repository and repositories with active work.
+fallbacks are scoped to each affiliated repository. Prefix discovery caches its
+last conclusive result, pages label definitions, and checks exact open-label
+existence with a one-item request while respecting the REST core budget; it does
+not use a capped global search or treat a failed probe as a negative result.
+Squadcaster reads up to 1,000 issues and pull requests per included repository;
+Actions runs are refreshed for the current repository and repositories with
+active work.
 
 Independent GitHub sources are fetched separately, so a permissions or
 rate-limit failure in one source does not discard data from the others. Failed
 sources retain their last-known evidence while successful sources continue to
 update, and the canvas labels the combined result as partial or stale.
-When the GraphQL rate-limit budget is low, background refresh pauses until reset
-while the current repository continues refreshing.
+When either the GraphQL or REST core rate-limit budget is low, background
+refresh pauses until the limiting budgets reset while the current repository
+continues refreshing.
 
 See [the operations architecture](docs/operations-architecture.md) for the
 normalized model, correlation rules, adapter boundary, and CAO findings.
