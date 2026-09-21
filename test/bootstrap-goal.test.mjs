@@ -238,9 +238,43 @@ test("preserves duplicate exact Cast candidates as ordinary pull request correla
     );
 });
 
+test("removes the canonical Cast pull request from every correlated goal", () => {
+    const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
+        artifactComment("research"),
+    ]);
+    const generated = goalIssue(21, "Generated work", ["squad"]);
+    const cast = castPullRequest({
+        body: "Closes #6\nCloses #21",
+    });
+    const snapshot = snapshotWithBootstrap({
+        issues: [root, generated],
+        pullRequests: [cast],
+        bootstrap: completeBootstrap({
+            pullRequests: [cast],
+        }),
+    });
+
+    for (const goal of snapshot.goals) {
+        assert.deepEqual(goal.pullRequests, []);
+        assert.deepEqual(goal.workItems, []);
+        assert.equal(
+            goal.evidence.filter((item) => item.kind === "pull-request").length,
+            0,
+        );
+    }
+    assert.equal(
+        snapshot.goals.find((goal) => goal.issue.number === 21).phase,
+        "queued",
+    );
+});
+
 test("keeps unsupported and malformed artifacts visible without advancing journey or lifecycle", () => {
     const root = goalIssue(6, "[Research Proposals] Agent-discovered repo opportunities", [], [
         artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("scope-accepted", {
+            originIssue: "6",
+            createdAt: "2026-09-21T10:30:00Z",
+        }),
         artifactComment("triage", {
             schemaVersion: "2",
             createdAt: "2026-09-21T11:00:00Z",
@@ -263,6 +297,10 @@ test("keeps unsupported and malformed artifacts visible without advancing journe
 
     assert.equal(goal.phase, "researching");
     assert.equal(goal.bootstrap.journeyPhase, "research");
+    assert.equal(
+        goal.artifacts.find((item) => item.kind === "scope-accepted").validation,
+        "malformed",
+    );
     assert.equal(goal.artifacts.find((item) => item.kind === "triage").validation, "unsupported");
     assert.equal(goal.artifacts.find((item) => item.kind === "unknown").validation, "malformed");
     assert.ok(goal.evidence.some((item) =>
@@ -440,6 +478,55 @@ test("links generated implementation goals only from validated activation bindin
     assert.ok(invalid.evidence.some((item) =>
         item.kind === "bootstrap-diagnostic" &&
         item.code === "unvalidated-generated-goal"));
+
+    const collidingBindings = [
+        bindings[0],
+        {
+            ...bindings[0],
+            task: "2",
+            issue: "#22",
+            epic: "2.1",
+        },
+    ];
+    const collidingRoot = goalIssue(6, root.title, [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("activated", {
+            bindings: collidingBindings,
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const collision = snapshotWithBootstrap({
+        issues: [
+            collidingRoot,
+            epic,
+            taskIssue,
+            goalIssue(22, "Implement another feature", ["squad", "squad:dev"]),
+        ],
+        bootstrap: snapshot.bootstrap,
+    }).goals.find((goal) => goal.issue.number === 6);
+    assert.deepEqual(collision.bootstrap.generatedGoals, []);
+    assert.ok(collision.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "conflicting-generated-goal"));
+
+    const roleCollisionRoot = goalIssue(6, root.title, [], [
+        artifactComment("research", { createdAt: "2026-09-21T10:15:00Z" }),
+        artifactComment("activated", {
+            bindings: [{
+                ...bindings[0],
+                issue: "#20",
+            }],
+            createdAt: "2026-09-21T11:00:00Z",
+        }),
+    ]);
+    const roleCollision = snapshotWithBootstrap({
+        issues: [roleCollisionRoot, epic],
+        bootstrap: snapshot.bootstrap,
+    }).goals.find((goal) => goal.issue.number === 6);
+    assert.deepEqual(roleCollision.bootstrap.generatedGoals, []);
+    assert.ok(roleCollision.evidence.some((item) =>
+        item.kind === "bootstrap-diagnostic" &&
+        item.code === "conflicting-generated-goal"));
 });
 
 test("does not attach ambiguous, malformed, or unknown bootstrap state to a guessed goal", () => {

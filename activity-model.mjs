@@ -286,11 +286,13 @@ function parseArtifacts(comments, issueNumber) {
             const schemaVersion = typeof value.schema_version === "string"
                 ? text(value.schema_version, 20)
                 : "unknown";
-            const originIssue = Number(value.origin_issue);
+            const originIssue = Number.isInteger(value.origin_issue)
+                ? value.origin_issue
+                : null;
             let validation = "supported";
             let validationReason = "";
             if (typeof value.schema_version !== "string" ||
-                !Number.isInteger(originIssue) ||
+                originIssue === null ||
                 originIssue < 1 ||
                 !Array.isArray(value.phases)) {
                 validation = "malformed";
@@ -317,7 +319,7 @@ function parseArtifacts(comments, issueNumber) {
             artifacts.push({
                 kind,
                 schemaVersion,
-                originIssue: Number.isInteger(originIssue) ? originIssue : null,
+                originIssue,
                 phases: Array.isArray(value.phases) ? value.phases.slice(0, 100) : [],
                 createdAt: timestamp(comment?.createdAt || comment?.created_at),
                 url: text(comment?.url || comment?.html_url, 500),
@@ -715,8 +717,17 @@ function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
         return { valid: false, goals: [], reason: artifact?.validationReason || "invalid-activation-artifact" };
     }
     const seenTasks = new Set();
+    const issueAssignments = new Map();
     const epics = new Map();
     const generated = new Map();
+    const assignIssue = (issueNumber, role, identity) => {
+        const existing = issueAssignments.get(issueNumber);
+        if (!existing) {
+            issueAssignments.set(issueNumber, { role, identity });
+            return true;
+        }
+        return existing.role === role && existing.identity === identity;
+    };
     for (const binding of artifact.bindings) {
         if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
             return { valid: false, goals: [], reason: "invalid-activation-binding" };
@@ -742,6 +753,10 @@ function validateGeneratedGoals(artifact, rootGoal, goalsByNumber) {
             !uniqueEpicAgents.includes(agent) ||
             seenTasks.has(issueNumber)) {
             return { valid: false, goals: [], reason: "invalid-activation-binding" };
+        }
+        if (!assignIssue(issueNumber, "task", task) ||
+            !assignIssue(epicIssueNumber, "epic", epic)) {
+            return { valid: false, goals: [], reason: "conflicting-generated-goal" };
         }
         const taskGoal = goalsByNumber.get(issueNumber);
         const epicGoal = goalsByNumber.get(epicIssueNumber);
@@ -940,35 +955,65 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         Number.isInteger(researchIssueNumber)
         ? goalsByNumber.get(researchIssueNumber)
         : null;
-    if (rootGoal) {
-        const canonicalCastPullRequest = bootstrap.castPullRequest;
-        const defaultBranch = text(
-            snapshot.repository?.defaultBranchRef?.name || snapshot.repository?.defaultBranch,
-            240,
-        );
-        const suppressCanonicalCast = canonicalCastPullRequest &&
-            !["ambiguous", "malformed"].includes(bootstrap.status) &&
-            canonicalCastPullRequest.branch === BOOTSTRAP_IDENTIFIERS.castBranch &&
-            canonicalCastPullRequest.title === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
-            canonicalCastPullRequest.baseBranch === defaultBranch;
-        if (suppressCanonicalCast) {
-            const matchesCanonicalCast = (pullRequest) =>
-                (
-                    canonicalCastPullRequest.number &&
-                    pullRequest.number === canonicalCastPullRequest.number
-                ) ||
-                (
-                    canonicalCastPullRequest.url &&
-                    pullRequest.url === canonicalCastPullRequest.url
-                );
-            rootGoal.pullRequests = rootGoal.pullRequests.filter((pullRequest) =>
+    const canonicalCastPullRequest = bootstrap.castPullRequest;
+    const defaultBranch = text(
+        snapshot.repository?.defaultBranchRef?.name || snapshot.repository?.defaultBranch,
+        240,
+    );
+    const suppressCanonicalCast = canonicalCastPullRequest &&
+        !["ambiguous", "malformed"].includes(bootstrap.status) &&
+        canonicalCastPullRequest.branch === BOOTSTRAP_IDENTIFIERS.castBranch &&
+        canonicalCastPullRequest.title === BOOTSTRAP_IDENTIFIERS.castPullRequestTitle &&
+        canonicalCastPullRequest.baseBranch === defaultBranch;
+    if (suppressCanonicalCast) {
+        const matchesCanonicalCast = (pullRequest) =>
+            (
+                canonicalCastPullRequest.number &&
+                pullRequest.number === canonicalCastPullRequest.number
+            ) ||
+            (
+                canonicalCastPullRequest.url &&
+                pullRequest.url === canonicalCastPullRequest.url
+            );
+        for (const goal of goals) {
+            const remainingPullRequests = goal.pullRequests.filter((pullRequest) =>
                 !matchesCanonicalCast(pullRequest));
-            rootGoal.workItems = rootGoal.workItems.filter((workItem) =>
+            if (remainingPullRequests.length === goal.pullRequests.length) continue;
+            goal.pullRequests = remainingPullRequests;
+            goal.workItems = goal.workItems.filter((workItem) =>
                 !matchesCanonicalCast(workItem.pullRequest));
-            rootGoal.evidence = rootGoal.evidence.filter((item) =>
+            goal.evidence = goal.evidence.filter((item) =>
                 item.kind !== "pull-request" ||
                 item.url !== canonicalCastPullRequest.url);
+            goal.phaseWithoutBlockers = phaseFor({
+                issue: goal.issue,
+                artifacts: goal.artifacts,
+                pullRequests: goal.pullRequests,
+                workflowRuns: goal.workflowRuns,
+                blockers: [],
+                ignoreBlockers: true,
+            });
+            goal.phase = phaseFor({
+                issue: goal.issue,
+                artifacts: goal.artifacts,
+                pullRequests: goal.pullRequests,
+                workflowRuns: goal.workflowRuns,
+                blockers: goal.blockers,
+            });
+            goal.nextAction = nextActionFor(
+                goal.phase,
+                goal.pullRequests,
+                goal.workflowRuns,
+                goal.artifacts,
+            );
+            goal.updatedAt = latestTimestamp([
+                goal.issue.updatedAt,
+                ...goal.pullRequests.map((pullRequest) => pullRequest.updatedAt),
+                ...goal.workflowRuns.map((run) => run.updatedAt),
+            ]);
         }
+    }
+    if (rootGoal) {
         const artifactKey = (artifact) => [
             artifact.kind,
             artifact.schemaVersion,
