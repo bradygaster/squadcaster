@@ -263,6 +263,41 @@ function rosterError(snapshot, roster) {
     return snapshot;
 }
 
+export async function discoverCurrentRepositoryActivity({
+    runJson,
+    cwd,
+    registry,
+    currentRepository,
+    members = [],
+    previous = null,
+}) {
+    const normalized = normalizeRegistry(registry);
+    let resolvedRepository = String(currentRepository || "");
+    let resolvedPrevious = previous;
+    if (!resolvedRepository) {
+        const identity = await runJson(
+            ["repo", "view", "--json", "name,nameWithOwner,url,defaultBranchRef"],
+            cwd,
+        );
+        resolvedRepository = identity?.nameWithOwner || "";
+        resolvedPrevious = normalized.snapshots[resolvedRepository.toLowerCase()] || previous;
+    }
+
+    const currentKey = resolvedRepository.toLowerCase();
+    const registered = normalized.repositories.find(
+        (repository) => repository.nameWithOwner.toLowerCase() === currentKey,
+    );
+    if (registered?.included === false) {
+        return { snapshot: resolvedPrevious, refreshed: false };
+    }
+
+    const adapter = new GitHubSquadActivityAdapter({ runJson, cwd });
+    return {
+        snapshot: await adapter.discover({ members, previous: resolvedPrevious }),
+        refreshed: true,
+    };
+}
+
 export class GitHubGlobalActivity {
     constructor({ runJson, cwd, registry = {} }) {
         this.runJson = runJson;
@@ -472,13 +507,17 @@ export class GitHubGlobalActivity {
     async refresh({
         currentRepository,
         currentSnapshot = null,
+        currentSnapshotRefreshed = true,
         currentMembers = [],
         currentSquadDetected = false,
         forceDiscovery = false,
         forceAll = false,
     }) {
-        await this.discoverRepositories({ force: forceDiscovery });
         const currentKey = String(currentRepository || "").toLowerCase();
+        const previousCurrent = this.registry.repositories.find(
+            (repository) => repository.nameWithOwner.toLowerCase() === currentKey,
+        );
+        await this.discoverRepositories({ force: forceDiscovery });
         if (currentSnapshot?.repository?.nameWithOwner) {
             this.registry.snapshots[currentKey] = currentSnapshot;
             let current = this.registry.repositories.find(
@@ -489,10 +528,13 @@ export class GitHubGlobalActivity {
                     ...currentSnapshot.repository,
                     nameWithOwner: currentRepository,
                     squadSource: {},
-                });
+                    squadTeam: previousCurrent?.squadTeamOid
+                        ? { oid: previousCurrent.squadTeamOid }
+                        : null,
+                }, previousCurrent);
                 this.registry.repositories.unshift(current);
             }
-            if (current) {
+            if (current && currentSnapshotRefreshed) {
                 current.lastAttemptedRefresh = currentSnapshot.fetchedAt;
                 if (isCompleteActivitySnapshot(currentSnapshot)) {
                     current.lastSuccessfulRefresh = currentSnapshot.fetchedAt;
