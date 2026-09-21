@@ -1167,8 +1167,20 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
         const activationArtifacts = rootGoal.artifacts.filter((artifact) =>
             artifact.advancing !== false &&
             ACTIVATION_ARTIFACT_KINDS.has(artifact.kind));
-        const activationArtifact = activationArtifacts.at(-1);
-        let generated = { valid: false, goals: [], reason: "" };
+        const latestActivationCreatedAt = activationArtifacts.at(-1)?.createdAt || "";
+        const latestActivationArtifacts = activationArtifacts.filter((artifact) =>
+            (artifact.createdAt || "") === latestActivationCreatedAt);
+        const activationArtifact = latestActivationArtifacts.length === 1
+            ? latestActivationArtifacts[0]
+            : null;
+        const activationDiagnosticArtifact = latestActivationArtifacts.at(-1);
+        let generated = {
+            valid: false,
+            goals: [],
+            reason: latestActivationArtifacts.length > 1
+                ? "ambiguous-latest-activation"
+                : "",
+        };
         if (activationArtifact) {
             generated = validateGeneratedGoals(
                 activationArtifact,
@@ -1190,12 +1202,12 @@ export function integrateAutomaticBootstrapSnapshot(snapshot) {
                     confidence: "observed",
                 });
             }
-        } else if (activationArtifact && generated.reason) {
+        } else if (activationDiagnosticArtifact && generated.reason) {
             extraEvidence.push({
                 kind: "bootstrap-diagnostic",
                 title: "Activation metadata could not be validated; generated goals were not linked.",
-                url: activationArtifact.url || rootGoal.issue.url,
-                timestamp: activationArtifact.createdAt,
+                url: activationDiagnosticArtifact.url || rootGoal.issue.url,
+                timestamp: activationDiagnosticArtifact.createdAt,
                 confidence: "derived",
                 code: generated.reason,
                 source: "artifacts",
