@@ -86,7 +86,10 @@ function normalizeGoal(goal) {
 }
 
 export function normalizeActivity(value) {
-    const contract = normalizeActivityContract(value);
+    const contract = normalizeActivityContract(value) ||
+        (isRecord(value) && value.schemaVersion === 3 && value.fetchedAt === null
+            ? { ...value, dayBoundary: null }
+            : null);
     if (!contract) return emptyActivity();
     return {
         ...contract,
