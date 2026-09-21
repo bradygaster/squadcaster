@@ -129,8 +129,11 @@ Closing references, closing keywords, and the explicit Squad implementation
 marker are observed correlations. A branch-only pull-request correlation is
 inferred, even though the pull request itself is observed. If both are present,
 the observed correlation takes precedence. Implementation session provenance
-remains unknown until Squad publishes and validates a versioned producer
-payload; the consumer gate is defined in
+comes only from the validated Squad v1 post-create PR comment contract. The
+independently cached source retrieves complete paginated conversation comments
+for bounded correlated pull requests and validates exact repository, PR/head,
+goal, replacement, dispatcher, and worker-run references. Missing evidence
+remains unknown; invalid evidence fails closed without a legacy fallback. See
 [`session-provenance-consumer-contract.md`](session-provenance-consumer-contract.md).
 
 The canonical Cast pull request and exact default-branch `Squad Bootstrap` runs
@@ -290,4 +293,5 @@ the authoritative state model, evidence mapping, and renderer decision.
 - Unvalidated stable agent identity fields are discarded from persisted
   activity rather than restored or inferred.
 - Candidate implementation-session provenance fields are discarded from
-  persisted activity until the producer contract is validated.
+  persisted activity unless they occur in the validated normalized
+  `implementationProvenance` path.

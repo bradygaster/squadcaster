@@ -1,4 +1,10 @@
-import { normalizeActivityContract } from "./activity-model.mjs";
+import {
+    implementationProvenanceForGoal,
+    normalizeActivityContract,
+} from "./activity-model.mjs";
+import {
+    validateNormalizedImplementationProvenanceRecord,
+} from "./implementation-provenance.mjs";
 
 export function emptyActivity() {
     const fetchedAt = null;
@@ -59,17 +65,224 @@ function isUnvalidatedProvenanceField(key) {
     return normalized === "agentidentity" || normalized.includes("session");
 }
 
-function withoutUnvalidatedProvenance(value) {
-    if (Array.isArray(value)) return value.map(withoutUnvalidatedProvenance);
+function allowedImplementationProvenancePath(path) {
+    const normalized = path.map((part) => typeof part === "number" ? "*" : part).join(".");
+    return normalized === "goals.*.implementationProvenance" ||
+        normalized === "goals.*.pullRequests.*.implementationProvenance" ||
+        normalized === "sourceState.implementationProvenance";
+}
+
+function withoutUnvalidatedProvenance(value, path = []) {
+    if (Array.isArray(value)) {
+        return value.map((item, index) =>
+            withoutUnvalidatedProvenance(item, [...path, index]));
+    }
     if (!isRecord(value)) return value;
     return Object.fromEntries(
         Object.entries(value)
-            .filter(([key]) => !isUnvalidatedProvenanceField(key))
+            .filter(([key]) =>
+                !isUnvalidatedProvenanceField(key) ||
+                allowedImplementationProvenancePath([...path, key]))
             .map(([key, nestedValue]) => [
                 key,
-                withoutUnvalidatedProvenance(nestedValue),
+                allowedImplementationProvenancePath([...path, key])
+                    ? nestedValue
+                    : withoutUnvalidatedProvenance(nestedValue, [...path, key]),
             ]),
     );
+}
+
+function stringValue(value, maxLength = 500) {
+    return typeof value === "string" && value.length <= maxLength ? value : "";
+}
+
+function positiveIntegerValue(value) {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function normalizeProvenanceRecord(value) {
+    if (!isRecord(value) ||
+        value.schemaVersion !== 1 ||
+        value.producer !== "squad") {
+        return null;
+    }
+    const implementationSessionId = stringValue(value.implementationSessionId, 200);
+    const repository = stringValue(value.repository, 300);
+    const originIssue = positiveIntegerValue(value.originIssue);
+    const sessionOrigin = isRecord(value.sessionOrigin) ? value.sessionOrigin : {};
+    const workflowRun = isRecord(value.workflowRun) ? value.workflowRun : {};
+    const pullRequest = isRecord(value.pullRequest) ? value.pullRequest : {};
+    if (!/^squad-implementation-session\/v1\/[1-9][0-9]*\/[1-9][0-9]*$/
+        .test(implementationSessionId) ||
+        !repository ||
+        !originIssue ||
+        !positiveIntegerValue(sessionOrigin.runId) ||
+        !positiveIntegerValue(sessionOrigin.runAttempt) ||
+        !positiveIntegerValue(workflowRun.runId) ||
+        !positiveIntegerValue(workflowRun.runAttempt) ||
+        !positiveIntegerValue(pullRequest.number)) {
+        return null;
+    }
+    const goals = recordArray(value.goals).map((goal) => ({
+        repository: stringValue(goal.repository, 300),
+        issue: positiveIntegerValue(goal.issue),
+        relationship: ["closes", "relates"].includes(goal.relationship)
+            ? goal.relationship
+            : "",
+    }));
+    const replaces = recordArray(value.replaces).map((replacement) => ({
+        repository: stringValue(replacement.repository, 300),
+        number: positiveIntegerValue(replacement.number),
+    }));
+    if (goals.some((goal) => !goal.repository || !goal.issue || !goal.relationship) ||
+        replaces.some((replacement) => !replacement.repository || !replacement.number)) {
+        return null;
+    }
+    const normalized = {
+        schemaVersion: 1,
+        producer: "squad",
+        repository,
+        originIssue,
+        implementationSessionId,
+        sessionOrigin: {
+            repository: stringValue(sessionOrigin.repository, 300),
+            workflow: stringValue(sessionOrigin.workflow, 300),
+            runId: positiveIntegerValue(sessionOrigin.runId),
+            runAttempt: positiveIntegerValue(sessionOrigin.runAttempt),
+        },
+        workflowRun: {
+            repository: stringValue(workflowRun.repository, 300),
+            workflow: stringValue(workflowRun.workflow, 300),
+            runId: positiveIntegerValue(workflowRun.runId),
+            runAttempt: positiveIntegerValue(workflowRun.runAttempt),
+            event: ["workflow_dispatch", "pull_request"].includes(workflowRun.event)
+                ? workflowRun.event
+                : "",
+        },
+        pullRequest: {
+            repository: stringValue(pullRequest.repository, 300),
+            number: positiveIntegerValue(pullRequest.number),
+            headRef: stringValue(pullRequest.headRef, 300),
+        },
+        goals,
+        replaces,
+    };
+    return validateNormalizedImplementationProvenanceRecord(normalized).length === 0
+        ? normalized
+        : null;
+}
+
+function normalizeProvenanceSource(value) {
+    if (!isRecord(value)) return undefined;
+    const status = ["fresh", "stale", "unavailable"].includes(value.status)
+        ? value.status
+        : "unavailable";
+    const entries = recordArray(value.data).map((entry) => {
+        const entryStatus = ["valid", "missing", "invalid"].includes(entry.status)
+            ? entry.status
+            : "invalid";
+        const record = entryStatus === "valid"
+            ? normalizeProvenanceRecord(entry.record)
+            : null;
+        const pullRequestNumber = positiveIntegerValue(entry.pullRequestNumber);
+        const keyMatches = !record ||
+            pullRequestNumber === record.pullRequest.number;
+        return {
+            pullRequestNumber,
+            revision: stringValue(entry.revision, 100),
+            fetchedAt: typeof entry.fetchedAt === "string" ? entry.fetchedAt : null,
+            status: record && keyMatches
+                ? "valid"
+                : entryStatus === "valid"
+                    ? "invalid"
+                    : entryStatus,
+            error: stringValue(entry.error, 800) ||
+                (record && !keyMatches ? "persisted-pull-request-mismatch" : ""),
+            record: record && keyMatches ? record : null,
+        };
+    }).filter((entry) => entry.pullRequestNumber);
+    const counts = new Map();
+    for (const entry of entries) {
+        counts.set(
+            entry.pullRequestNumber,
+            (counts.get(entry.pullRequestNumber) || 0) + 1,
+        );
+    }
+    return {
+        revision: Number(value.revision) === 1 ? 1 : 1,
+        data: entries
+            .filter((entry, index) =>
+                entries.findIndex((candidate) =>
+                    candidate.pullRequestNumber === entry.pullRequestNumber) === index)
+            .map((entry) => counts.get(entry.pullRequestNumber) === 1
+                ? entry
+                : {
+                    pullRequestNumber: entry.pullRequestNumber,
+                    revision: entry.revision,
+                    fetchedAt: entry.fetchedAt,
+                    status: "invalid",
+                    error: "duplicate-persisted-pull-request",
+                    record: null,
+                }),
+        fetchedAt: typeof value.fetchedAt === "string" ? value.fetchedAt : null,
+        status,
+        error: stringValue(value.error, 800),
+    };
+}
+
+function normalizeGoalProvenance(value) {
+    if (!isRecord(value)) {
+        return {
+            revision: 1,
+            status: "unavailable",
+            sourceStatus: "unavailable",
+            fetchedAt: null,
+            error: "",
+            sessions: [],
+        };
+    }
+    const sessions = recordArray(value.sessions).map((session) => {
+        const records = recordArray(session.pullRequests).map((pullRequest, index) => ({
+            schemaVersion: 1,
+            producer: session.producer,
+            repository: session.origin?.repository,
+            originIssue: session.origin?.issue,
+            implementationSessionId: session.implementationSessionId,
+            sessionOrigin: session.dispatcher,
+            workflowRun: session.workflowRuns?.[index] || session.workflowRuns?.[0],
+            pullRequest,
+            goals: session.goals,
+            replaces: session.replaces,
+        }));
+        const valid = records.map(normalizeProvenanceRecord).filter(Boolean);
+        if (valid.length === 0) return null;
+        const first = valid[0];
+        return {
+            producer: first.producer,
+            implementationSessionId: first.implementationSessionId,
+            origin: {
+                repository: first.repository,
+                issue: first.originIssue,
+            },
+            dispatcher: first.sessionOrigin,
+            pullRequests: valid.map((record) => record.pullRequest),
+            workflowRuns: valid.map((record) => record.workflowRun),
+            goals: first.goals,
+            replaces: first.replaces,
+        };
+    }).filter(Boolean);
+    return {
+        revision: 1,
+        status: ["valid", "missing", "invalid", "stale", "unavailable"].includes(value.status)
+            ? value.status
+            : "unavailable",
+        sourceStatus: ["fresh", "stale", "unavailable"].includes(value.sourceStatus)
+            ? value.sourceStatus
+            : "unavailable",
+        fetchedAt: typeof value.fetchedAt === "string" ? value.fetchedAt : null,
+        error: stringValue(value.error, 800),
+        sessions,
+    };
 }
 
 function safeUnknownHandoff(reason) {
@@ -267,6 +480,7 @@ function normalizeGoal(goal) {
         evidence: recordArray(goal.evidence),
         pullRequests: recordArray(goal.pullRequests),
         workflowRuns: recordArray(goal.workflowRuns),
+        implementationProvenance: normalizeGoalProvenance(null),
         lifecycleHistory: isRecord(goal.lifecycleHistory)
             ? {
                 incompleteBeforeFirstObservation: true,
@@ -457,7 +671,7 @@ export function normalizeActivity(value) {
         rawGoals.map(normalizeGoal),
         rawGoals,
     );
-    return {
+    const normalized = {
         ...contract,
         schemaVersion: 3,
         dayBoundary: contract.dayBoundary,
@@ -471,12 +685,59 @@ export function normalizeActivity(value) {
         bootstraps: recordArray(contract.bootstraps),
         errors: recordArray(contract.errors),
     };
+    if (isRecord(contract.sourceState)) {
+        normalized.sourceState = {
+            ...contract.sourceState,
+            ...(contract.sourceState.implementationProvenance
+                ? {
+                    implementationProvenance: normalizeProvenanceSource(
+                        contract.sourceState.implementationProvenance,
+                    ),
+                }
+                : {}),
+        };
+    }
+    const provenanceSource = normalized.sourceState?.implementationProvenance;
+    for (const goal of normalized.goals) {
+        goal.pullRequests = goal.pullRequests.map((pullRequest) => ({
+            ...pullRequest,
+            ...(provenanceSource
+                ? {
+                    implementationProvenance: {
+                        revision: 1,
+                        status: provenanceSource.data.find((entry) =>
+                            entry.pullRequestNumber === Number(pullRequest.number))?.status ||
+                            (provenanceSource.status === "fresh"
+                                ? "missing"
+                                : provenanceSource.status),
+                        sourceStatus: provenanceSource.status,
+                        fetchedAt: provenanceSource.fetchedAt,
+                        error: provenanceSource.data.find((entry) =>
+                            entry.pullRequestNumber === Number(pullRequest.number))?.error ||
+                            provenanceSource.error,
+                        record: provenanceSource.data.find((entry) =>
+                            entry.pullRequestNumber === Number(pullRequest.number))?.record || null,
+                    },
+                }
+                : {}),
+        }));
+        const goalKey = String(goal.id || "").toLowerCase();
+        goal.implementationProvenance = provenanceSource
+            ? implementationProvenanceForGoal({
+                goalKey,
+                relatedPullRequests: goal.pullRequests,
+                entries: provenanceSource.data,
+                source: provenanceSource,
+            })
+            : normalizeGoalProvenance(null);
+    }
+    return normalized;
 }
 
 export function normalizePersistedState(value) {
     const source = isRecord(value) ? value : {};
     return {
-        version: 4,
+        version: 5,
         activity: normalizeActivity(withoutUnvalidatedProvenance(source.activity)),
     };
 }

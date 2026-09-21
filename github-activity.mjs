@@ -7,6 +7,10 @@ import {
     classifyAutomaticBootstrap,
     selectAutomaticBootstrapCandidates,
 } from "./bootstrap-classifier.mjs";
+import {
+    discoverImplementationProvenance,
+    selectImplementationProvenancePullRequests,
+} from "./implementation-provenance.mjs";
 
 const SOURCES = [
     {
@@ -884,6 +888,28 @@ export class GitHubSquadActivityAdapter {
             errors: repositoryErrors,
             fetchedAt: attemptedAt,
         });
+        const provenancePullRequests = selectImplementationProvenancePullRequests(
+            sourceState.pullRequests.data,
+        );
+        sourceState.implementationProvenance = await discoverImplementationProvenance({
+            runJson: this.runJson,
+            cwd: this.cwd,
+            repository: repository?.nameWithOwner || this.repository,
+            pullRequests: provenancePullRequests,
+            allPullRequests: sourceState.pullRequests.data,
+            issues: sourceState.issues.data,
+            workflowRuns: sourceState.workflowRuns.data,
+            previous,
+            attemptedAt,
+            prerequisitesComplete: (
+                sourceState.issues.status === "fresh" &&
+                sourceState.issues.exhaustive &&
+                !sourceState.issues.truncated &&
+                sourceState.pullRequests.status === "fresh" &&
+                sourceState.pullRequests.exhaustive &&
+                !sourceState.pullRequests.truncated
+            ),
+        });
         const restBudget = typeof workflowJobsRestBudget === "function"
             ? await workflowJobsRestBudget()
             : workflowJobsRestBudget;
@@ -929,6 +955,15 @@ export class GitHubSquadActivityAdapter {
             .filter(Boolean),
             sourceState.workflowJobs.error
                 ? { source: "workflow jobs", message: sourceState.workflowJobs.error }
+                : null,
+            sourceState.implementationProvenance.error &&
+                !/prerequisites are incomplete or unavailable/i.test(
+                    sourceState.implementationProvenance.error,
+                )
+                ? {
+                    source: "implementation provenance",
+                    message: sourceState.implementationProvenance.error,
+                }
                 : null,
             ...bootstrapErrors,
         ].filter(Boolean);

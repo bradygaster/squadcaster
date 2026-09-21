@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check handoff-readiness.mjs && node --check handoff-probe.mjs && node --check activity-model.mjs && node --check bootstrap-classifier.mjs && node --check github-activity.mjs && node --check global-activity.mjs && node --check lifecycle-history.mjs && node --check squad-roster.mjs && node --check extension.mjs && node --check renderer.mjs",
+    "check": "node --check handoff-readiness.mjs && node --check handoff-probe.mjs && node --check implementation-provenance.mjs && node --check activity-model.mjs && node --check bootstrap-classifier.mjs && node --check github-activity.mjs && node --check global-activity.mjs && node --check lifecycle-history.mjs && node --check squad-roster.mjs && node --check extension.mjs && node --check renderer.mjs",
     "test": "node --test test/*.test.mjs",
     "test:browser": "playwright test",
     "test:all": "npm run check && npm test && npm run test:browser"
