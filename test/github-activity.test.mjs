@@ -108,6 +108,49 @@ function workflowJobsApi(args, response = workflowJobs()) {
         : bootstrapApi(args);
 }
 
+test("hydrates identity comments with immutable REST actor provenance", async () => {
+    const comment = {
+        id: "IC_node",
+        url: "https://github.com/octodemo/demo/issues/12#issuecomment-123",
+        body: "```json\n{\"binding_schema\":\"squad-work-agent-binding/v1\"}\n```",
+        createdAt: "2026-09-22T12:00:00Z",
+        author: { login: "old-squad-app[bot]" },
+        authorAssociation: "OWNER",
+    };
+    const adapter = new GitHubSquadActivityAdapter({
+        cwd: "/repo",
+        runJson: async (args) => {
+            assert.deepEqual(args, [
+                "api",
+                "repos/octodemo/demo/issues/comments/123",
+            ]);
+            return {
+                id: 123,
+                node_id: "IC_node",
+                html_url: comment.url,
+                body: comment.body,
+                created_at: "2026-09-22T12:00:00Z",
+                updated_at: "2026-09-22T12:01:00Z",
+                author_association: "NONE",
+                user: {
+                    id: 41898282,
+                    login: "renamed-squad-app[bot]",
+                    type: "Bot",
+                },
+            };
+        },
+    });
+    const [hydrated] = await adapter.hydrateIdentityCommentAuthors([
+        issue({ comments: [comment] }),
+    ], "octodemo/demo");
+    assert.deepEqual(hydrated.comments[0].author, {
+        databaseId: 41898282,
+        login: "renamed-squad-app[bot]",
+        type: "Bot",
+    });
+    assert.equal(hydrated.comments[0].authorAssociation, "NONE");
+});
+
 test("keeps the last known goals when issue discovery fails", async () => {
     const previous = buildActivitySnapshot({
         repository,

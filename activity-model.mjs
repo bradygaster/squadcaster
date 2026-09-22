@@ -4,6 +4,11 @@ import {
     reconcileHandoffDependencies,
 } from "./handoff-readiness.mjs";
 import { BOOTSTRAP_IDENTIFIERS, BOOTSTRAP_STATUSES } from "./bootstrap-classifier.mjs";
+import {
+    agentIdentitiesForGoals,
+    containsAgentIdentityEvidenceText,
+    normalizePersistedAgentIdentitySource,
+} from "./agent-identity.mjs";
 
 const ACTIVE_STATES = new Set(["queued", "researching", "implementing", "reviewing", "blocked", "failed"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure", "action_required"]);
@@ -169,6 +174,15 @@ function normalizedSourceState(value, data, fetchedAt) {
     };
 }
 
+export function bindingSourceIsComplete(sourceState) {
+    return ["issues", "issueComments"].every((name) => {
+        const state = sourceState?.[name];
+        return state?.status === "fresh" &&
+            state.exhaustive === true &&
+            state.truncated === false;
+    });
+}
+
 function sourceEvidenceState(state) {
     if (!state) return "unknown";
     if (state.status === "stale") return "stale";
@@ -264,19 +278,139 @@ function activationBindings(body) {
     }
 }
 
+function commentAuthor(comment) {
+    const databaseId = Number(
+        comment?.author?.databaseId ??
+        comment?.user?.id ??
+        comment?.authorDatabaseId,
+    );
+    const type = text(comment?.author?.type || comment?.user?.type, 40);
+    return {
+        databaseId: Number.isSafeInteger(databaseId) && databaseId > 0
+            ? databaseId
+            : null,
+        type,
+        login: text(
+            comment?.author?.login ||
+            comment?.user?.login ||
+            comment?.author,
+            160,
+        ),
+    };
+}
+
+function identityBearingJson(value) {
+    if (Array.isArray(value)) return value.some(identityBearingJson);
+    if (!value || typeof value !== "object") return false;
+    if (
+        value.binding_schema === "squad-work-agent-binding/v1" ||
+        value.registry_schema === "squad-agent-provenance/v1" ||
+        value.schema === "squad-agent-provenance/v1"
+    ) {
+        return true;
+    }
+    return Object.entries(value).some(([key, nested]) =>
+        [
+            "binding_schema",
+            "binding_version",
+            "registry_schema",
+            "registry_revision",
+            "epic_agent_ids",
+            "identity_omission_reason",
+            "epic_identity_omission_reason",
+            "trusted_comment_actor_ids",
+        ].includes(key) || identityBearingJson(nested));
+}
+
+function hasDuplicateJsonObjectKeys(source) {
+    let index = 0;
+    let duplicate = false;
+    const skipWhitespace = () => {
+        while (/\s/.test(source[index] || "")) index += 1;
+    };
+    const parseString = () => {
+        const start = index;
+        index += 1;
+        while (index < source.length) {
+            if (source[index] === "\\") {
+                index += 2;
+            } else if (source[index] === "\"") {
+                index += 1;
+                return JSON.parse(source.slice(start, index));
+            } else {
+                index += 1;
+            }
+        }
+        return "";
+    };
+    const parseValue = () => {
+        skipWhitespace();
+        if (source[index] === "{") {
+            index += 1;
+            skipWhitespace();
+            const keys = new Set();
+            while (index < source.length && source[index] !== "}") {
+                const key = parseString();
+                if (keys.has(key)) duplicate = true;
+                keys.add(key);
+                skipWhitespace();
+                index += 1;
+                parseValue();
+                skipWhitespace();
+                if (source[index] === ",") {
+                    index += 1;
+                    skipWhitespace();
+                }
+            }
+            index += 1;
+            return;
+        }
+        if (source[index] === "[") {
+            index += 1;
+            skipWhitespace();
+            while (index < source.length && source[index] !== "]") {
+                parseValue();
+                skipWhitespace();
+                if (source[index] === ",") {
+                    index += 1;
+                    skipWhitespace();
+                }
+            }
+            index += 1;
+            return;
+        }
+        if (source[index] === "\"") {
+            parseString();
+            return;
+        }
+        while (index < source.length && !/[\s,\]}]/.test(source[index])) index += 1;
+    };
+    parseValue();
+    return duplicate;
+}
+
 function parseArtifacts(comments, issueNumber) {
     const artifacts = [];
     for (const comment of Array.isArray(comments) ? comments : []) {
         const body = String(comment?.body || "");
         const activationCandidate = /Activation bindings\s*:/i.test(body);
+        const identityCandidate = containsAgentIdentityEvidenceText(body);
+        const author = commentAuthor(comment);
         const blocks = body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
         const commentArtifacts = [];
+        let identityDocumentCount = 0;
         for (const block of blocks) {
             let value;
             try {
                 value = JSON.parse(block[1]);
             } catch {
-                if (!/squad_artifact/i.test(block[1]) && !/Structured data:/i.test(body)) continue;
+                const malformedIdentity = containsAgentIdentityEvidenceText(block[1]);
+                if (!/squad_artifact/i.test(block[1]) &&
+                    !/Structured data:/i.test(body) &&
+                    !malformedIdentity) {
+                    continue;
+                }
+                if (malformedIdentity) identityDocumentCount += 1;
                 const activationKind = block[1].match(
                     /"squad_artifact"\s*:\s*"(activated|phases-activated|plan-accepted|phases-accepted)/i,
                 )?.[1]?.toLowerCase();
@@ -291,6 +425,30 @@ function parseArtifacts(comments, issueNumber) {
                     validationReason: "invalid-json",
                     bindings: null,
                     activationCandidate,
+                    identityCandidate: identityCandidate || malformedIdentity,
+                    author,
+                });
+                continue;
+            }
+            const identityBearing = identityBearingJson(value);
+            if (identityBearing) identityDocumentCount += 1;
+            if (
+                (identityBearing || (identityCandidate && value?.squad_artifact)) &&
+                hasDuplicateJsonObjectKeys(block[1])
+            ) {
+                commentArtifacts.push({
+                    kind: text(value?.squad_artifact, 80) || "unknown",
+                    schemaVersion: "unknown",
+                    originIssue: null,
+                    phases: [],
+                    createdAt: timestamp(comment?.createdAt || comment?.created_at),
+                    url: text(comment?.url || comment?.html_url, 500),
+                    validation: "malformed",
+                    validationReason: "duplicate-json-key",
+                    bindings: null,
+                    activationCandidate,
+                    identityCandidate: true,
+                    author,
                 });
                 continue;
             }
@@ -319,6 +477,13 @@ function parseArtifacts(comments, issueNumber) {
             } else if (!SUPPORTED_ARTIFACT_KINDS.has(kind)) {
                 validation = "unsupported";
                 validationReason = "unsupported-kind";
+            } else if (
+                identityCandidate &&
+                !Object.keys(value).every((key) =>
+                    ["squad_artifact", "schema_version", "origin_issue", "phases"].includes(key))
+            ) {
+                validation = "malformed";
+                validationReason = "extra-identity-envelope-field";
             }
             let bindings = null;
             if (ACTIVATION_ARTIFACT_KINDS.has(kind)) {
@@ -340,6 +505,8 @@ function parseArtifacts(comments, issueNumber) {
                 validationReason,
                 bindings,
                 activationCandidate,
+                identityCandidate,
+                author,
             });
         }
         if (
@@ -358,6 +525,27 @@ function parseArtifacts(comments, issueNumber) {
                 validationReason: "invalid-activation-envelope",
                 bindings: null,
                 activationCandidate: true,
+                identityCandidate,
+                author,
+            });
+        }
+        if (
+            identityCandidate &&
+            !commentArtifacts.some((artifact) => artifact.identityCandidate)
+        ) {
+            commentArtifacts.push({
+                kind: "unknown",
+                schemaVersion: "unknown",
+                originIssue: null,
+                phases: [],
+                createdAt: timestamp(comment?.createdAt || comment?.created_at),
+                url: text(comment?.url || comment?.html_url, 500),
+                validation: "malformed",
+                validationReason: "invalid-identity-envelope",
+                bindings: null,
+                activationCandidate,
+                identityCandidate: true,
+                author,
             });
         }
         const activationArtifacts = commentArtifacts.filter((artifact) =>
@@ -366,6 +554,14 @@ function parseArtifacts(comments, issueNumber) {
             for (const artifact of activationArtifacts) {
                 artifact.validation = "malformed";
                 artifact.validationReason = "duplicate-activation-artifacts";
+                artifact.bindings = null;
+            }
+        }
+        if (identityDocumentCount > 1) {
+            for (const artifact of commentArtifacts.filter((candidate) =>
+                candidate.identityCandidate)) {
+                artifact.validation = "malformed";
+                artifact.validationReason = "conflicting-identity-json";
                 artifact.bindings = null;
             }
         }
@@ -1395,6 +1591,9 @@ export function buildActivitySnapshot({
             ),
             revision: Number(sourceState?.implementationProvenance?.revision) || 1,
         },
+        agentIdentity: normalizePersistedAgentIdentitySource(
+            sourceState?.agentIdentity,
+        ),
     };
     issues = normalizedSources.issues.data;
     pullRequests = normalizedSources.pullRequests.data;
@@ -1727,6 +1926,16 @@ export function buildActivitySnapshot({
         goals.push(goal);
     }
 
+    const identities = agentIdentitiesForGoals({
+        goals,
+        source: normalizedSources.agentIdentity,
+        repository: repositoryKey,
+        bindingSourceComplete: bindingSourceIsComplete(normalizedSources),
+    });
+    for (const goal of goals) {
+        goal.agentIdentity = identities.get(Number(goal.issue?.number));
+    }
+
     goals.sort((left, right) => {
         const leftActive = ACTIVE_STATES.has(left.phase) ? 1 : 0;
         const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
@@ -1746,7 +1955,10 @@ export function buildActivitySnapshot({
         .map((source) => [source, normalizedSources[source]])
         .filter(([, state]) => state.status === "stale")
         .map(([source]) => source);
-    const incompleteSources = Object.values(normalizedSources)
+    const activitySources = Object.entries(normalizedSources)
+        .filter(([name]) => name !== "agentIdentity")
+        .map(([, state]) => state);
+    const incompleteSources = activitySources
         .some((state) => [
             "partial",
             "incomplete",
@@ -1756,7 +1968,7 @@ export function buildActivitySnapshot({
         ].includes(state.status) || state.truncated || state.exhaustive === false);
     const normalizedFetchedAt = timestamp(fetchedAt) || new Date().toISOString();
     const retainedStaleFetchedAt = earliestTimestamp(
-        Object.values(normalizedSources)
+        activitySources
             .filter((state) => state.status === "stale")
             .map((state) => state.fetchedAt),
     );
@@ -1775,7 +1987,7 @@ export function buildActivitySnapshot({
         sourceState: normalizedSources,
         partial: incompleteSources ||
             normalizedErrors.length > 0 ||
-            Object.values(normalizedSources).some((state) => Boolean(state.error)),
+            activitySources.some((state) => Boolean(state.error)),
         stale: staleSources.length > 0,
         staleSources,
         errors: normalizedErrors,
@@ -1993,7 +2205,9 @@ export function isCompleteActivitySnapshot(snapshot) {
         !snapshot.partial &&
         !snapshot.stale &&
         !(snapshot.errors?.length) &&
-        !Object.values(snapshot.sourceState || {})
+        !Object.entries(snapshot.sourceState || {})
+            .filter(([name]) => name !== "agentIdentity")
+            .map(([, state]) => state)
             .some((state) => [
                 "partial",
                 "incomplete",

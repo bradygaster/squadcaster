@@ -1039,6 +1039,98 @@ test("renders authoritative implementation provenance accessibly across live rer
     await expect(drawer).toBeVisible();
 });
 
+test("renders authoritative agent identity without owner or avatar fallbacks", async ({ page }) => {
+    await page.getByText("Browse goals").click();
+    await page.locator('[data-action="expand-stage"][data-phase="reviewing"]').click();
+    await page.getByRole("button", { name: /Review keyboard drawer behavior/ }).click();
+    const drawer = page.getByRole("dialog", { name: /Review keyboard drawer behavior/ });
+    const identity = drawer.locator(
+        'section[aria-labelledby="agent-identity-title"]',
+    );
+    const resolved = fixture.state();
+    const goal = resolved.activity.goals.find(item => item.issue.number === 4);
+    goal.owner = { id: "octocat", name: "Unrelated owner", source: "assignee" };
+    goal.agentIdentity = {
+        status: "resolved",
+        record: {
+            schemaVersion: 1,
+            id: "runtime-engineer",
+            displayName: "Kepler",
+            role: "Runtime Engineer",
+            universe: "descriptive",
+            lifecycleStatus: "active",
+            avatar: {
+                kind: "repository-path",
+                path: ".squad/agents/runtime-engineer/avatar.png",
+            },
+        },
+        binding: {
+            schemaVersion: 1,
+            producer: "squad",
+            repository: "octodemo/frontend",
+            originIssue: 1,
+            artifact: "activated",
+            registryRevision: 2,
+            task: "1.1",
+            issueNumber: 4,
+            epic: "1",
+            epicIssueNumber: 3,
+            agentId: "runtime-engineer",
+            epicAgentIds: ["runtime-engineer"],
+        },
+        source: {
+            producer: "squad",
+            revision: "registry-blob-2",
+            registryRevision: 2,
+            status: "fresh",
+            lastAttemptedRefresh: "2026-09-20T18:01:00Z",
+            lastSuccessfulRefresh: "2026-09-20T18:01:00Z",
+            error: null,
+        },
+    };
+    fixture.emit(resolved);
+
+    await expect(identity.getByRole("heading", { name: "Authoritative agent identity" })).toBeVisible();
+    await expect(identity.getByRole("status")).toContainText("Kepler");
+    await expect(identity.getByRole("status")).toContainText("fresh");
+    await expect(identity.getByText("runtime-engineer", { exact: true })).toBeVisible();
+    await expect(identity.getByText("Runtime Engineer", { exact: true })).toBeVisible();
+    await expect(identity.getByText(".squad/agents/runtime-engineer/avatar.png")).toBeVisible();
+    await expect(identity.getByRole("img", { name: "Kepler avatar" })).toHaveAttribute(
+        "src",
+        /\/api\/agent-avatar\?goal=/,
+    );
+    await expect(drawer.getByText("Unrelated owner", { exact: true })).toBeVisible();
+
+    const malformed = structuredClone(resolved);
+    const malformedGoal = malformed.activity.goals.find(item => item.issue.number === 4);
+    malformedGoal.agentIdentity = {
+        status: "unknown",
+        record: null,
+        binding: null,
+        source: {
+            producer: "squad",
+            revision: "",
+            registryRevision: null,
+            status: "malformed",
+            lastAttemptedRefresh: "2026-09-20T18:02:00Z",
+            lastSuccessfulRefresh: null,
+            error: {
+                kind: "malformed",
+                message: "Work-agent bindings are malformed or partial.",
+            },
+        },
+    };
+    fixture.emit(malformed);
+
+    await expect(identity.getByRole("status")).toContainText("Unknown agent");
+    await expect(identity.getByRole("status")).toContainText("malformed");
+    await expect(identity.getByText("No name, initials, avatar, GitHub actor image, or roster fallback is synthesized.")).toBeVisible();
+    await expect(identity.getByText("Work-agent bindings are malformed or partial.")).toBeVisible();
+    await expect(identity.getByText("Kepler", { exact: true })).toHaveCount(0);
+    await expect(drawer).toBeVisible();
+});
+
 test("renders canonical bootstrap details with observed and derived semantics", async ({ page }) => {
     await page.getByText("Browse goals").click();
     const bootstrapFilter = page.getByRole("button", { name: "Automatic bootstrap" });

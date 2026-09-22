@@ -19,6 +19,7 @@ import {
     applyHandoffMechanismOverlay,
     HandoffMechanismProbe,
 } from "./handoff-probe.mjs";
+import { handleAgentAvatarRoute } from "./agent-avatar-route.mjs";
 import { utcServerDayBoundary } from "./activity-model.mjs";
 import { normalizePersistedState } from "./persisted-state.mjs";
 import { renderHtml } from "./renderer.mjs";
@@ -392,6 +393,7 @@ async function handleRequest(entry, req, res) {
         sendJson(res, 200, entry.state);
         return;
     }
+    if (await handleAgentAvatarRoute(entry, req, res, runGhJson)) return;
     if (req.method === "GET" && url.pathname === "/events") {
         res.writeHead(200, {
             "Content-Type": "text/event-stream",
@@ -464,6 +466,7 @@ async function startServer(ctx) {
         lastRemoteCheckAt: 0,
         remoteCheckPromise: null,
         forceAllRefresh: false,
+        avatarCache: new Map(),
         handoffProbe: new HandoffMechanismProbe({
             runJson: runGhJson,
             cwd: state.repoRoot,

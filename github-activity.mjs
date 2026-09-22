@@ -11,6 +11,10 @@ import {
     discoverImplementationProvenance,
     selectImplementationProvenancePullRequests,
 } from "./implementation-provenance.mjs";
+import {
+    containsAgentIdentityEvidenceText,
+    discoverAgentIdentityProvenance,
+} from "./agent-identity.mjs";
 
 const SOURCES = [
     {
@@ -126,6 +130,7 @@ function priorIssues(previous) {
                 })}\n\`\`\``,
             createdAt: artifact.createdAt,
             url: artifact.url,
+            author: artifact.author,
         }));
         if (
             !labels.some((label) => label === "squad" || label.startsWith("squad:")) &&
@@ -486,6 +491,66 @@ export class GitHubSquadActivityAdapter {
             now: this.now,
             maxDelayMs: this.maxRetryDelayMs,
         });
+    }
+
+    async hydrateIdentityCommentAuthors(issues, repositoryName) {
+        const hydrated = [];
+        for (const issue of issues) {
+            const comments = [];
+            for (const comment of Array.isArray(issue?.comments) ? issue.comments : []) {
+                if (!containsAgentIdentityEvidenceText(comment?.body)) {
+                    comments.push(comment);
+                    continue;
+                }
+                const commentId = Number(
+                    String(comment?.url || comment?.html_url || "")
+                        .match(/#issuecomment-([1-9][0-9]*)$/)?.[1],
+                );
+                if (!Number.isSafeInteger(commentId) || commentId < 1) {
+                    comments.push(comment);
+                    continue;
+                }
+                try {
+                    const response = await this.retry(() => this.runJson([
+                        "api",
+                        `repos/${repositoryName}/issues/comments/${commentId}`,
+                    ], this.cwd));
+                    const responseId = Number(response?.id);
+                    const actorId = Number(response?.user?.id);
+                    const nodeMatches = !comment?.id || response?.node_id === comment.id;
+                    const urlMatches = !comment?.url || response?.html_url === comment.url;
+                    const bodyMatches = response?.body === comment?.body;
+                    if (
+                        responseId !== commentId ||
+                        !Number.isSafeInteger(actorId) ||
+                        actorId < 1 ||
+                        !nodeMatches ||
+                        !urlMatches ||
+                        !bodyMatches
+                    ) {
+                        comments.push(comment);
+                        continue;
+                    }
+                    comments.push({
+                        ...comment,
+                        body: response.body,
+                        url: response.html_url,
+                        createdAt: response.created_at,
+                        updatedAt: response.updated_at,
+                        author: {
+                            login: String(response.user?.login || ""),
+                            databaseId: actorId,
+                            type: String(response.user?.type || ""),
+                        },
+                        authorAssociation: response.author_association,
+                    });
+                } catch {
+                    comments.push(comment);
+                }
+            }
+            hydrated.push({ ...issue, comments });
+        }
+        return hydrated;
     }
 
     async fetchBootstrapPages({ repositoryName, endpoint, pageKey = "", restBudget }) {
@@ -857,6 +922,15 @@ export class GitHubSquadActivityAdapter {
             sourceState.workflowRuns.status !== "fresh" ||
                 sourceState.workflowRuns.data.length < 1000,
         );
+        if (sourceState.issues.status === "fresh") {
+            sourceState.issues = {
+                ...sourceState.issues,
+                data: await this.hydrateIdentityCommentAuthors(
+                    sourceState.issues.data,
+                    repository?.nameWithOwner || this.repository,
+                ),
+            };
+        }
         const issueCommentsExhaustive = sourceState.issues.status !== "fresh" ||
             sourceState.issues.data.every((issue) =>
                 !Array.isArray(issue?.comments) || issue.comments.length < 100);
@@ -936,6 +1010,14 @@ export class GitHubSquadActivityAdapter {
             })
             : null;
         if (bootstrap) sourceState.bootstrap = bootstrap.sourceState;
+        sourceState.agentIdentity = await discoverAgentIdentityProvenance({
+            runJson: this.runJson,
+            cwd: this.cwd,
+            repository: repository?.nameWithOwner || this.repository,
+            previous,
+            attemptedAt,
+            requestAllowed: reserveRestRequest(restBudget),
+        });
         const bootstrapErrors = bootstrap
             ? Object.entries(bootstrap.sourceState)
                 .filter(([, state]) => state.error)

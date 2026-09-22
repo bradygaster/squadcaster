@@ -2,55 +2,165 @@
 
 ## Status
 
-This document defines Squadcaster's consumer boundary for a future
-Squad-produced identity record. It does not activate stable agent identity.
-No authoritative producer source has been validated, so the current consumer
-state is **unknown** and the activity contract must not contain or render an
-agent identity.
+Squadcaster consumes the Squad-owned `squad-agent-provenance/v1` registry at
+`.squad/casting/registry.json` and explicit
+`squad-work-agent-binding/v1` activation bindings. These two envelopes are the
+only supported stable agent identity evidence.
 
-## Current field audit
+GitHub owners, issue assignees, authors, reviewers, workflow actors, branch
+names, timestamps, avatars, roster rows, display names, and labels remain
+participation, configuration, or correlation evidence. They never create or
+resolve a stable agent identity.
 
-The current fields describe GitHub participation or repository configuration,
-not stable Squad identity:
+## Authoritative registry
 
-| Field | Current source and meaning | Identity rule |
-|---|---|---|
-| `goal.owner` | A matching `squad:<roster-id>` issue label, otherwise the first GitHub issue assignee, otherwise `Unknown` | Goal-routing label only. It is not an agent record. |
-| Issue `assignees` | GitHub issue assignment used only as the owner fallback | GitHub account participation is not Squad identity. |
-| Issue and PR `author` | Returned by the GitHub CLI query; not normalized into the activity snapshot | Authorship must not create or resolve an agent. |
-| `pullRequest.reviews[].actor` | GitHub's latest observed reviewer login/type | Review participation only. |
-| `pullRequest.reviewRequests[].actor` | GitHub's currently requested user or team | Pending review participation only. |
-| Workflow actor | Not queried or exposed by the current workflow-run source | A future GitHub workflow actor would still be an execution participant, not Squad identity. |
-| `members[]` roster entry | Repository-owned `.squad/team.md` display name, role, charter metadata, and slug derived from the display name | Configuration and goal-label matching only. A roster slug or display name is not stable identity. |
-| Repository `owner` | GitHub repository namespace used by repository filtering | Repository ownership only. |
-| Branch names and run/PR correlation | Bounded correlation conventions such as `squad/implement-{issue}-*` | Correlation evidence must never synthesize identity. |
+The registry object key is the opaque immutable agent ID. `display_name` is
+mutable presentation data and `persistent_name` is a compatibility alias that
+must equal it.
 
-Equal strings across these fields do not make them the same entity. In
-particular, a roster name matching an assignee, reviewer, author, branch
-fragment, or workflow actor remains coincidental.
+```json
+{
+  "schema": "squad-agent-provenance/v1",
+  "schema_version": 1,
+  "revision": 4,
+  "generated_at": "2026-09-21T20:00:00.000Z",
+  "trusted_comment_actor_ids": [41898282],
+  "agents": {
+    "runtime-engineer": {
+      "display_name": "Kepler",
+      "persistent_name": "Kepler",
+      "role": "Runtime Engineer",
+      "universe": "descriptive",
+      "status": "active",
+      "created_at": "2026-09-20T20:00:00.000Z",
+      "updated_at": "2026-09-21T20:00:00.000Z",
+      "avatar": {
+        "kind": "repository-path",
+        "path": ".squad/agents/runtime-engineer/avatar.png"
+      }
+    }
+  }
+}
+```
 
-## Future normalized schema
+`trusted_comment_actor_ids` is the repository-configured allowlist of immutable
+GitHub actor database IDs permitted to publish identity bindings. It may contain
+only unique positive integers. A comment is trusted only when its REST payload
+identifies the allowlisted actor as type `Bot`; login text, a `[bot]` suffix,
+`authorAssociation`, and producer fields asserted in the comment are never
+authority. An absent or empty allowlist therefore fails closed.
 
-Squadcaster may add the following shape only after the paired Squad producer
-validates and versions an authoritative source:
+Squadcaster accepts only schema version 1, a positive monotonic revision,
+canonical `YYYY-MM-DDTHH:mm:ss.sssZ` timestamps that round-trip exactly,
+canonical lowercase kebab-case IDs, unique case-folded display names, valid
+lifecycle records, and avatar paths confined to the owning
+`.squad/agents/{id}/` directory. `created_at <= updated_at <= generated_at`;
+retired records additionally require
+`created_at <= retired_at <= updated_at`, while non-retired records must omit
+`retired_at`. Unsupported roots, malformed records, duplicate identities,
+partial registries, capped responses, revision regressions, and same-revision
+content changes fail closed.
+
+Rename and recast preserve the object key and `created_at`. Retirement
+preserves a tombstone with `status: "retired"` and `retired_at`; the ID is
+never transferred to another logical agent. A retired binding remains
+historically attributable by ID, but Squadcaster does not render the former
+name or avatar as current. Every higher registry revision must retain every
+previous ID, preserve immutable `created_at` and `role`, advance
+`generated_at`, avoid regressing `updated_at`, and advance `updated_at` for any
+mutable change. Retirement must create a valid tombstone; reactivation must
+not occur. Once retired, the complete normalized tombstone is immutable,
+including names, role, universe, status, lifecycle timestamps, avatar, and
+legacy-name state. Any continuity failure rejects the complete replacement
+atomically and retains only the prior validated cache as stale.
+
+## Authoritative work binding
+
+Stable identity requires an explicit binding against a complete validated
+registry:
+
+```json
+[
+  {
+    "binding_schema": "squad-work-agent-binding/v1",
+    "binding_version": 1,
+    "producer": "squad",
+    "repository": "owner/repository",
+    "origin_issue": 45,
+    "artifact": "activated",
+    "registry_schema": "squad-agent-provenance/v1",
+    "registry_revision": 4,
+    "task": "1",
+    "issue": "#2066",
+    "epic": "1.1",
+    "epic_issue": "#2065",
+    "agent_id": "runtime-engineer",
+    "epic_agent_ids": ["runtime-engineer"]
+  }
+]
+```
+
+The complete binding array is validated atomically. Squadcaster rejects
+missing, empty, malformed, partially valid, wrong-repository, wrong-origin,
+unsupported or future-version, unknown-ID, future-revision, duplicate,
+conflicting, mixed-revision, capped, extra-field, or inconsistent evidence. It
+does not salvage valid-looking rows. Repository and agent ID strings must
+already be canonical: trimming, control-character removal, or other
+normalization never repairs producer evidence.
+
+Before parsing a binding, Squadcaster re-fetches each identity-bearing issue
+comment through GitHub's GET-only REST endpoint and preserves the immutable
+actor database ID and actor type. All identity-bearing comments must come from
+an allowlisted bot ID. Malformed JSON carrying identity schema markers,
+identity-bearing JSON without the activation envelope, duplicate identity
+documents, extra binding fields, and conflicting identity blocks emit
+malformed candidates and fail the complete identity source closed. Unrelated
+JSON without identity schema markers remains ordinary comment content.
+
+`agent_id: null` is accepted only with an explicit producer omission reason:
+`external-agent`, `non-roster`, or `legacy-plan-missing-id`. If any task in an
+epic omits an ID, every row for that epic must declare
+`epic_identity_omission_reason: "partial"` and carry the same sorted
+`epic_agent_ids` set containing every known task agent ID.
+
+## Normalized model
 
 ```js
 agentIdentity: {
   status: "resolved" | "unknown" | "deleted",
   record: null | {
     schemaVersion: 1,
-    id: string,             // Opaque, immutable, producer-scoped ID.
-    displayName: string,    // Producer-owned mutable presentation value.
+    id: string,
+    displayName: string,
+    role: string,
+    universe: string,
+    lifecycleStatus: "active" | "inactive",
     avatar: null | {
-      ref: string           // Producer-owned reference; not inferred from GitHub.
+      kind: "repository-path",
+      path: string
     }
   },
-  source: null | {
-    producer: string,       // Stable producer namespace.
-    revision: string,       // Opaque producer revision or content identity.
+  binding: null | {
+    schemaVersion: 1,
+    producer: "squad",
+    repository: string,
+    originIssue: number,
+    artifact: string,
+    registryRevision: number,
+    task: string,
+    issueNumber: number,
+    epic: string,
+    epicIssueNumber: number,
+    agentId: string | null,
+    epicAgentIds: string[]
+  },
+  source: {
+    producer: "squad",
+    revision: string,
+    registryRevision: number | null,
     status: "fresh" | "stale" | "unavailable" | "missing" |
       "malformed" | "forbidden" | "partial",
-    lastAttemptedRefresh: string,
+    lastAttemptedRefresh: string | null,
     lastSuccessfulRefresh: string | null,
     error: null | {
       kind: "fetch_failed" | "permission_denied" | "malformed" | "partial",
@@ -60,68 +170,67 @@ agentIdentity: {
 }
 ```
 
-The producer must also emit an explicit, versioned binding from the observed
-Squad work record to `id`. Squadcaster must not bind an identity by display
-name, roster slug, GitHub login, issue assignment, review participation,
-workflow actor, branch, or other correlation evidence.
-
-`producer + id` is the uniqueness key. An `id` remains stable across display
-name and avatar changes. Reusing an ID for another logical agent is invalid.
-Two records with the same key but conflicting values make the affected
-response malformed. A producer deletion must be an explicit tombstone; it
-must not be inferred from a temporary fetch failure.
+Only a non-retired `agent_id` resolved through the complete registry produces
+`status: "resolved"`. An explicit omission or absent binding is `unknown`. A
+retired registry record is `deleted`; its immutable ID remains in the binding,
+while current presentation fields are withheld.
 
 ## Source and cache semantics
 
-| Condition | Normalized status | Cache behavior |
+The registry requires one repository Contents read. Squadcaster persists only
+the validated normalized registry envelope, keyed by the returned immutable
+blob SHA. Identity refresh timestamps are independent of issues, pull
+requests, workflow runs, rosters, and implementation provenance.
+
+The persisted source envelope requires exact revision 1,
+`squadcaster-agent-identity-source/v1`, source schema version 1, and producer
+`squadcaster`. Its data envelope requires
+`squadcaster-agent-identity-cache/v1`, data schema version 1, and producer
+`squad`. Unknown/future revisions, producer or schema mismatches, extra outer
+fields, noncanonical timestamps, and contradictory status/data/error/timestamp
+combinations are discarded rather than coerced to version 1. Only internally
+consistent `fresh` or `stale` envelopes can resolve identity.
+The refresh attempt timestamp must itself be canonical. A fetched registry
+cannot claim `generated_at` later than that attempt, and persisted cache
+chronology must satisfy
+`registry.generated_at <= lastSuccessfulRefresh <= lastAttemptedRefresh`.
+These comparisons use only supplied canonical timestamps, not the consumer's
+current wall clock.
+
+Restored bindings are authoritative only when the persisted issue and issue
+comment sources are both fresh, exhaustive, and untruncated. Partial, stale,
+unavailable, unauthorized, forbidden, truncated, or non-exhaustive evidence
+keeps identity unresolved and preserves the stale diagnostic behavior.
+
+| Condition | Source status | Cache behavior |
 |---|---|---|
-| No validated producer is configured | Field absent in the current contract | Do not consult candidate fields. |
-| Successful fetch with an explicit valid binding and record | Identity `resolved`; source `fresh` | Replace the cached record atomically, and set both refresh timestamps to the attempt time. |
-| Successful fetch with no binding or no record | Identity `unknown`; source `missing` | Treat the identity as absent, clear the work item's prior record, and advance both refresh timestamps. |
-| Explicit producer tombstone | Identity `deleted`; source `fresh` | Remove the cached active record, retain the tombstone revision, and never render the old name or avatar as current. |
-| Fetch failure after a valid cached record | Identity `resolved`; source `stale` | Preserve the last valid record and successful timestamp; advance only the attempted timestamp and expose `fetch_failed`. |
-| Fetch failure without a valid cached record | Identity `unknown`; source `unavailable` | Keep `record: null`; advance only the attempted timestamp and expose `fetch_failed`. |
-| Permission denial after a valid cached record | Identity `resolved`; source `stale` | Preserve the last valid record and successful timestamp; advance only the attempted timestamp and expose `permission_denied`. |
-| Permission denial without a valid cached record | Identity `unknown`; source `forbidden` | Keep `record: null`; advance only the attempted timestamp and expose `permission_denied`. |
-| Malformed replacement after a valid cached record | Identity `resolved`; source `stale` | Reject the replacement atomically, preserve the last valid record and successful timestamp, advance only the attempted timestamp, and expose `malformed`. |
-| Malformed data without a valid cached record | Identity `unknown`; source `malformed` | Keep `record: null`; advance only the attempted timestamp and expose `malformed`. |
-| Partially valid producer response | Identity per valid binding; source `partial` | Accept independently valid records only if the producer contract permits partial responses; advance the successful timestamp only for accepted records and expose a bounded `partial` error for affected bindings. |
+| Complete valid registry | `fresh` | Atomically replace the cache and advance both timestamps. |
+| Missing registry | `missing` | Clear the prior registry and advance both timestamps. |
+| Fetch failure | `stale` with cache, otherwise `unavailable` | Preserve only the last valid registry and advance only the attempt timestamp. |
+| Permission denial | `stale` with cache, otherwise `forbidden` | Preserve only the last valid registry and advance only the attempt timestamp. |
+| Malformed, unsupported, inconsistent, or capped replacement | `stale` with cache, otherwise `malformed` | Reject atomically and advance only the attempt timestamp. |
+| Partial registry | `stale` with cache, otherwise `partial` | Reject atomically; partial records never resolve work bindings. |
 
-Identity cache freshness must be independent from issues, pull requests,
-workflow runs, and rosters. A successful refresh of those sources cannot make
-identity fresh, and an identity failure cannot make their observed fields
-stale. `lastAttemptedRefresh` records every completed attempt.
-`lastSuccessfulRefresh` records only the latest accepted authoritative record
-or authoritative missing result; errors never advance it. Error messages are
-bounded presentation-safe summaries, not raw producer payloads.
+Errors are bounded presentation-safe summaries. Raw producer payloads are not
+persisted. A successful refresh of another GitHub source cannot make identity
+fresh, and an identity failure cannot make another source stale.
 
-## Renderer behavior
+## Renderer and accessibility behavior
 
-- Until a producer is validated, render goal owners as **owners**, roster
-  entries as **roster entries**, and GitHub users or teams as participants.
-  Do not show an agent identity or avatar surface.
-- Identity `resolved` with source `fresh` may show the authoritative display
-  name and optional avatar.
-- Identity `resolved` with source `stale` or `partial` may show the cached
-  authoritative record only with a visible source-status label and error
-  affordance.
-- Identity `unknown` or `deleted`, and any source state without a valid cached
-  record, shows no synthesized name, initials, avatar, or link. If the surface
-  must be present, its value is `Unknown agent`.
-- An avatar reference is optional. Its absence does not permit a GitHub avatar
-  lookup. Any future fetch must follow the producer's permission, URL, size,
-  media-type, and cache rules.
-- Owner, reviewer, assignee, author, actor, and roster displays remain separate
-  even when their text matches an authoritative agent display name.
+- Resolved fresh identity may show the authoritative display name. A confined
+  avatar reference is fetched through Squadcaster's read-only same-origin
+  endpoint, limited to 512 KiB, and accepted only as PNG, JPEG, GIF, or WebP.
+- Resolved stale identity may show only the cached authoritative record with a
+  visible source-status label and diagnostic.
+- Unknown, deleted, malformed, partial, forbidden, unavailable, or unresolved
+  identity displays `Unknown agent` and never synthesizes a name, initials,
+  avatar, link, or GitHub fallback.
+- Owner and participant surfaces remain labeled as owner or participant even
+  when their text matches the authoritative agent display name.
+- The drawer exposes a dedicated heading and status region, immutable ID,
+  registry revision, lifecycle state, binding context, freshness, and bounded
+  diagnostics.
 
-## Activation gate
-
-Stable identity remains blocked until the Squad producer session supplies:
-
-1. a validated authoritative source and explicit work-to-agent binding;
-2. producer fixtures for rename, deletion, collision, missing, malformed,
-   partial, permission-denied, and stale cases;
-3. matching producer and Squadcaster contract tests; and
-4. a reviewed migration and cache-version plan.
-
-Only then may Squadcaster version its activity schema and add renderer work.
+Squadcaster remains read-only: it fetches and renders producer evidence but
+never edits the registry, activation artifact, issues, pull requests, labels,
+or roster.

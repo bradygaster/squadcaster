@@ -875,6 +875,33 @@ export function renderHtml() {
       color: var(--muted);
       font-size: var(--text-body-small, 12px);
     }
+    .agent-identity {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .agent-avatar {
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .agent-identity-status {
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: capitalize;
+    }
+    .agent-identity-status.stale,
+    .agent-identity-status.partial,
+    .agent-identity-status.malformed,
+    .agent-identity-status.forbidden {
+      border-color: var(--warning);
+      color: var(--warning);
+    }
     .next-step { margin: 13px 0 0; padding-top: 12px; border-top: 1px solid var(--border); }
     .next-step strong { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
     .next-step span { margin-left: 7px; color: var(--muted); }
@@ -2109,6 +2136,54 @@ export function renderHtml() {
         </section>\`;
     }
 
+    function agentIdentityHtml(goal) {
+      const identity = goal.agentIdentity || {
+        status: "unknown",
+        record: null,
+        binding: null,
+        source: { status: "unavailable", error: null },
+      };
+      const source = identity.source || { status: "unavailable", error: null };
+      const record = identity.status === "resolved" ? identity.record : null;
+      const display = record?.displayName || "Unknown agent";
+      const statusCopy = {
+        fresh: "Validated registry and explicit work binding are fresh.",
+        stale: "The last validated registry is retained, but the identity source is stale.",
+        missing: "No authoritative work-to-agent binding was observed.",
+        unavailable: "Authoritative identity evidence is unavailable.",
+        forbidden: "Repository contents permission did not allow identity validation.",
+        malformed: "Authoritative-looking identity evidence failed validation.",
+        partial: "Partial identity evidence was rejected.",
+      };
+      return \`
+        <section class="drawer-section" aria-labelledby="agent-identity-title">
+          <h3 id="agent-identity-title">Authoritative agent identity</h3>
+          <p class="help" role="status">
+            \${record?.avatar && ["fresh", "stale"].includes(source.status) ? \`<img class="agent-avatar" src="/api/agent-avatar?goal=\${encodeURIComponent(goal.id)}" alt="\${esc(record.displayName)} avatar">\` : ""}
+            <strong>\${esc(display)}</strong>
+            <span class="agent-identity-status \${esc(source.status || "unavailable")}">\${esc(source.status || "unavailable")}</span>
+            \${esc(statusCopy[source.status] || statusCopy.unavailable)}
+          </p>
+          \${record ? \`
+            <div class="drawer-facts">
+              <div class="drawer-fact"><small>Immutable ID</small><strong>\${esc(record.id)}</strong></div>
+              <div class="drawer-fact"><small>Role</small><strong>\${esc(record.role)}</strong></div>
+              <div class="drawer-fact"><small>Lifecycle</small><strong>\${esc(record.lifecycleStatus)}</strong></div>
+              <div class="drawer-fact"><small>Registry revision</small><strong>\${esc(source.registryRevision || "Unknown")}</strong></div>
+            </div>
+            \${record.avatar ? \`<p class="help">Authoritative avatar reference: <code>\${esc(record.avatar.path)}</code>. If the confined content fetch fails, no fallback is rendered.</p>\` : '<p class="help">No authoritative avatar reference is available.</p>'}
+          \` : \`
+            <p class="help">No name, initials, avatar, GitHub actor image, or roster fallback is synthesized.</p>
+          \`}
+          \${identity.status === "deleted" ? '<p class="handoff-warning">The bound immutable ID is retired. Its tombstone is preserved, but its former name and avatar are not rendered as current.</p>' : ""}
+          \${identity.binding ? \`
+            <p class="help">Binding: task \${esc(identity.binding.task)} · epic \${esc(identity.binding.epic)} · registry revision \${esc(identity.binding.registryRevision)}</p>
+          \` : ""}
+          \${source.error?.message ? \`<p class="handoff-warning">\${esc(source.error.message)}</p>\` : ""}
+          <p class="help">Owner, assignee, author, reviewer, workflow actor, branch, roster name, and timestamps remain separate participation or correlation evidence.</p>
+        </section>\`;
+    }
+
     function workflowJobItemsHtml(goal) {
       const selectedRuns = (goal.workflowRuns || [])
         .filter(run => run.jobsState?.status && run.jobsState.status !== "not_selected");
@@ -2448,6 +2523,7 @@ export function renderHtml() {
               <p style="margin-bottom:0"><a href="\${esc(goal.issue.url)}" target="_blank" rel="noreferrer">Open source issue ↗</a></p>
             </section>
             \${bootstrapDrawerHtml(goal)}
+            \${agentIdentityHtml(goal)}
             <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
             \${handoffHtml(goal)}
             \${implementationProvenanceHtml(goal)}
@@ -2473,6 +2549,7 @@ export function renderHtml() {
             </div>
             <div class="goal-meta">
               <span><strong>Owner:</strong> \${esc(goal.owner?.name || "Unknown")}</span>
+              <span class="agent-identity"><strong>Agent:</strong> \${esc(goal.agentIdentity?.status === "resolved" ? goal.agentIdentity.record?.displayName : "Unknown agent")}\${goal.agentIdentity?.source?.status && goal.agentIdentity.source.status !== "fresh" ? \` <span class="agent-identity-status \${esc(goal.agentIdentity.source.status)}">\${esc(goal.agentIdentity.source.status)}</span>\` : ""}</span>
               <span><strong>Updated:</strong> \${esc(formatTime(goal.updatedAt))}</span>
               <span><strong>PRs:</strong> \${esc(goal.pullRequests.length)}</span>
               <span><strong>Runs:</strong> \${esc(goal.workflowRuns.length)}</span>
