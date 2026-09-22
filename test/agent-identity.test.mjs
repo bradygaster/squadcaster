@@ -5,6 +5,7 @@ import {
     agentIdentitiesForGoals,
     agentIdentityPolicy,
     discoverAgentIdentityProvenance,
+    failureSource,
     normalizePersistedAgentIdentitySource,
     parseAgentProvenanceRegistry,
     parseWorkAgentBindings,
@@ -312,6 +313,97 @@ test("refreshes and persists only complete normalized registry envelopes", async
         persisted.activity.sourceState.agentIdentity.data.registry.agents[0].id,
         "runtime-engineer",
     );
+});
+
+test("constructs failed identity refreshes with monotonic chronology", () => {
+    const prior = source();
+    for (const [attemptedAt, expectedAttemptedAt] of [
+        ["2026-09-22T11:59:59.999Z", "2026-09-22T12:00:00.000Z"],
+        ["2026-09-22T12:00:00.000Z", "2026-09-22T12:00:00.000Z"],
+        ["2026-09-22T12:00:00.001Z", "2026-09-22T12:00:00.001Z"],
+    ]) {
+        const failed = failureSource(
+            prior,
+            attemptedAt,
+            "unavailable",
+            "fetch_failed",
+            "network timeout",
+        );
+        assert.equal(failed.status, "stale");
+        assert.equal(failed.data, prior.data);
+        assert.equal(failed.lastSuccessfulRefresh, prior.lastSuccessfulRefresh);
+        assert.equal(failed.lastAttemptedRefresh, expectedAttemptedAt);
+        assert.equal(normalizePersistedAgentIdentitySource(failed).status, "stale");
+    }
+    for (const attemptedAt of [
+        "2026-09-22T12:00:00Z",
+        "invalid",
+        null,
+    ]) {
+        assert.throws(
+            () => failureSource(
+                prior,
+                attemptedAt,
+                "unavailable",
+                "fetch_failed",
+                "network timeout",
+            ),
+            /attemptedAt.*canonical/i,
+        );
+    }
+});
+
+test("preserves identity cache through failed refresh build, persist, and restore", async () => {
+    for (const [attemptedAt, expectedAttemptedAt] of [
+        ["2026-09-22T11:59:59.999Z", "2026-09-22T12:00:00.000Z"],
+        ["2026-09-22T12:00:00.000Z", "2026-09-22T12:00:00.000Z"],
+        ["2026-09-22T12:00:00.001Z", "2026-09-22T12:00:00.001Z"],
+    ]) {
+        const failed = await discoverAgentIdentityProvenance({
+            runJson: async () => {
+                throw new Error("network timeout");
+            },
+            cwd: "/repo",
+            repository: "octodemo/demo",
+            previous: { sourceState: { agentIdentity: source() } },
+            attemptedAt,
+        });
+        const built = buildActivitySnapshot({
+            repository: {
+                name: "demo",
+                nameWithOwner: "octodemo/demo",
+            },
+            sourceState: { agentIdentity: failed },
+            fetchedAt: "2026-09-22T13:00:00.000Z",
+        });
+        const persisted = normalizePersistedState({ activity: built });
+        const restored = buildActivitySnapshot({
+            repository: built.repository,
+            sourceState: persisted.activity.sourceState,
+            fetchedAt: "2026-09-22T13:00:00.000Z",
+        });
+        for (const snapshot of [built, persisted.activity, restored]) {
+            const identity = snapshot.sourceState.agentIdentity;
+            assert.equal(identity.status, "stale");
+            assert.equal(identity.data.registry.revision, 2);
+            assert.equal(identity.lastSuccessfulRefresh, "2026-09-22T12:00:00.000Z");
+            assert.equal(identity.lastAttemptedRefresh, expectedAttemptedAt);
+        }
+    }
+    for (const attemptedAt of ["2026-09-22T12:00:00Z", "invalid", null]) {
+        await assert.rejects(
+            discoverAgentIdentityProvenance({
+                runJson: async () => {
+                    throw new Error("network timeout");
+                },
+                cwd: "/repo",
+                repository: "octodemo/demo",
+                previous: { sourceState: { agentIdentity: source() } },
+                attemptedAt,
+            }),
+            /attemptedAt.*canonical/i,
+        );
+    }
 });
 
 test("separates missing, forbidden, and transport failures from successful freshness", async () => {

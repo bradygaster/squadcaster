@@ -33,6 +33,18 @@ function avatarMedia(bytes) {
     return "";
 }
 
+function decodeCanonicalBase64(value) {
+    if (typeof value !== "string" ||
+        value.length === 0 ||
+        value.length % 4 !== 0 ||
+        value.length > Math.ceil((512 * 1024) / 3) * 4 ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+        return null;
+    }
+    const bytes = Buffer.from(value, "base64");
+    return bytes.toString("base64") === value ? bytes : null;
+}
+
 export async function handleAgentAvatarRoute(entry, req, res, defaultRunJson) {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (url.pathname !== "/api/agent-avatar") return false;
@@ -87,7 +99,11 @@ export async function handleAgentAvatarRoute(entry, req, res, defaultRunJson) {
         sendJson(res, 404, { error: "Authoritative avatar content is unavailable." });
         return true;
     }
-    const bytes = Buffer.from(response.content.replace(/\s/g, ""), "base64");
+    const bytes = decodeCanonicalBase64(response.content);
+    if (!bytes) {
+        sendJson(res, 415, { error: "Authoritative avatar content is unsupported." });
+        return true;
+    }
     const mediaType = avatarMedia(bytes);
     if (!mediaType || bytes.length === 0 || bytes.length > 512 * 1024) {
         sendJson(res, 415, { error: "Authoritative avatar content is unsupported." });

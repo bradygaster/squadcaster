@@ -385,14 +385,23 @@ function normalizedSource(previous) {
     return normalizePersistedAgentIdentitySource(source);
 }
 
-function failureSource(prior, attemptedAt, status, kind, message) {
+export function failureSource(prior, attemptedAt, status, kind, message) {
+    const canonicalAttemptedAt = timestamp(attemptedAt);
+    if (!canonicalAttemptedAt) {
+        throw new Error("Agent identity attemptedAt must be a canonical ISO-8601 timestamp.");
+    }
+    const lastSuccessfulRefresh = timestamp(prior.lastSuccessfulRefresh);
+    const monotonicAttemptedAt = lastSuccessfulRefresh &&
+        timestampOrder(canonicalAttemptedAt, lastSuccessfulRefresh) < 0
+        ? lastSuccessfulRefresh
+        : canonicalAttemptedAt;
     return {
         ...prior,
         revision: AGENT_IDENTITY_SOURCE_REVISION,
         schema: AGENT_IDENTITY_SOURCE_SCHEMA,
         schemaVersion: AGENT_IDENTITY_SOURCE_VERSION,
         producer: SOURCE_PRODUCER,
-        lastAttemptedRefresh: attemptedAt,
+        lastAttemptedRefresh: monotonicAttemptedAt,
         status: prior.data ? "stale" : status,
         error: { kind, message: errorMessage(message) },
     };

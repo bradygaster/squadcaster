@@ -87,6 +87,40 @@ test("serves authoritative avatar bytes through the extension HTTP route", async
     }
 });
 
+test("strictly validates canonical avatar base64 through the extension HTTP route", async () => {
+    const paddedPng = Buffer.concat([png, Buffer.from([0])]);
+    const unpadded = png.toString("base64");
+    const cases = [
+        ["invalid characters", `${unpadded.slice(0, 4)}!!!!${unpadded.slice(8)}`, 415, null],
+        ["misplaced padding", `=${unpadded.slice(1)}`, 415, null],
+        ["excess padding", `${unpadded}===`, 415, null],
+        ["truncated length", unpadded.slice(0, -1), 415, null],
+        ["whitespace", `${unpadded.slice(0, 4)}\n${unpadded.slice(4)}`, 415, null],
+        ["unpadded canonical", unpadded, 200, png],
+        ["padded canonical", paddedPng.toString("base64"), 200, paddedPng],
+    ];
+    for (const [name, contentValue, expectedStatus, expectedBytes] of cases) {
+        await withServer(resolvedGoal(), async () => ({
+            type: "file",
+            encoding: "base64",
+            content: contentValue,
+        }), async (origin) => {
+            const response = await fetch(
+                `${origin}/api/agent-avatar?goal=octodemo%2Fdemo%2312`,
+            );
+            assert.equal(response.status, expectedStatus, name);
+            if (expectedBytes) {
+                assert.equal(response.headers.get("content-type"), "image/png", name);
+                assert.deepEqual(
+                    Buffer.from(await response.arrayBuffer()),
+                    expectedBytes,
+                    name,
+                );
+            }
+        });
+    }
+});
+
 test("rejects invalid avatar requests through the extension HTTP route", async () => {
     const cases = [
         ["missing-goal", null],
