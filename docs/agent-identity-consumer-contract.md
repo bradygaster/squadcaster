@@ -69,7 +69,9 @@ name or avatar as current. Every higher registry revision must retain every
 previous ID, preserve immutable `created_at` and `role`, advance
 `generated_at`, avoid regressing `updated_at`, and advance `updated_at` for any
 mutable change. Retirement must create a valid tombstone; reactivation must
-clear `retired_at`. Any continuity failure rejects the complete replacement
+not occur. Once retired, the complete normalized tombstone is immutable,
+including names, role, universe, status, lifecycle timestamps, avatar, and
+legacy-name state. Any continuity failure rejects the complete replacement
 atomically and retains only the prior validated cache as stale.
 
 ## Authoritative work binding
@@ -102,7 +104,9 @@ The complete binding array is validated atomically. Squadcaster rejects
 missing, empty, malformed, partially valid, wrong-repository, wrong-origin,
 unsupported or future-version, unknown-ID, future-revision, duplicate,
 conflicting, mixed-revision, capped, extra-field, or inconsistent evidence. It
-does not salvage valid-looking rows.
+does not salvage valid-looking rows. Repository and agent ID strings must
+already be canonical: trimming, control-character removal, or other
+normalization never repairs producer evidence.
 
 Before parsing a binding, Squadcaster re-fetches each identity-bearing issue
 comment through GitHub's GET-only REST endpoint and preserves the immutable
@@ -186,6 +190,17 @@ The persisted source envelope requires exact revision 1,
 fields, noncanonical timestamps, and contradictory status/data/error/timestamp
 combinations are discarded rather than coerced to version 1. Only internally
 consistent `fresh` or `stale` envelopes can resolve identity.
+The refresh attempt timestamp must itself be canonical. A fetched registry
+cannot claim `generated_at` later than that attempt, and persisted cache
+chronology must satisfy
+`registry.generated_at <= lastSuccessfulRefresh <= lastAttemptedRefresh`.
+These comparisons use only supplied canonical timestamps, not the consumer's
+current wall clock.
+
+Restored bindings are authoritative only when the persisted issue and issue
+comment sources are both fresh, exhaustive, and untruncated. Partial, stale,
+unavailable, unauthorized, forbidden, truncated, or non-exhaustive evidence
+keeps identity unresolved and preserves the stale diagnostic behavior.
 
 | Condition | Source status | Cache behavior |
 |---|---|---|

@@ -87,6 +87,14 @@ function clean(value, maxLength = 500) {
         : "";
 }
 
+function canonicalRawString(value, maxLength, predicate = () => true) {
+    return typeof value === "string" &&
+        value.length <= maxLength &&
+        value === value.trim() &&
+        !/[\u0000-\u001f\u007f]/.test(value) &&
+        predicate(value);
+}
+
 function canonicalId(value) {
     return typeof value === "string" &&
         /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
@@ -419,8 +427,8 @@ function registryContinuityError(previous, next) {
         if (changed && timestampOrder(prior.updatedAt, current.updatedAt) >= 0) {
             return `Agent provenance changed ${prior.id} without advancing updated_at.`;
         }
-        if (prior.status === "retired" && current.status === "retired" &&
-            current.retiredAt !== prior.retiredAt) {
+        if (prior.status === "retired" &&
+            JSON.stringify(current) !== JSON.stringify(prior)) {
             return `Agent provenance changed the retirement tombstone for ${prior.id}.`;
         }
         if (prior.status !== "retired" && current.status === "retired" &&
@@ -444,10 +452,14 @@ export async function discoverAgentIdentityProvenance({
     requestAllowed = true,
 }) {
     const prior = normalizedSource(previous);
+    const canonicalAttemptedAt = timestamp(attemptedAt);
+    if (!canonicalAttemptedAt) {
+        throw new Error("Agent identity attemptedAt must be a canonical ISO-8601 timestamp.");
+    }
     if (!requestAllowed) {
         return failureSource(
             prior,
-            attemptedAt,
+            canonicalAttemptedAt,
             "unavailable",
             "fetch_failed",
             "Agent identity REST budget is exhausted.",
@@ -456,7 +468,7 @@ export async function discoverAgentIdentityProvenance({
     if (!repositoryName(repository)) {
         return failureSource(
             prior,
-            attemptedAt,
+            canonicalAttemptedAt,
             "unavailable",
             "fetch_failed",
             "Agent identity repository is unavailable.",
@@ -494,10 +506,19 @@ export async function discoverAgentIdentityProvenance({
         if (parsed.completeness !== "complete") {
             return failureSource(
                 prior,
-                attemptedAt,
+                canonicalAttemptedAt,
                 "partial",
                 "partial",
                 `Agent provenance registry is partial: ${parsed.diagnostics.join("; ")}`,
+            );
+        }
+        if (timestampOrder(parsed.registry.generatedAt, canonicalAttemptedAt) > 0) {
+            return failureSource(
+                prior,
+                canonicalAttemptedAt,
+                "malformed",
+                "malformed",
+                "Agent provenance generated_at follows the refresh attempt.",
             );
         }
         if (prior.data &&
@@ -506,7 +527,7 @@ export async function discoverAgentIdentityProvenance({
                     response.sha !== prior.data.blobSha))) {
             return failureSource(
                 prior,
-                attemptedAt,
+                canonicalAttemptedAt,
                 "malformed",
                 "malformed",
                 "Agent provenance revision regressed or changed without advancing.",
@@ -519,7 +540,7 @@ export async function discoverAgentIdentityProvenance({
         if (continuityError) {
             return failureSource(
                 prior,
-                attemptedAt,
+                canonicalAttemptedAt,
                 "malformed",
                 "malformed",
                 continuityError,
@@ -538,8 +559,8 @@ export async function discoverAgentIdentityProvenance({
                 blobSha: response.sha,
                 registry: parsed.registry,
             },
-            lastAttemptedRefresh: attemptedAt,
-            lastSuccessfulRefresh: attemptedAt,
+            lastAttemptedRefresh: canonicalAttemptedAt,
+            lastSuccessfulRefresh: canonicalAttemptedAt,
             status: "fresh",
             error: null,
         };
@@ -551,8 +572,8 @@ export async function discoverAgentIdentityProvenance({
                 schemaVersion: AGENT_IDENTITY_SOURCE_VERSION,
                 producer: SOURCE_PRODUCER,
                 data: null,
-                lastAttemptedRefresh: attemptedAt,
-                lastSuccessfulRefresh: attemptedAt,
+                lastAttemptedRefresh: canonicalAttemptedAt,
+                lastSuccessfulRefresh: canonicalAttemptedAt,
                 status: "missing",
                 error: null,
             };
@@ -560,7 +581,7 @@ export async function discoverAgentIdentityProvenance({
         if (permissionDenied(error)) {
             return failureSource(
                 prior,
-                attemptedAt,
+                canonicalAttemptedAt,
                 "forbidden",
                 "permission_denied",
                 error,
@@ -570,7 +591,7 @@ export async function discoverAgentIdentityProvenance({
             .test(errorMessage(error));
         return failureSource(
             prior,
-            attemptedAt,
+            canonicalAttemptedAt,
             malformed ? "malformed" : "unavailable",
             malformed ? "malformed" : "fetch_failed",
             error,
@@ -648,6 +669,11 @@ export function normalizePersistedAgentIdentitySource(value) {
         : null;
     const lastAttemptedRefresh = timestamp(value.lastAttemptedRefresh);
     const lastSuccessfulRefresh = timestamp(value.lastSuccessfulRefresh);
+    const registryGeneratedAt = data?.registry?.generatedAt || null;
+    const successfulChronologyValid = !data || (
+        lastSuccessfulRefresh &&
+        timestampOrder(registryGeneratedAt, lastSuccessfulRefresh) <= 0
+    );
     const error = errorKind && isRecord(value.error) &&
         hasOnlyKeys(value.error, new Set(["kind", "message"]))
         ? {
@@ -661,12 +687,14 @@ export function normalizePersistedAgentIdentitySource(value) {
         data &&
         lastAttemptedRefresh &&
         lastSuccessfulRefresh === lastAttemptedRefresh &&
+        successfulChronologyValid &&
         error === null
     ) || (
         status === "stale" &&
         data &&
         lastAttemptedRefresh &&
         lastSuccessfulRefresh &&
+        successfulChronologyValid &&
         timestampOrder(lastSuccessfulRefresh, lastAttemptedRefresh) <= 0 &&
         error
     ) || (
@@ -755,14 +783,29 @@ export function parseWorkAgentBindings(value, registry, context) {
         }
         const issueNumber = issueReference(raw.issue);
         const epicIssueNumber = issueReference(raw.epic_issue);
-        const agentId = raw.agent_id === null ? null : clean(raw.agent_id, 160);
+        const repositoryIsCanonical = canonicalRawString(
+            raw.repository,
+            300,
+            repositoryName,
+        );
+        const agentIdIsCanonical = raw.agent_id === null ||
+            canonicalRawString(raw.agent_id, 160, canonicalId);
+        const agentId = raw.agent_id === null
+            ? null
+            : agentIdIsCanonical
+                ? raw.agent_id
+                : "";
+        const epicAgentIdsAreCanonical = Array.isArray(raw.epic_agent_ids) &&
+            raw.epic_agent_ids.every((id) =>
+                canonicalRawString(id, 160, canonicalId));
         const epicAgentIds = Array.isArray(raw.epic_agent_ids)
-            ? raw.epic_agent_ids.map((id) => clean(id, 160))
+            ? raw.epic_agent_ids.map((id) =>
+                canonicalRawString(id, 160, canonicalId) ? id : "")
             : [];
         const binding = {
             schemaVersion: 1,
             producer: "squad",
-            repository: clean(raw.repository, 300),
+            repository: repositoryIsCanonical ? raw.repository : "",
             originIssue: raw.origin_issue,
             artifact: clean(raw.artifact, 40),
             registryRevision: raw.registry_revision,
@@ -780,6 +823,7 @@ export function parseWorkAgentBindings(value, registry, context) {
             diagnostics.push(`${path}: unsupported binding schema`);
         }
         if (raw.producer !== "squad" ||
+            !repositoryIsCanonical ||
             binding.repository !== context.repository ||
             binding.originIssue !== context.originIssue ||
             binding.artifact !== context.artifact ||
@@ -797,12 +841,13 @@ export function parseWorkAgentBindings(value, registry, context) {
             if (!IDENTITY_OMISSION_REASONS.has(binding.identityOmissionReason)) {
                 diagnostics.push(`${path}.identity_omission_reason: explicit omission is required`);
             }
-        } else if (!canonicalId(agentId) ||
+        } else if (!agentIdIsCanonical ||
             !agents.has(agentId) ||
             binding.identityOmissionReason) {
             diagnostics.push(`${path}.agent_id: agent id is unresolved or inconsistent`);
         }
         if (!Array.isArray(raw.epic_agent_ids) ||
+            !epicAgentIdsAreCanonical ||
             epicAgentIds.some((id) => !canonicalId(id) || !agents.has(id)) ||
             new Set(epicAgentIds).size !== epicAgentIds.length ||
             (agentId !== null && !epicAgentIds.includes(agentId)) ||

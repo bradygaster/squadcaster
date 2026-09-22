@@ -1,4 +1,5 @@
 import {
+    bindingSourceIsComplete,
     implementationProvenanceForGoal,
     normalizeActivityContract,
 } from "./activity-model.mjs";
@@ -749,7 +750,7 @@ export function normalizeActivity(value) {
             goals: normalized.goals,
             source: agentIdentitySource,
             repository: String(normalized.repository?.nameWithOwner || "").toLowerCase(),
-            bindingSourceComplete: !normalized.partial,
+            bindingSourceComplete: bindingSourceIsComplete(normalized.sourceState),
         });
         for (const goal of normalized.goals) {
             goal.agentIdentity = identities.get(Number(goal.issue?.number));

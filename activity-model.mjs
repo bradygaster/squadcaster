@@ -174,6 +174,15 @@ function normalizedSourceState(value, data, fetchedAt) {
     };
 }
 
+export function bindingSourceIsComplete(sourceState) {
+    return ["issues", "issueComments"].every((name) => {
+        const state = sourceState?.[name];
+        return state?.status === "fresh" &&
+            state.exhaustive === true &&
+            state.truncated === false;
+    });
+}
+
 function sourceEvidenceState(state) {
     if (!state) return "unknown";
     if (state.status === "stale") return "stale";
@@ -1921,14 +1930,7 @@ export function buildActivitySnapshot({
         goals,
         source: normalizedSources.agentIdentity,
         repository: repositoryKey,
-        bindingSourceComplete: (
-            normalizedSources.issues.status === "fresh" &&
-            normalizedSources.issues.exhaustive &&
-            !normalizedSources.issues.truncated &&
-            normalizedSources.issueComments.status === "fresh" &&
-            normalizedSources.issueComments.exhaustive &&
-            !normalizedSources.issueComments.truncated
-        ),
+        bindingSourceComplete: bindingSourceIsComplete(normalizedSources),
     });
     for (const goal of goals) {
         goal.agentIdentity = identities.get(Number(goal.issue?.number));

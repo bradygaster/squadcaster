@@ -185,6 +185,57 @@ test("validates explicit work bindings against a complete registry", () => {
     })[0].agentId, null);
 });
 
+test("rejects noncanonical raw repository and agent binding strings", () => {
+    const context = {
+        repository: "octodemo/demo",
+        originIssue: 10,
+        artifact: "activated",
+    };
+    const mutations = [
+        ["repository-leading-space", (row) => { row.repository = " octodemo/demo"; }],
+        ["repository-trailing-space", (row) => { row.repository = "octodemo/demo "; }],
+        ["repository-newline", (row) => { row.repository = "octodemo/demo\n"; }],
+        ["repository-tab", (row) => { row.repository = "octodemo/demo\t"; }],
+        ["repository-control", (row) => { row.repository = "octodemo/\u0000demo"; }],
+        ["agent-leading-space", (row) => { row.agent_id = " runtime-engineer"; }],
+        ["agent-trailing-space", (row) => { row.agent_id = "runtime-engineer "; }],
+        ["agent-all-whitespace", (row) => { row.agent_id = " \t "; }],
+        ["agent-newline", (row) => { row.agent_id = "runtime-\nengineer"; }],
+        ["agent-tab", (row) => { row.agent_id = "runtime-\tengineer"; }],
+        ["agent-control", (row) => { row.agent_id = "runtime-\u0000engineer"; }],
+        ["epic-leading-space", (row) => {
+            row.epic_agent_ids = [" runtime-engineer"];
+        }],
+        ["epic-trailing-space", (row) => {
+            row.epic_agent_ids = ["runtime-engineer "];
+        }],
+        ["epic-all-whitespace", (row) => { row.epic_agent_ids = [" \t "]; }],
+        ["epic-newline", (row) => { row.epic_agent_ids = ["runtime-\nengineer"]; }],
+        ["epic-tab", (row) => { row.epic_agent_ids = ["runtime-\tengineer"]; }],
+        ["epic-control", (row) => {
+            row.epic_agent_ids = ["runtime-\u0000engineer"];
+        }],
+        ["epic-duplicate", (row) => {
+            row.epic_agent_ids = ["runtime-engineer", "runtime-engineer"];
+        }],
+    ];
+    for (const [name, mutate] of mutations) {
+        const candidate = structuredClone(bindingWire);
+        mutate(candidate[0]);
+        assert.throws(
+            () => parseWorkAgentBindings(candidate, parsedRegistry, context),
+            /malformed|partial/i,
+            name,
+        );
+    }
+
+    assert.equal(parseWorkAgentBindings(
+        structuredClone(bindingWire),
+        parsedRegistry,
+        context,
+    )[0].agentId, "runtime-engineer");
+});
+
 test("fails closed on missing, duplicate, conflicting, future, and partial bindings", () => {
     const context = {
         repository: "octodemo/demo",
@@ -356,6 +407,8 @@ test("resolves only explicit ids and preserves rename and retirement semantics",
                 blobSha: "registry-blob-4",
                 registry: retiredRegistry,
             },
+            lastAttemptedRefresh: "2026-09-22T15:00:00.000Z",
+            lastSuccessfulRefresh: "2026-09-22T15:00:00.000Z",
         }),
         repository: "octodemo/demo",
     });
@@ -570,6 +623,96 @@ test("rejects inconsistent persisted source envelopes instead of coercing them",
     }
 });
 
+test("enforces deterministic registry and persisted refresh chronology", async () => {
+    await assert.rejects(
+        discoverAgentIdentityProvenance({
+            runJson: async () => content(),
+            cwd: "/repo",
+            repository: "octodemo/demo",
+            previous: null,
+            attemptedAt: "2026-09-22T12:00:00Z",
+        }),
+        /attemptedAt.*canonical/i,
+    );
+
+    const exactBoundary = structuredClone(registryWire);
+    exactBoundary.revision = 3;
+    exactBoundary.generated_at = "2026-09-22T13:00:00.000Z";
+    const accepted = await discoverAgentIdentityProvenance({
+        runJson: async () => content(exactBoundary, { sha: "boundary" }),
+        cwd: "/repo",
+        repository: "octodemo/demo",
+        previous: { sourceState: { agentIdentity: source() } },
+        attemptedAt: "2026-09-22T13:00:00.000Z",
+    });
+    assert.equal(accepted.status, "fresh");
+
+    const future = structuredClone(exactBoundary);
+    future.generated_at = "2026-09-22T13:00:00.001Z";
+    const rejected = await discoverAgentIdentityProvenance({
+        runJson: async () => content(future, { sha: "future" }),
+        cwd: "/repo",
+        repository: "octodemo/demo",
+        previous: { sourceState: { agentIdentity: source() } },
+        attemptedAt: "2026-09-22T13:00:00.000Z",
+    });
+    assert.equal(rejected.status, "stale");
+    assert.equal(rejected.error.kind, "malformed");
+    assert.equal(rejected.data.registry.revision, 2);
+
+    const boundarySource = source({
+        data: {
+            ...source().data,
+            registry: {
+                ...parsedRegistry,
+                generatedAt: "2026-09-22T12:00:00.000Z",
+            },
+        },
+    });
+    assert.equal(normalizePersistedAgentIdentitySource(boundarySource).status, "fresh");
+
+    const staleBoundary = source({
+        data: {
+            ...source().data,
+            registry: {
+                ...parsedRegistry,
+                generatedAt: "2026-09-22T12:00:00.000Z",
+            },
+        },
+        status: "stale",
+        lastAttemptedRefresh: "2026-09-22T12:00:00.001Z",
+        error: { kind: "fetch_failed", message: "timeout" },
+    });
+    assert.equal(normalizePersistedAgentIdentitySource(staleBoundary).status, "stale");
+
+    for (const candidate of [
+        source({
+            data: {
+                ...source().data,
+                registry: {
+                    ...parsedRegistry,
+                    generatedAt: "2026-09-22T12:00:00.001Z",
+                },
+            },
+        }),
+        source({
+            status: "stale",
+            lastAttemptedRefresh: "2026-09-22T11:59:59.999Z",
+            error: { kind: "fetch_failed", message: "timeout" },
+        }),
+        source({
+            status: "stale",
+            lastSuccessfulRefresh: "2026-09-21T19:59:59.999Z",
+            lastAttemptedRefresh: "2026-09-22T13:00:00.000Z",
+            error: { kind: "fetch_failed", message: "timeout" },
+        }),
+    ]) {
+        const normalized = normalizePersistedAgentIdentitySource(candidate);
+        assert.equal(normalized.status, "unavailable");
+        assert.equal(normalized.data, null);
+    }
+});
+
 test("enforces registry continuity atomically while preserving stale cache", async () => {
     const fresh = source();
     const refresh = (wire) => discoverAgentIdentityProvenance({
@@ -627,35 +770,59 @@ test("enforces registry continuity atomically while preserving stale cache", asy
     assert.equal(rejectedTombstoneRemoval.status, "stale");
     assert.equal(rejectedTombstoneRemoval.data.registry.agents[0].status, "retired");
 
-    const invalidReactivation = structuredClone(retired);
-    invalidReactivation.revision = 4;
-    invalidReactivation.generated_at = "2026-09-22T14:00:00.000Z";
-    invalidReactivation.agents["runtime-engineer"].status = "active";
-    delete invalidReactivation.agents["runtime-engineer"].retired_at;
-    const rejectedReactivation = await discoverAgentIdentityProvenance({
-        runJson: async () => content(invalidReactivation, { sha: "blob-4-invalid" }),
+    const unchangedTombstone = structuredClone(retired);
+    unchangedTombstone.revision = 4;
+    unchangedTombstone.generated_at = "2026-09-22T14:00:00.000Z";
+    const validContinuity = await discoverAgentIdentityProvenance({
+        runJson: async () => content(unchangedTombstone, { sha: "blob-4" }),
         cwd: "/repo",
         repository: "octodemo/demo",
         previous: { sourceState: { agentIdentity: validRetirement } },
         attemptedAt: "2026-09-22T14:00:00.000Z",
     });
-    assert.equal(rejectedReactivation.status, "stale");
+    assert.equal(validContinuity.status, "fresh");
+    assert.equal(validContinuity.data.registry.agents[0].status, "retired");
 
-    const reactivated = structuredClone(retired);
-    reactivated.revision = 4;
-    reactivated.generated_at = "2026-09-22T14:00:00.000Z";
-    reactivated.agents["runtime-engineer"].status = "active";
-    reactivated.agents["runtime-engineer"].updated_at = "2026-09-22T14:00:00.000Z";
-    delete reactivated.agents["runtime-engineer"].retired_at;
-    const validReactivation = await discoverAgentIdentityProvenance({
-        runJson: async () => content(reactivated, { sha: "blob-4" }),
-        cwd: "/repo",
-        repository: "octodemo/demo",
-        previous: { sourceState: { agentIdentity: validRetirement } },
-        attemptedAt: "2026-09-22T14:00:00.000Z",
-    });
-    assert.equal(validReactivation.status, "fresh");
-    assert.equal(validReactivation.data.registry.agents[0].status, "active");
+    const tombstoneMutations = [
+        ["display_name", (record) => {
+            record.display_name = "Nova";
+            record.persistent_name = "Nova";
+        }],
+        ["persistent_name", (record) => { record.persistent_name = "Nova"; }],
+        ["role", (record) => { record.role = "Transferred identity"; }],
+        ["universe", (record) => { record.universe = "alternate"; }],
+        ["status", (record) => {
+            record.status = "active";
+            delete record.retired_at;
+        }],
+        ["created_at", (record) => {
+            record.created_at = "2026-09-20T19:00:00.000Z";
+        }],
+        ["updated_at", (record) => {
+            record.updated_at = "2026-09-22T13:00:00.000Z";
+        }],
+        ["retired_at", (record) => {
+            record.retired_at = "2026-09-22T12:00:00.001Z";
+            record.updated_at = "2026-09-22T12:00:00.001Z";
+        }],
+        ["avatar", (record) => {
+            record.avatar.path = ".squad/agents/runtime-engineer/alternate.png";
+        }],
+        ["legacy_named", (record) => { record.legacy_named = true; }],
+    ];
+    for (const [name, mutate] of tombstoneMutations) {
+        const candidate = structuredClone(unchangedTombstone);
+        mutate(candidate.agents["runtime-engineer"]);
+        const result = await discoverAgentIdentityProvenance({
+            runJson: async () => content(candidate, { sha: `blob-4-${name}` }),
+            cwd: "/repo",
+            repository: "octodemo/demo",
+            previous: { sourceState: { agentIdentity: validRetirement } },
+            attemptedAt: "2026-09-22T14:00:00.000Z",
+        });
+        assert.equal(result.status, "stale", name);
+        assert.equal(result.data.registry.revision, 3, name);
+    }
 });
 
 test("rejects noncanonical, impossible, and misordered lifecycle timestamps", () => {
@@ -713,6 +880,7 @@ test("builds goal identity from authoritative registry and binding without owner
             agentIdentity: source(),
         },
     });
+
     const task = snapshot.goals.find((goal) => goal.issue.number === 12);
     assert.equal(task.owner.name, "someone-else");
     assert.equal(task.agentIdentity.status, "resolved");
@@ -733,6 +901,69 @@ test("builds goal identity from authoritative registry and binding without owner
     }).goals[0];
     assert.equal(noBinding.agentIdentity.status, "unknown");
     assert.equal(noBinding.agentIdentity.record, null);
+});
+
+test("restored identity requires complete issue and comment binding sources", () => {
+    const issues = [issue(10, [activationComment()]), issue(11), issue(12)];
+    const completeSource = {
+        status: "fresh",
+        fetchedAt: "2026-09-22T12:00:00.000Z",
+        exhaustive: true,
+        truncated: false,
+        error: "",
+    };
+    const activity = buildActivitySnapshot({
+        repository: {
+            name: "demo",
+            nameWithOwner: "octodemo/demo",
+        },
+        issues,
+        sourceState: {
+            issues: { ...completeSource, data: issues },
+            issueComments: { ...completeSource, data: [] },
+            agentIdentity: source(),
+        },
+        fetchedAt: "2026-09-22T12:00:00.000Z",
+    });
+    const restored = normalizePersistedState({ activity });
+    assert.equal(
+        restored.activity.goals.find((goal) => goal.issue.number === 12)
+            .agentIdentity.status,
+        "resolved",
+    );
+
+    const incompleteCases = [
+        ["issues-stale", "issues", { status: "stale" }],
+        ["comments-unavailable", "issueComments", { status: "unavailable" }],
+        ["issues-forbidden", "issues", { status: "forbidden" }],
+        ["comments-partial", "issueComments", { status: "partial" }],
+        ["issues-truncated", "issues", { truncated: true }],
+        ["comments-non-exhaustive", "issueComments", { exhaustive: false }],
+        ["mixed", null, null],
+    ];
+    for (const [name, sourceName, override] of incompleteCases) {
+        const candidate = structuredClone(activity);
+        candidate.partial = false;
+        if (sourceName) {
+            Object.assign(candidate.sourceState[sourceName], override);
+        } else {
+            Object.assign(candidate.sourceState.issues, {
+                status: "fresh",
+                exhaustive: false,
+                truncated: false,
+            });
+            Object.assign(candidate.sourceState.issueComments, {
+                status: "stale",
+                exhaustive: true,
+                truncated: true,
+            });
+        }
+        const identity = normalizePersistedState({ activity: candidate })
+            .activity.goals.find((goal) => goal.issue.number === 12).agentIdentity;
+        assert.equal(identity.status, "unknown", name);
+        assert.equal(identity.source.status, "stale", name);
+        assert.match(identity.source.error.message, /stale, capped, or incomplete/i, name);
+    }
 });
 
 test("fails every goal closed when one authoritative binding document conflicts", () => {
