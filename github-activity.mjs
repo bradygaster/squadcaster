@@ -11,6 +11,7 @@ import {
     discoverImplementationProvenance,
     selectImplementationProvenancePullRequests,
 } from "./implementation-provenance.mjs";
+import { discoverAgentIdentityProvenance } from "./agent-identity.mjs";
 
 const SOURCES = [
     {
@@ -936,6 +937,14 @@ export class GitHubSquadActivityAdapter {
             })
             : null;
         if (bootstrap) sourceState.bootstrap = bootstrap.sourceState;
+        sourceState.agentIdentity = await discoverAgentIdentityProvenance({
+            runJson: this.runJson,
+            cwd: this.cwd,
+            repository: repository?.nameWithOwner || this.repository,
+            previous,
+            attemptedAt,
+            requestAllowed: reserveRestRequest(restBudget),
+        });
         const bootstrapErrors = bootstrap
             ? Object.entries(bootstrap.sourceState)
                 .filter(([, state]) => state.error)

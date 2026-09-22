@@ -5,6 +5,10 @@ import {
 import {
     validateNormalizedImplementationProvenanceRecord,
 } from "./implementation-provenance.mjs";
+import {
+    agentIdentitiesForGoals,
+    normalizePersistedAgentIdentitySource,
+} from "./agent-identity.mjs";
 
 export function emptyActivity() {
     const fetchedAt = null;
@@ -69,7 +73,8 @@ function allowedImplementationProvenancePath(path) {
     const normalized = path.map((part) => typeof part === "number" ? "*" : part).join(".");
     return normalized === "goals.*.implementationProvenance" ||
         normalized === "goals.*.pullRequests.*.implementationProvenance" ||
-        normalized === "sourceState.implementationProvenance";
+        normalized === "sourceState.implementationProvenance" ||
+        normalized === "sourceState.agentIdentity";
 }
 
 function withoutUnvalidatedProvenance(value, path = []) {
@@ -695,6 +700,13 @@ export function normalizeActivity(value) {
                     ),
                 }
                 : {}),
+            ...(contract.sourceState.agentIdentity
+                ? {
+                    agentIdentity: normalizePersistedAgentIdentitySource(
+                        contract.sourceState.agentIdentity,
+                    ),
+                }
+                : {}),
         };
     }
     const provenanceSource = normalized.sourceState?.implementationProvenance;
@@ -730,6 +742,18 @@ export function normalizeActivity(value) {
                 source: provenanceSource,
             })
             : normalizeGoalProvenance(null);
+    }
+    const agentIdentitySource = normalized.sourceState?.agentIdentity;
+    if (agentIdentitySource) {
+        const identities = agentIdentitiesForGoals({
+            goals: normalized.goals,
+            source: agentIdentitySource,
+            repository: String(normalized.repository?.nameWithOwner || "").toLowerCase(),
+            bindingSourceComplete: !normalized.partial,
+        });
+        for (const goal of normalized.goals) {
+            goal.agentIdentity = identities.get(Number(goal.issue?.number));
+        }
     }
     return normalized;
 }

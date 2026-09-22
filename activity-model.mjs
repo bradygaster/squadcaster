@@ -4,6 +4,10 @@ import {
     reconcileHandoffDependencies,
 } from "./handoff-readiness.mjs";
 import { BOOTSTRAP_IDENTIFIERS, BOOTSTRAP_STATUSES } from "./bootstrap-classifier.mjs";
+import {
+    agentIdentitiesForGoals,
+    normalizePersistedAgentIdentitySource,
+} from "./agent-identity.mjs";
 
 const ACTIVE_STATES = new Set(["queued", "researching", "implementing", "reviewing", "blocked", "failed"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure", "action_required"]);
@@ -269,6 +273,8 @@ function parseArtifacts(comments, issueNumber) {
     for (const comment of Array.isArray(comments) ? comments : []) {
         const body = String(comment?.body || "");
         const activationCandidate = /Activation bindings\s*:/i.test(body);
+        const identityCandidate = body.includes("squad-work-agent-binding/v1") ||
+            body.includes("squad-agent-provenance/v1");
         const blocks = body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
         const commentArtifacts = [];
         for (const block of blocks) {
@@ -291,6 +297,7 @@ function parseArtifacts(comments, issueNumber) {
                     validationReason: "invalid-json",
                     bindings: null,
                     activationCandidate,
+                    identityCandidate,
                 });
                 continue;
             }
@@ -340,6 +347,7 @@ function parseArtifacts(comments, issueNumber) {
                 validationReason,
                 bindings,
                 activationCandidate,
+                identityCandidate,
             });
         }
         if (
@@ -358,6 +366,7 @@ function parseArtifacts(comments, issueNumber) {
                 validationReason: "invalid-activation-envelope",
                 bindings: null,
                 activationCandidate: true,
+                identityCandidate,
             });
         }
         const activationArtifacts = commentArtifacts.filter((artifact) =>
@@ -1395,6 +1404,9 @@ export function buildActivitySnapshot({
             ),
             revision: Number(sourceState?.implementationProvenance?.revision) || 1,
         },
+        agentIdentity: normalizePersistedAgentIdentitySource(
+            sourceState?.agentIdentity,
+        ),
     };
     issues = normalizedSources.issues.data;
     pullRequests = normalizedSources.pullRequests.data;
@@ -1727,6 +1739,23 @@ export function buildActivitySnapshot({
         goals.push(goal);
     }
 
+    const identities = agentIdentitiesForGoals({
+        goals,
+        source: normalizedSources.agentIdentity,
+        repository: repositoryKey,
+        bindingSourceComplete: (
+            normalizedSources.issues.status === "fresh" &&
+            normalizedSources.issues.exhaustive &&
+            !normalizedSources.issues.truncated &&
+            normalizedSources.issueComments.status === "fresh" &&
+            normalizedSources.issueComments.exhaustive &&
+            !normalizedSources.issueComments.truncated
+        ),
+    });
+    for (const goal of goals) {
+        goal.agentIdentity = identities.get(Number(goal.issue?.number));
+    }
+
     goals.sort((left, right) => {
         const leftActive = ACTIVE_STATES.has(left.phase) ? 1 : 0;
         const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
@@ -1746,7 +1775,10 @@ export function buildActivitySnapshot({
         .map((source) => [source, normalizedSources[source]])
         .filter(([, state]) => state.status === "stale")
         .map(([source]) => source);
-    const incompleteSources = Object.values(normalizedSources)
+    const activitySources = Object.entries(normalizedSources)
+        .filter(([name]) => name !== "agentIdentity")
+        .map(([, state]) => state);
+    const incompleteSources = activitySources
         .some((state) => [
             "partial",
             "incomplete",
@@ -1756,7 +1788,7 @@ export function buildActivitySnapshot({
         ].includes(state.status) || state.truncated || state.exhaustive === false);
     const normalizedFetchedAt = timestamp(fetchedAt) || new Date().toISOString();
     const retainedStaleFetchedAt = earliestTimestamp(
-        Object.values(normalizedSources)
+        activitySources
             .filter((state) => state.status === "stale")
             .map((state) => state.fetchedAt),
     );
@@ -1775,7 +1807,7 @@ export function buildActivitySnapshot({
         sourceState: normalizedSources,
         partial: incompleteSources ||
             normalizedErrors.length > 0 ||
-            Object.values(normalizedSources).some((state) => Boolean(state.error)),
+            activitySources.some((state) => Boolean(state.error)),
         stale: staleSources.length > 0,
         staleSources,
         errors: normalizedErrors,
@@ -1993,7 +2025,9 @@ export function isCompleteActivitySnapshot(snapshot) {
         !snapshot.partial &&
         !snapshot.stale &&
         !(snapshot.errors?.length) &&
-        !Object.values(snapshot.sourceState || {})
+        !Object.entries(snapshot.sourceState || {})
+            .filter(([name]) => name !== "agentIdentity")
+            .map(([, state]) => state)
             .some((state) => [
                 "partial",
                 "incomplete",
