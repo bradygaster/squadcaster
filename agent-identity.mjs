@@ -3,12 +3,60 @@ export const AGENT_PROVENANCE_VERSION = 1;
 export const WORK_AGENT_BINDING_SCHEMA = "squad-work-agent-binding/v1";
 export const WORK_AGENT_BINDING_VERSION = 1;
 export const AGENT_IDENTITY_SOURCE_REVISION = 1;
+export const AGENT_IDENTITY_SOURCE_SCHEMA = "squadcaster-agent-identity-source/v1";
+export const AGENT_IDENTITY_SOURCE_VERSION = 1;
+export const AGENT_IDENTITY_CACHE_SCHEMA = "squadcaster-agent-identity-cache/v1";
+export const AGENT_IDENTITY_CACHE_VERSION = 1;
 
 const REGISTRY_PATH = ".squad/casting/registry.json";
 const MAX_REGISTRY_BYTES = 1024 * 1024;
 const MAX_AGENTS = 500;
 const MAX_BINDINGS = 500;
+const MAX_TRUSTED_COMMENT_ACTORS = 20;
 const MAX_ERROR_LENGTH = 800;
+const SOURCE_PRODUCER = "squadcaster";
+const REGISTRY_PRODUCER = "squad";
+const CANONICAL_TIMESTAMP =
+    /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$/;
+const BINDING_KEYS = new Set([
+    "binding_schema",
+    "binding_version",
+    "producer",
+    "repository",
+    "origin_issue",
+    "artifact",
+    "registry_schema",
+    "registry_revision",
+    "task",
+    "issue",
+    "epic",
+    "epic_issue",
+    "agent_id",
+    "epic_agent_ids",
+    "identity_omission_reason",
+    "epic_identity_omission_reason",
+]);
+const NORMALIZED_REGISTRY_KEYS = new Set([
+    "schemaVersion",
+    "producer",
+    "revision",
+    "generatedAt",
+    "trustedCommentActorIds",
+    "agents",
+]);
+const NORMALIZED_AGENT_KEYS = new Set([
+    "id",
+    "displayName",
+    "role",
+    "universe",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "retiredAt",
+    "avatar",
+    "legacyNamed",
+]);
+const NORMALIZED_AVATAR_KEYS = new Set(["kind", "path"]);
 const ACTIVATION_KINDS = new Set([
     "activated",
     "phases-activated",
@@ -26,9 +74,10 @@ function isRecord(value) {
 }
 
 function timestamp(value) {
-    const parsed = Date.parse(value || "");
-    return typeof value === "string" && value.length > 0 && Number.isFinite(parsed)
-        ? new Date(parsed).toISOString()
+    if (typeof value !== "string" || !CANONICAL_TIMESTAMP.test(value)) return null;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) && new Date(parsed).toISOString() === value
+        ? value
         : null;
 }
 
@@ -45,6 +94,19 @@ function canonicalId(value) {
 
 function positiveInteger(value) {
     return Number.isSafeInteger(value) && value > 0;
+}
+
+function hasOnlyKeys(value, allowed) {
+    return isRecord(value) && Object.keys(value).every((key) => allowed.has(key));
+}
+
+function timestampOrder(left, right) {
+    return Date.parse(left) - Date.parse(right);
+}
+
+export function containsAgentIdentityEvidenceText(value) {
+    return /(?:squad-work-agent-binding\/v1|squad-agent-provenance\/v1|Activation bindings\s*:|"(?:binding_schema|binding_version|registry_schema|registry_revision|epic_agent_ids|identity_omission_reason|epic_identity_omission_reason)"\s*:)/i
+        .test(String(value || ""));
 }
 
 function issueReference(value) {
@@ -128,6 +190,17 @@ function parseAgentRecord(id, value, diagnostics) {
     if (!updatedAt) diagnostics.push(`${path}.updated_at: timestamp is invalid`);
     if (value.status === "retired" && !retiredAt) {
         diagnostics.push(`${path}.retired_at: retired records require a timestamp`);
+    } else if (value.status !== "retired" && value.retired_at !== undefined) {
+        diagnostics.push(`${path}.retired_at: only retired records may carry a timestamp`);
+    }
+    if (createdAt && updatedAt && timestampOrder(createdAt, updatedAt) > 0) {
+        diagnostics.push(`${path}.updated_at: must not precede created_at`);
+    }
+    if (retiredAt && (
+        timestampOrder(createdAt, retiredAt) > 0 ||
+        timestampOrder(retiredAt, updatedAt) > 0
+    )) {
+        diagnostics.push(`${path}.retired_at: must be between created_at and updated_at`);
     }
     const beforeAvatar = diagnostics.length;
     const avatar = avatarReference(value.avatar, id, diagnostics, `${path}.avatar`);
@@ -162,6 +235,17 @@ export function parseAgentProvenanceRegistry(value) {
     }
     const generatedAt = timestamp(value.generated_at);
     if (!generatedAt) throw new Error("Agent provenance generated_at must be an ISO-8601 timestamp.");
+    const trustedCommentActorIds = value.trusted_comment_actor_ids === undefined
+        ? []
+        : Array.isArray(value.trusted_comment_actor_ids)
+            ? value.trusted_comment_actor_ids
+            : null;
+    if (!trustedCommentActorIds ||
+        trustedCommentActorIds.length > MAX_TRUSTED_COMMENT_ACTORS ||
+        trustedCommentActorIds.some((id) => !positiveInteger(id)) ||
+        new Set(trustedCommentActorIds).size !== trustedCommentActorIds.length) {
+        throw new Error("Agent provenance trusted_comment_actor_ids must be unique positive integers.");
+    }
     if (!isRecord(value.agents)) throw new Error("Agent provenance agents must be an object.");
     const entries = Object.entries(value.agents);
     if (entries.length > MAX_AGENTS) {
@@ -173,6 +257,12 @@ export function parseAgentProvenanceRegistry(value) {
     for (const [id, recordValue] of entries) {
         const record = parseAgentRecord(id, recordValue, diagnostics);
         if (!record) continue;
+        if (timestampOrder(record.createdAt, generatedAt) > 0 ||
+            timestampOrder(record.updatedAt, generatedAt) > 0 ||
+            (record.retiredAt && timestampOrder(record.retiredAt, generatedAt) > 0)) {
+            diagnostics.push(`agents.${id}: lifecycle timestamps must not follow generated_at`);
+            continue;
+        }
         const displayKey = record.displayName.toLocaleLowerCase("en-US");
         const duplicate = displayNames.get(displayKey);
         if (duplicate) {
@@ -190,6 +280,7 @@ export function parseAgentProvenanceRegistry(value) {
             producer: "squad",
             revision: value.revision,
             generatedAt,
+            trustedCommentActorIds: [...trustedCommentActorIds].sort((left, right) => left - right),
             agents: agents.sort((left, right) => left.id.localeCompare(right.id)),
         },
         completeness: diagnostics.length === 0 ? "complete" : "partial",
@@ -199,17 +290,34 @@ export function parseAgentProvenanceRegistry(value) {
 
 function normalizedRegistryToWire(value) {
     if (!isRecord(value) ||
+        !hasOnlyKeys(value, NORMALIZED_REGISTRY_KEYS) ||
         value.schemaVersion !== 1 ||
-        value.producer !== "squad" ||
+        value.producer !== REGISTRY_PRODUCER ||
         !positiveInteger(value.revision) ||
         !timestamp(value.generatedAt) ||
+        !Array.isArray(value.trustedCommentActorIds) ||
+        value.trustedCommentActorIds.length > MAX_TRUSTED_COMMENT_ACTORS ||
+        value.trustedCommentActorIds.some((id) => !positiveInteger(id)) ||
+        new Set(value.trustedCommentActorIds).size !== value.trustedCommentActorIds.length ||
+        value.trustedCommentActorIds.some((id, index, values) =>
+            index > 0 && values[index - 1] >= id) ||
         !Array.isArray(value.agents) ||
         value.agents.length > MAX_AGENTS) {
         return null;
     }
     const agents = {};
-    for (const record of value.agents) {
-        if (!isRecord(record) || !canonicalId(record.id)) return null;
+    for (const [index, record] of value.agents.entries()) {
+        if (!isRecord(record) ||
+            !hasOnlyKeys(record, NORMALIZED_AGENT_KEYS) ||
+            !canonicalId(record.id) ||
+            Object.hasOwn(agents, record.id) ||
+            (index > 0 && value.agents[index - 1]?.id.localeCompare(record.id) >= 0) ||
+            (record.avatar !== null && (
+                !hasOnlyKeys(record.avatar, NORMALIZED_AVATAR_KEYS) ||
+                record.avatar.kind !== "repository-path"
+            ))) {
+            return null;
+        }
         agents[record.id] = {
             display_name: record.displayName,
             persistent_name: record.displayName,
@@ -233,6 +341,7 @@ function normalizedRegistryToWire(value) {
         schema_version: AGENT_PROVENANCE_VERSION,
         revision: value.revision,
         generated_at: value.generatedAt,
+        trusted_comment_actor_ids: value.trustedCommentActorIds,
         agents,
     };
 }
@@ -248,18 +357,23 @@ export function validateNormalizedAgentRegistry(value) {
     }
 }
 
+function emptySource() {
+    return {
+        revision: AGENT_IDENTITY_SOURCE_REVISION,
+        schema: AGENT_IDENTITY_SOURCE_SCHEMA,
+        schemaVersion: AGENT_IDENTITY_SOURCE_VERSION,
+        producer: SOURCE_PRODUCER,
+        data: null,
+        lastAttemptedRefresh: null,
+        lastSuccessfulRefresh: null,
+        status: "unavailable",
+        error: null,
+    };
+}
+
 function normalizedSource(previous) {
     const source = previous?.sourceState?.agentIdentity;
-    if (!isRecord(source)) {
-        return {
-            revision: AGENT_IDENTITY_SOURCE_REVISION,
-            data: null,
-            lastAttemptedRefresh: null,
-            lastSuccessfulRefresh: null,
-            status: "unavailable",
-            error: null,
-        };
-    }
+    if (!isRecord(source)) return emptySource();
     return normalizePersistedAgentIdentitySource(source);
 }
 
@@ -267,10 +381,58 @@ function failureSource(prior, attemptedAt, status, kind, message) {
     return {
         ...prior,
         revision: AGENT_IDENTITY_SOURCE_REVISION,
+        schema: AGENT_IDENTITY_SOURCE_SCHEMA,
+        schemaVersion: AGENT_IDENTITY_SOURCE_VERSION,
+        producer: SOURCE_PRODUCER,
         lastAttemptedRefresh: attemptedAt,
         status: prior.data ? "stale" : status,
         error: { kind, message: errorMessage(message) },
     };
+}
+
+function registryContinuityError(previous, next) {
+    if (!previous) return "";
+    if (next.revision <= previous.revision) return "";
+    if (timestampOrder(previous.generatedAt, next.generatedAt) >= 0) {
+        return "Agent provenance generated_at did not advance with its revision.";
+    }
+    const nextById = new Map(next.agents.map((agent) => [agent.id, agent]));
+    for (const prior of previous.agents) {
+        const current = nextById.get(prior.id);
+        if (!current) {
+            return `Agent provenance removed prior identity ${prior.id}.`;
+        }
+        if (current.createdAt !== prior.createdAt || current.role !== prior.role) {
+            return `Agent provenance changed immutable identity fields for ${prior.id}.`;
+        }
+        if (timestampOrder(prior.updatedAt, current.updatedAt) > 0) {
+            return `Agent provenance regressed updated_at for ${prior.id}.`;
+        }
+        const changed = [
+            "displayName",
+            "universe",
+            "status",
+            "retiredAt",
+            "avatar",
+            "legacyNamed",
+        ].some((key) => JSON.stringify(prior[key]) !== JSON.stringify(current[key]));
+        if (changed && timestampOrder(prior.updatedAt, current.updatedAt) >= 0) {
+            return `Agent provenance changed ${prior.id} without advancing updated_at.`;
+        }
+        if (prior.status === "retired" && current.status === "retired" &&
+            current.retiredAt !== prior.retiredAt) {
+            return `Agent provenance changed the retirement tombstone for ${prior.id}.`;
+        }
+        if (prior.status !== "retired" && current.status === "retired" &&
+            timestampOrder(prior.updatedAt, current.retiredAt) > 0) {
+            return `Agent provenance retired ${prior.id} before its prior update.`;
+        }
+        if (prior.status === "retired" && current.status !== "retired" &&
+            current.retiredAt !== null) {
+            return `Agent provenance reactivated ${prior.id} without clearing retired_at.`;
+        }
+    }
+    return "";
 }
 
 export async function discoverAgentIdentityProvenance({
@@ -350,11 +512,28 @@ export async function discoverAgentIdentityProvenance({
                 "Agent provenance revision regressed or changed without advancing.",
             );
         }
+        const continuityError = registryContinuityError(
+            prior.data?.registry,
+            parsed.registry,
+        );
+        if (continuityError) {
+            return failureSource(
+                prior,
+                attemptedAt,
+                "malformed",
+                "malformed",
+                continuityError,
+            );
+        }
         return {
             revision: AGENT_IDENTITY_SOURCE_REVISION,
+            schema: AGENT_IDENTITY_SOURCE_SCHEMA,
+            schemaVersion: AGENT_IDENTITY_SOURCE_VERSION,
+            producer: SOURCE_PRODUCER,
             data: {
-                schemaVersion: 1,
-                producer: "squad",
+                schema: AGENT_IDENTITY_CACHE_SCHEMA,
+                schemaVersion: AGENT_IDENTITY_CACHE_VERSION,
+                producer: REGISTRY_PRODUCER,
                 repository,
                 blobSha: response.sha,
                 registry: parsed.registry,
@@ -368,6 +547,9 @@ export async function discoverAgentIdentityProvenance({
         if (missingSource(error)) {
             return {
                 revision: AGENT_IDENTITY_SOURCE_REVISION,
+                schema: AGENT_IDENTITY_SOURCE_SCHEMA,
+                schemaVersion: AGENT_IDENTITY_SOURCE_VERSION,
+                producer: SOURCE_PRODUCER,
                 data: null,
                 lastAttemptedRefresh: attemptedAt,
                 lastSuccessfulRefresh: attemptedAt,
@@ -397,14 +579,49 @@ export async function discoverAgentIdentityProvenance({
 }
 
 export function normalizePersistedAgentIdentitySource(value) {
-    if (!isRecord(value)) return normalizedSource(null);
+    if (!isRecord(value) ||
+        value.revision !== AGENT_IDENTITY_SOURCE_REVISION ||
+        value.schema !== AGENT_IDENTITY_SOURCE_SCHEMA ||
+        value.schemaVersion !== AGENT_IDENTITY_SOURCE_VERSION ||
+        value.producer !== SOURCE_PRODUCER ||
+        !hasOnlyKeys(value, new Set([
+            "revision",
+            "schema",
+            "schemaVersion",
+            "producer",
+            "data",
+            "lastAttemptedRefresh",
+            "lastSuccessfulRefresh",
+            "status",
+            "error",
+        ]))) {
+        return emptySource();
+    }
     const registry = validateNormalizedAgentRegistry(value.data?.registry);
     const repository = clean(value.data?.repository, 300);
     const blobSha = clean(value.data?.blobSha, 160);
-    const data = registry && repositoryName(repository) && blobSha
+    const dataEnvelopeValid = value.data === null || (
+        isRecord(value.data) &&
+        value.data.schema === AGENT_IDENTITY_CACHE_SCHEMA &&
+        value.data.schemaVersion === AGENT_IDENTITY_CACHE_VERSION &&
+        value.data.producer === REGISTRY_PRODUCER &&
+        hasOnlyKeys(value.data, new Set([
+            "schema",
+            "schemaVersion",
+            "producer",
+            "repository",
+            "blobSha",
+            "registry",
+        ]))
+    );
+    const data = dataEnvelopeValid &&
+        registry &&
+        repositoryName(repository) &&
+        blobSha
         ? {
-            schemaVersion: 1,
-            producer: "squad",
+            schema: AGENT_IDENTITY_CACHE_SCHEMA,
+            schemaVersion: AGENT_IDENTITY_CACHE_VERSION,
+            producer: REGISTRY_PRODUCER,
             repository,
             blobSha,
             registry,
@@ -429,21 +646,80 @@ export function normalizePersistedAgentIdentitySource(value) {
     ].includes(value.error?.kind)
         ? value.error.kind
         : null;
+    const lastAttemptedRefresh = timestamp(value.lastAttemptedRefresh);
+    const lastSuccessfulRefresh = timestamp(value.lastSuccessfulRefresh);
+    const error = errorKind && isRecord(value.error) &&
+        hasOnlyKeys(value.error, new Set(["kind", "message"]))
+        ? {
+            kind: errorKind,
+            message: clean(value.error?.message, MAX_ERROR_LENGTH) ||
+                "Agent identity provenance is unavailable.",
+        }
+        : null;
+    const valid = (
+        status === "fresh" &&
+        data &&
+        lastAttemptedRefresh &&
+        lastSuccessfulRefresh === lastAttemptedRefresh &&
+        error === null
+    ) || (
+        status === "stale" &&
+        data &&
+        lastAttemptedRefresh &&
+        lastSuccessfulRefresh &&
+        timestampOrder(lastSuccessfulRefresh, lastAttemptedRefresh) <= 0 &&
+        error
+    ) || (
+        status === "missing" &&
+        value.data === null &&
+        lastAttemptedRefresh &&
+        lastSuccessfulRefresh === lastAttemptedRefresh &&
+        error === null
+    ) || (
+        status === "unavailable" &&
+        value.data === null &&
+        (
+            (
+                value.lastAttemptedRefresh === null &&
+                value.lastSuccessfulRefresh === null &&
+                value.error === null
+            ) ||
+            (
+                lastAttemptedRefresh &&
+                value.lastSuccessfulRefresh === null &&
+                error?.kind === "fetch_failed"
+            )
+        )
+    ) || (
+        ["unavailable", "malformed", "forbidden", "partial"].includes(status) &&
+        value.data === null &&
+        lastAttemptedRefresh &&
+        (
+            value.lastSuccessfulRefresh === null ||
+            (
+                lastSuccessfulRefresh &&
+                timestampOrder(lastSuccessfulRefresh, lastAttemptedRefresh) <= 0
+            )
+        ) &&
+        error &&
+        (
+            (status === "unavailable" && error.kind === "fetch_failed") ||
+            (status === "malformed" && error.kind === "malformed") ||
+            (status === "forbidden" && error.kind === "permission_denied") ||
+            (status === "partial" && error.kind === "partial")
+        )
+    );
+    if (!valid) return emptySource();
     return {
         revision: AGENT_IDENTITY_SOURCE_REVISION,
+        schema: AGENT_IDENTITY_SOURCE_SCHEMA,
+        schemaVersion: AGENT_IDENTITY_SOURCE_VERSION,
+        producer: SOURCE_PRODUCER,
         data,
-        lastAttemptedRefresh: timestamp(value.lastAttemptedRefresh),
-        lastSuccessfulRefresh: timestamp(value.lastSuccessfulRefresh),
-        status: data || ["missing", "unavailable", "malformed", "forbidden", "partial"].includes(status)
-            ? status
-            : "unavailable",
-        error: errorKind
-            ? {
-                kind: errorKind,
-                message: clean(value.error?.message, MAX_ERROR_LENGTH) ||
-                    "Agent identity provenance is unavailable.",
-            }
-            : null,
+        lastAttemptedRefresh,
+        lastSuccessfulRefresh,
+        status,
+        error,
     };
 }
 
@@ -473,6 +749,9 @@ export function parseWorkAgentBindings(value, registry, context) {
         if (!isRecord(raw)) {
             diagnostics.push(`${path}: binding must be an object`);
             continue;
+        }
+        if (!hasOnlyKeys(raw, BINDING_KEYS)) {
+            diagnostics.push(`${path}: binding contains unsupported fields`);
         }
         const issueNumber = issueReference(raw.issue);
         const epicIssueNumber = issueReference(raw.epic_issue);
@@ -665,6 +944,14 @@ export function agentIdentitiesForGoals({
                 binding?.binding_schema === WORK_AGENT_BINDING_SCHEMA ||
                 binding?.registry_schema === AGENT_PROVENANCE_SCHEMA);
             if (!authoritative) continue;
+            const actorId = artifact?.author?.databaseId;
+            const actorType = clean(artifact?.author?.type, 40).toLowerCase();
+            if (!positiveInteger(actorId) ||
+                actorType !== "bot" ||
+                !normalizedSource.data.registry.trustedCommentActorIds.includes(actorId)) {
+                invalid = "Authoritative work-agent binding comment actor is not trusted.";
+                break;
+            }
             try {
                 const bindings = parseWorkAgentBindings(
                     artifact.bindings,
@@ -766,5 +1053,6 @@ export function agentIdentityPolicy() {
         maxRegistryBytes: MAX_REGISTRY_BYTES,
         maxAgents: MAX_AGENTS,
         maxBindings: MAX_BINDINGS,
+        maxTrustedCommentActors: MAX_TRUSTED_COMMENT_ACTORS,
     };
 }

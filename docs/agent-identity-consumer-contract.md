@@ -24,6 +24,7 @@ must equal it.
   "schema_version": 1,
   "revision": 4,
   "generated_at": "2026-09-21T20:00:00.000Z",
+  "trusted_comment_actor_ids": [41898282],
   "agents": {
     "runtime-engineer": {
       "display_name": "Kepler",
@@ -42,18 +43,34 @@ must equal it.
 }
 ```
 
-Squadcaster accepts only schema version 1, a positive monotonic revision, valid
-timestamps, canonical lowercase kebab-case IDs, unique case-folded display
-names, valid lifecycle records, and avatar paths confined to the owning
-`.squad/agents/{id}/` directory. Unsupported roots, malformed records,
-duplicate identities, partial registries, capped responses, revision
-regressions, and same-revision content changes fail closed.
+`trusted_comment_actor_ids` is the repository-configured allowlist of immutable
+GitHub actor database IDs permitted to publish identity bindings. It may contain
+only unique positive integers. A comment is trusted only when its REST payload
+identifies the allowlisted actor as type `Bot`; login text, a `[bot]` suffix,
+`authorAssociation`, and producer fields asserted in the comment are never
+authority. An absent or empty allowlist therefore fails closed.
+
+Squadcaster accepts only schema version 1, a positive monotonic revision,
+canonical `YYYY-MM-DDTHH:mm:ss.sssZ` timestamps that round-trip exactly,
+canonical lowercase kebab-case IDs, unique case-folded display names, valid
+lifecycle records, and avatar paths confined to the owning
+`.squad/agents/{id}/` directory. `created_at <= updated_at <= generated_at`;
+retired records additionally require
+`created_at <= retired_at <= updated_at`, while non-retired records must omit
+`retired_at`. Unsupported roots, malformed records, duplicate identities,
+partial registries, capped responses, revision regressions, and same-revision
+content changes fail closed.
 
 Rename and recast preserve the object key and `created_at`. Retirement
 preserves a tombstone with `status: "retired"` and `retired_at`; the ID is
 never transferred to another logical agent. A retired binding remains
 historically attributable by ID, but Squadcaster does not render the former
-name or avatar as current.
+name or avatar as current. Every higher registry revision must retain every
+previous ID, preserve immutable `created_at` and `role`, advance
+`generated_at`, avoid regressing `updated_at`, and advance `updated_at` for any
+mutable change. Retirement must create a valid tombstone; reactivation must
+clear `retired_at`. Any continuity failure rejects the complete replacement
+atomically and retains only the prior validated cache as stale.
 
 ## Authoritative work binding
 
@@ -84,8 +101,17 @@ registry:
 The complete binding array is validated atomically. Squadcaster rejects
 missing, empty, malformed, partially valid, wrong-repository, wrong-origin,
 unsupported or future-version, unknown-ID, future-revision, duplicate,
-conflicting, mixed-revision, capped, or inconsistent evidence. It does not
-salvage valid-looking rows.
+conflicting, mixed-revision, capped, extra-field, or inconsistent evidence. It
+does not salvage valid-looking rows.
+
+Before parsing a binding, Squadcaster re-fetches each identity-bearing issue
+comment through GitHub's GET-only REST endpoint and preserves the immutable
+actor database ID and actor type. All identity-bearing comments must come from
+an allowlisted bot ID. Malformed JSON carrying identity schema markers,
+identity-bearing JSON without the activation envelope, duplicate identity
+documents, extra binding fields, and conflicting identity blocks emit
+malformed candidates and fail the complete identity source closed. Unrelated
+JSON without identity schema markers remains ordinary comment content.
 
 `agent_id: null` is accepted only with an explicit producer omission reason:
 `external-agent`, `non-roster`, or `legacy-plan-missing-id`. If any task in an
@@ -151,6 +177,15 @@ The registry requires one repository Contents read. Squadcaster persists only
 the validated normalized registry envelope, keyed by the returned immutable
 blob SHA. Identity refresh timestamps are independent of issues, pull
 requests, workflow runs, rosters, and implementation provenance.
+
+The persisted source envelope requires exact revision 1,
+`squadcaster-agent-identity-source/v1`, source schema version 1, and producer
+`squadcaster`. Its data envelope requires
+`squadcaster-agent-identity-cache/v1`, data schema version 1, and producer
+`squad`. Unknown/future revisions, producer or schema mismatches, extra outer
+fields, noncanonical timestamps, and contradictory status/data/error/timestamp
+combinations are discarded rather than coerced to version 1. Only internally
+consistent `fresh` or `stale` envelopes can resolve identity.
 
 | Condition | Source status | Cache behavior |
 |---|---|---|

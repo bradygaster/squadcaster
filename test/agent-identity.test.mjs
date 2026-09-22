@@ -5,6 +5,7 @@ import {
     agentIdentitiesForGoals,
     agentIdentityPolicy,
     discoverAgentIdentityProvenance,
+    normalizePersistedAgentIdentitySource,
     parseAgentProvenanceRegistry,
     parseWorkAgentBindings,
 } from "../agent-identity.mjs";
@@ -36,7 +37,11 @@ function content(value = registryWire, overrides = {}) {
 function source(overrides = {}) {
     return {
         revision: 1,
+        schema: "squadcaster-agent-identity-source/v1",
+        schemaVersion: 1,
+        producer: "squadcaster",
         data: {
+            schema: "squadcaster-agent-identity-cache/v1",
             schemaVersion: 1,
             producer: "squad",
             repository: "octodemo/demo",
@@ -59,6 +64,11 @@ function artifact(bindings = bindingWire) {
         validation: "supported",
         validationReason: "",
         bindings,
+        author: {
+            databaseId: 41898282,
+            login: "renamed-squad-app[bot]",
+            type: "Bot",
+        },
     };
 }
 
@@ -91,6 +101,11 @@ function activationComment(bindings = bindingWire) {
     return {
         createdAt: "2026-09-22T12:00:00Z",
         url: "https://github.com/octodemo/demo/issues/10#issuecomment-1",
+        author: {
+            databaseId: 41898282,
+            login: "renamed-squad-app[bot]",
+            type: "Bot",
+        },
         body: `Activation bindings:
 \`\`\`json
 ${JSON.stringify(bindings)}
@@ -182,6 +197,7 @@ test("fails closed on missing, duplicate, conflicting, future, and partial bindi
         [{ ...bindingWire[0], repository: "octodemo/other" }],
         [{ ...bindingWire[0], registry_revision: 3 }],
         [{ ...bindingWire[0], agent_id: "unknown-agent" }],
+        [{ ...bindingWire[0], attacker_controlled: true }],
         [...bindingWire, { ...bindingWire[0], task: "2" }],
         [...bindingWire, {
             ...bindingWire[0],
@@ -260,6 +276,20 @@ test("separates missing, forbidden, and transport failures from successful fresh
     assert.equal(missing.status, "missing");
     assert.equal(missing.data, null);
     assert.equal(missing.lastSuccessfulRefresh, missing.lastAttemptedRefresh);
+    const unavailableAfterMissing = await discoverAgentIdentityProvenance({
+        runJson: async () => {
+            throw new Error("network timeout");
+        },
+        cwd: "/repo",
+        repository: "octodemo/demo",
+        previous: { sourceState: { agentIdentity: missing } },
+        attemptedAt: "2026-09-22T14:00:00.000Z",
+    });
+    assert.equal(
+        normalizePersistedAgentIdentitySource(unavailableAfterMissing)
+            .lastSuccessfulRefresh,
+        missing.lastSuccessfulRefresh,
+    );
 
     for (const [message, status, kind] of [
         ["HTTP 403: Resource not accessible", "stale", "permission_denied"],
@@ -286,6 +316,7 @@ test("resolves only explicit ids and preserves rename and retirement semantics",
         source: source(),
         repository: "octodemo/demo",
     });
+
     assert.equal(identities.get(12).status, "resolved");
     assert.equal(identities.get(12).record.id, "runtime-engineer");
     assert.equal(identities.get(12).record.displayName, "Kepler");
@@ -310,9 +341,11 @@ test("resolves only explicit ids and preserves rename and retirement semantics",
 
     const retiredRegistry = structuredClone(renamedRegistry);
     retiredRegistry.revision = 4;
+    retiredRegistry.generatedAt = "2026-09-22T15:00:00.000Z";
     retiredRegistry.agents[0] = {
         ...retiredRegistry.agents[0],
         status: "retired",
+        updatedAt: "2026-09-22T14:00:00.000Z",
         retiredAt: "2026-09-22T14:00:00.000Z",
     };
     const retired = agentIdentitiesForGoals({
@@ -329,6 +362,334 @@ test("resolves only explicit ids and preserves rename and retirement semantics",
     assert.equal(retired.get(12).status, "deleted");
     assert.equal(retired.get(12).record, null);
     assert.equal(retired.get(12).binding.agentId, "runtime-engineer");
+});
+
+test("trusts immutable allowlisted bot ids, not login or author association", () => {
+    const trusted = buildActivitySnapshot({
+        repository: {
+            name: "demo",
+            nameWithOwner: "octodemo/demo",
+        },
+        issues: [issue(10, [activationComment()]), issue(11), issue(12)],
+        sourceState: { agentIdentity: source() },
+    });
+    assert.equal(
+        trusted.goals.find((goal) => goal.issue.number === 12).agentIdentity.status,
+        "resolved",
+    );
+    const persisted = normalizePersistedState({ activity: trusted });
+    assert.equal(
+        persisted.activity.goals.find((goal) =>
+            goal.issue.number === 10).artifacts[0].author.databaseId,
+        41898282,
+    );
+
+    for (const [author, candidateSource] of [
+        [{ databaseId: 999, login: "github-actions[bot]", type: "Bot" }, source()],
+        [{ databaseId: null, login: "renamed-squad-app[bot]", type: "Bot" }, source()],
+        [{ databaseId: 41898282, login: "renamed-squad-app[bot]", type: "User" }, source()],
+        [
+            { databaseId: 41898282, login: "renamed-squad-app[bot]", type: "Bot" },
+            source({
+                data: {
+                    ...source().data,
+                    registry: {
+                        ...parsedRegistry,
+                        trustedCommentActorIds: [],
+                    },
+                },
+            }),
+        ],
+    ]) {
+        const comment = activationComment();
+        comment.author = author;
+        comment.authorAssociation = "OWNER";
+        const snapshot = buildActivitySnapshot({
+            repository: {
+                name: "demo",
+                nameWithOwner: "octodemo/demo",
+            },
+            issues: [issue(10, [comment]), issue(11), issue(12)],
+            sourceState: { agentIdentity: candidateSource },
+        });
+        const identity = snapshot.goals.find((goal) =>
+            goal.issue.number === 12).agentIdentity;
+        assert.equal(identity.status, "unknown");
+        assert.equal(identity.source.status, "malformed");
+        assert.match(identity.source.error.message, /actor is not trusted/i);
+    }
+});
+
+test("fails the complete identity source closed on malformed identity evidence only", () => {
+    const trustedAuthor = activationComment().author;
+    const candidates = [
+        "```json\n{\"binding_schema\":\"squad-work-agent-binding/v1\"\n```",
+        "```json\n{\"binding_schema\":\"squad-work-agent-binding/v1\"}\n```",
+        `${activationComment().body}\n\`\`\`json\n${JSON.stringify(bindingWire)}\n\`\`\``,
+        activationComment([{
+            ...bindingWire[0],
+            unexpected_identity_field: "attacker",
+        }]).body,
+        activationComment().body.replace(
+            '"producer":"squad"',
+            '"producer":"squad","producer":"squad"',
+        ),
+        activationComment().body.replace(
+            '"phases":[]',
+            '"phases":[],"agent_id":"runtime-engineer"',
+        ),
+        `${activationComment().body}\nStructured data:\n\`\`\`json\n${JSON.stringify({
+            squad_artifact: "phases-activated",
+            schema_version: "1",
+            origin_issue: 10,
+            phases: [],
+        })}\n\`\`\``,
+    ];
+    for (const body of candidates) {
+        const snapshot = buildActivitySnapshot({
+            repository: {
+                name: "demo",
+                nameWithOwner: "octodemo/demo",
+            },
+            issues: [
+                issue(10, [{
+                    ...activationComment(),
+                    body,
+                    author: trustedAuthor,
+                }]),
+                issue(11),
+                issue(12),
+            ],
+            sourceState: { agentIdentity: source() },
+        });
+        const identity = snapshot.goals.find((goal) =>
+            goal.issue.number === 12).agentIdentity;
+        assert.equal(identity.status, "unknown");
+        assert.equal(identity.source.status, "malformed");
+    }
+
+    const unrelated = buildActivitySnapshot({
+        repository: {
+            name: "demo",
+            nameWithOwner: "octodemo/demo",
+        },
+        issues: [
+            issue(10, [{
+                body: "Diagnostic:\n```json\n{\"status\":\"ok\",\"agent_id\":\"display-only\"}\n```",
+                createdAt: "2026-09-22T12:00:00Z",
+                author: { databaseId: 999, login: "person", type: "User" },
+            }]),
+            issue(11),
+            issue(12),
+        ],
+        sourceState: { agentIdentity: source() },
+    });
+    assert.equal(
+        unrelated.goals.find((goal) => goal.issue.number === 12).agentIdentity.source.status,
+        "missing",
+    );
+});
+
+test("rejects inconsistent persisted source envelopes instead of coercing them", () => {
+    const valid = source();
+    assert.equal(normalizePersistedAgentIdentitySource(valid).status, "fresh");
+    const stale = normalizePersistedAgentIdentitySource(source({
+        status: "stale",
+        lastAttemptedRefresh: "2026-09-22T13:00:00.000Z",
+        error: { kind: "fetch_failed", message: "timeout" },
+    }));
+    assert.equal(stale.status, "stale");
+    assert.equal(stale.data.registry.revision, 2);
+    const unavailableAfterMissing = normalizePersistedAgentIdentitySource({
+        ...source(),
+        data: null,
+        status: "unavailable",
+        lastAttemptedRefresh: "2026-09-22T13:00:00.000Z",
+        lastSuccessfulRefresh: "2026-09-22T12:00:00.000Z",
+        error: { kind: "fetch_failed", message: "timeout" },
+    });
+    assert.equal(unavailableAfterMissing.status, "unavailable");
+    assert.equal(
+        unavailableAfterMissing.lastSuccessfulRefresh,
+        "2026-09-22T12:00:00.000Z",
+    );
+    for (const candidate of [
+        { ...valid, revision: 2 },
+        { ...valid, schema: "future/v2" },
+        { ...valid, schemaVersion: 2 },
+        { ...valid, producer: "squad" },
+        { ...valid, data: { ...valid.data, schema: "future/v2" } },
+        { ...valid, data: { ...valid.data, producer: "attacker" } },
+        {
+            ...valid,
+            data: {
+                ...valid.data,
+                registry: {
+                    ...parsedRegistry,
+                    unsupported: true,
+                },
+            },
+        },
+        {
+            ...valid,
+            data: {
+                ...valid.data,
+                registry: {
+                    ...parsedRegistry,
+                    agents: [
+                        parsedRegistry.agents[0],
+                        parsedRegistry.agents[0],
+                    ],
+                },
+            },
+        },
+        { ...valid, status: "missing" },
+        { ...valid, status: "fresh", lastSuccessfulRefresh: null },
+        { ...valid, lastAttemptedRefresh: "2026-09-22T12:00:00Z" },
+        { ...valid, status: "fresh", error: { kind: "malformed", message: "contradiction" } },
+        {
+            ...valid,
+            status: "partial",
+            error: { kind: "partial", message: "partial" },
+        },
+        {
+            ...valid,
+            status: "malformed",
+            error: { kind: "malformed", message: "malformed" },
+        },
+        {
+            ...valid,
+            status: "forbidden",
+            error: { kind: "permission_denied", message: "forbidden" },
+        },
+    ]) {
+        const normalized = normalizePersistedAgentIdentitySource(candidate);
+        assert.equal(normalized.status, "unavailable");
+        assert.equal(normalized.data, null);
+        assert.equal(normalized.lastSuccessfulRefresh, null);
+    }
+});
+
+test("enforces registry continuity atomically while preserving stale cache", async () => {
+    const fresh = source();
+    const refresh = (wire) => discoverAgentIdentityProvenance({
+        runJson: async () => content(wire, { sha: `blob-${wire.revision}` }),
+        cwd: "/repo",
+        repository: "octodemo/demo",
+        previous: { sourceState: { agentIdentity: fresh } },
+        attemptedAt: "2026-09-22T13:00:00.000Z",
+    });
+    const next = structuredClone(registryWire);
+    next.revision = 3;
+    next.generated_at = "2026-09-22T13:00:00.000Z";
+
+    const removed = structuredClone(next);
+    delete removed.agents["runtime-engineer"];
+    const tombstoneRemoved = await refresh(removed);
+    assert.equal(tombstoneRemoved.status, "stale");
+    assert.equal(tombstoneRemoved.data.registry.revision, 2);
+
+    for (const mutate of [
+        (wire) => { wire.agents["runtime-engineer"].created_at = "2026-09-19T20:00:00.000Z"; },
+        (wire) => { wire.agents["runtime-engineer"].role = "Transferred identity"; },
+        (wire) => {
+            wire.agents["runtime-engineer"].status = "retired";
+            wire.agents["runtime-engineer"].retired_at = "2026-09-20T19:00:00.000Z";
+            wire.agents["runtime-engineer"].updated_at = "2026-09-22T12:00:00.000Z";
+        },
+    ]) {
+        const candidate = structuredClone(next);
+        mutate(candidate);
+        const result = await refresh(candidate);
+        assert.equal(result.status, "stale");
+        assert.equal(result.data.registry.revision, 2);
+    }
+
+    const retired = structuredClone(next);
+    retired.agents["runtime-engineer"].status = "retired";
+    retired.agents["runtime-engineer"].retired_at = "2026-09-22T12:00:00.000Z";
+    retired.agents["runtime-engineer"].updated_at = "2026-09-22T12:00:00.000Z";
+    const validRetirement = await refresh(retired);
+    assert.equal(validRetirement.status, "fresh");
+    assert.equal(validRetirement.data.registry.agents[0].status, "retired");
+
+    const removedTombstone = structuredClone(retired);
+    removedTombstone.revision = 4;
+    removedTombstone.generated_at = "2026-09-22T14:00:00.000Z";
+    delete removedTombstone.agents["runtime-engineer"];
+    const rejectedTombstoneRemoval = await discoverAgentIdentityProvenance({
+        runJson: async () => content(removedTombstone, { sha: "blob-4-removed" }),
+        cwd: "/repo",
+        repository: "octodemo/demo",
+        previous: { sourceState: { agentIdentity: validRetirement } },
+        attemptedAt: "2026-09-22T14:00:00.000Z",
+    });
+    assert.equal(rejectedTombstoneRemoval.status, "stale");
+    assert.equal(rejectedTombstoneRemoval.data.registry.agents[0].status, "retired");
+
+    const invalidReactivation = structuredClone(retired);
+    invalidReactivation.revision = 4;
+    invalidReactivation.generated_at = "2026-09-22T14:00:00.000Z";
+    invalidReactivation.agents["runtime-engineer"].status = "active";
+    delete invalidReactivation.agents["runtime-engineer"].retired_at;
+    const rejectedReactivation = await discoverAgentIdentityProvenance({
+        runJson: async () => content(invalidReactivation, { sha: "blob-4-invalid" }),
+        cwd: "/repo",
+        repository: "octodemo/demo",
+        previous: { sourceState: { agentIdentity: validRetirement } },
+        attemptedAt: "2026-09-22T14:00:00.000Z",
+    });
+    assert.equal(rejectedReactivation.status, "stale");
+
+    const reactivated = structuredClone(retired);
+    reactivated.revision = 4;
+    reactivated.generated_at = "2026-09-22T14:00:00.000Z";
+    reactivated.agents["runtime-engineer"].status = "active";
+    reactivated.agents["runtime-engineer"].updated_at = "2026-09-22T14:00:00.000Z";
+    delete reactivated.agents["runtime-engineer"].retired_at;
+    const validReactivation = await discoverAgentIdentityProvenance({
+        runJson: async () => content(reactivated, { sha: "blob-4" }),
+        cwd: "/repo",
+        repository: "octodemo/demo",
+        previous: { sourceState: { agentIdentity: validRetirement } },
+        attemptedAt: "2026-09-22T14:00:00.000Z",
+    });
+    assert.equal(validReactivation.status, "fresh");
+    assert.equal(validReactivation.data.registry.agents[0].status, "active");
+});
+
+test("rejects noncanonical, impossible, and misordered lifecycle timestamps", () => {
+    const timestampMutations = [
+        (wire) => { wire.generated_at = "9/21/2026, 8:00:00 PM"; },
+        (wire) => { wire.generated_at = "2026-09-21T20:00:00Z"; },
+        (wire) => { wire.generated_at = "2026-09-21T13:00:00.000-07:00"; },
+        (wire) => { wire.generated_at = "2026-02-30T20:00:00.000Z"; },
+        (wire) => { wire.agents["runtime-engineer"].created_at = "2026-09-20T20:00:00Z"; },
+        (wire) => { wire.agents["runtime-engineer"].updated_at = "2026-09-21T13:00:00.000-07:00"; },
+        (wire) => { wire.agents["runtime-engineer"].created_at = "2026-09-22T20:00:00.000Z"; },
+        (wire) => { wire.agents["runtime-engineer"].updated_at = "2026-09-19T20:00:00.000Z"; },
+        (wire) => {
+            wire.agents["runtime-engineer"].updated_at = "2026-09-21T21:00:00.000Z";
+            wire.agents["runtime-engineer"].retired_at = "2026-09-21T21:00:00Z";
+        },
+        (wire) => { wire.agents["runtime-engineer"].retired_at = "2026-09-19T20:00:00.000Z"; },
+    ];
+    for (const mutate of timestampMutations) {
+        const candidate = structuredClone(registryWire);
+        mutate(candidate);
+        if (candidate.agents["runtime-engineer"].retired_at) {
+            candidate.agents["runtime-engineer"].status = "retired";
+        }
+        assert.throws(
+            () => {
+                const parsed = parseAgentProvenanceRegistry(candidate);
+                if (parsed.completeness !== "complete") {
+                    throw new Error(parsed.diagnostics.join("; "));
+                }
+            },
+            /timestamp|generated_at|created_at|updated_at|retired_at|lifecycle/i,
+        );
+    }
 });
 
 test("builds goal identity from authoritative registry and binding without owner inference", () => {
@@ -400,5 +761,6 @@ test("publishes bounded source policy", () => {
         maxRegistryBytes: 1024 * 1024,
         maxAgents: 500,
         maxBindings: 500,
+        maxTrustedCommentActors: 20,
     });
 });
