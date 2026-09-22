@@ -11,6 +11,7 @@ import {
     discoverImplementationProvenance,
     selectImplementationProvenancePullRequests,
 } from "./implementation-provenance.mjs";
+import { discoverAgentIdentity } from "./agent-identity.mjs";
 
 const SOURCES = [
     {
@@ -880,7 +881,6 @@ export class GitHubSquadActivityAdapter {
             "subIssues",
             subIssuesExhaustive,
         );
-
         const provisional = buildActivitySnapshot({
             repository,
             members,
@@ -925,6 +925,14 @@ export class GitHubSquadActivityAdapter {
                 restBudget,
             });
         }
+        sourceState.agentIdentity = await discoverAgentIdentity({
+            runJson: this.runJson,
+            cwd: this.cwd,
+            repository: repository?.nameWithOwner || this.repository,
+            previous,
+            attemptedAt,
+            reserveRequest: () => reserveRestRequest(restBudget),
+        });
 
         const defaultBranch = repository?.defaultBranchRef?.name || repository?.defaultBranch;
         const bootstrap = repository?.nameWithOwner && defaultBranch
@@ -963,6 +971,12 @@ export class GitHubSquadActivityAdapter {
                 ? {
                     source: "implementation provenance",
                     message: sourceState.implementationProvenance.error,
+                }
+                : null,
+            sourceState.agentIdentity.error
+                ? {
+                    source: "agent identity",
+                    message: sourceState.agentIdentity.error,
                 }
                 : null,
             ...bootstrapErrors,

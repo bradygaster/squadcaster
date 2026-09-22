@@ -448,6 +448,67 @@ test.afterEach(async () => {
     await fixture.close();
 });
 
+test("renders only authoritative agent identity and avatar semantics", async ({ page }) => {
+    const next = fixture.state();
+    const item = next.activity.goals[0];
+    item.agentIdentity = {
+        status: "resolved",
+        record: {
+            id: "runtime-engineer",
+            displayName: "Kepler",
+            role: "Runtime Engineer",
+            universe: "descriptive",
+            lifecycleStatus: "active",
+            avatar: {
+                ref: ".squad/agents/runtime-engineer/avatar.png",
+                dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            },
+        },
+        binding: {
+            relation: "task",
+            task: "1",
+            epic: "1.1",
+            registryRevision: 4,
+        },
+        source: {
+            revision: 1,
+            status: "fresh",
+            lastAttemptedRefresh: "2026-09-22T12:00:00.000Z",
+            lastSuccessfulRefresh: "2026-09-22T12:00:00.000Z",
+            avatarStatus: "fresh",
+            error: "",
+        },
+    };
+    fixture.emit(next);
+    await page.locator('[data-action="expand-stage"][data-phase="queued"]').click();
+    await page.getByRole("button", {
+        name: /Plan a deliberately long mission control workflow title/,
+    }).click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer.getByRole("heading", { name: "Agent identity" })).toBeVisible();
+    await expect(drawer.getByText("Kepler", { exact: true })).toBeVisible();
+    await expect(drawer.getByText(/Immutable ID: runtime-engineer/)).toBeVisible();
+    await expect(drawer.getByAltText("Kepler avatar")).toBeVisible();
+    await expect(drawer.getByText("Wrong owner", { exact: true })).toHaveCount(0);
+
+    const unresolved = fixture.state();
+    unresolved.activity.goals[0].agentIdentity = {
+        status: "unknown",
+        record: null,
+        binding: null,
+        source: {
+            revision: 1,
+            status: "missing",
+            lastAttemptedRefresh: "2026-09-22T12:10:00.000Z",
+            lastSuccessfulRefresh: "2026-09-22T12:10:00.000Z",
+            error: "",
+        },
+    };
+    fixture.emit(unresolved);
+    await expect(drawer.getByText(/Unknown agent/)).toBeVisible();
+    await expect(drawer.locator(".agent-avatar")).toHaveCount(0);
+});
+
 for (const viewport of [
     { width: 320, height: 800 },
     { width: 375, height: 812 },

@@ -26,7 +26,7 @@ test("normalizes legacy state without restoring mutation fields", () => {
         onboarding: { cast: { command: "/squad cast" } },
     });
 
-    assert.equal(normalized.version, 5);
+    assert.equal(normalized.version, 6);
     assert.equal(normalized.activity.schemaVersion, 3);
     assert.equal(normalized.activity.dayBoundary.snapshotDay, "2026-09-21");
     assert.equal(normalized.activity.fetchedAt, "2026-09-21T12:00:00.000Z");
@@ -50,7 +50,7 @@ test("normalizes legacy state without restoring mutation fields", () => {
 test("defaults malformed and unsupported persisted values safely", () => {
     for (const value of [null, undefined, "legacy", 42, [], { activity: { schemaVersion: 1 } }]) {
         const normalized = normalizePersistedState(value);
-        assert.equal(normalized.version, 5);
+        assert.equal(normalized.version, 6);
         assert.deepEqual(normalized.activity, emptyActivity());
     }
 });
@@ -318,7 +318,13 @@ test("drops unvalidated stable agent identity recursively from persisted activit
         },
     });
 
-    assert.equal(containsAgentIdentity(normalized), false);
+    assert.equal(containsAgentIdentity(normalized), true);
+    assert.equal(normalized.activity.goals[0].agentIdentity.status, "unknown");
+    assert.equal(normalized.activity.goals[0].agentIdentity.record, null);
+    assert.equal("agentIdentity" in normalized.activity.goals[0].owner, false);
+    assert.equal("agentIdentity" in normalized.activity.goals[0].issue, false);
+    assert.equal("agentIdentity" in normalized.activity.goals[0].pullRequests[0], false);
+    assert.equal("agentIdentity" in normalized.activity.goals[0].workflowRuns[0], false);
     assert.equal(normalized.activity.goals[0].owner.name, "octocat");
     assert.equal(normalized.activity.goals[0].pullRequests[0].reviews[0].actor.login, "octocat");
     assert.equal(normalized.activity.goals[0].workflowRuns[0].id, 77);
@@ -484,9 +490,197 @@ test("persists only validated normalized implementation provenance paths", () =>
         },
     });
 
+    test("restores only validated agent identity cache revision and envelopes", () => {
+        const registry = {
+            schema: "squad-agent-provenance/v1",
+            schemaVersion: 1,
+            revision: 4,
+            generatedAt: "2026-09-22T12:00:00.000Z",
+            agents: {
+                "runtime-engineer": {
+                    id: "runtime-engineer",
+                    displayName: "Kepler",
+                    role: "Runtime Engineer",
+                    universe: "descriptive",
+                    status: "active",
+                    createdAt: "2026-09-20T12:00:00.000Z",
+                    updatedAt: "2026-09-22T12:00:00.000Z",
+                    retiredAt: null,
+                    avatar: {
+                        kind: "repository-path",
+                        path: ".squad/agents/runtime-engineer/avatar.png",
+                    },
+                },
+            },
+        };
+        const source = {
+            revision: 1,
+            status: "fresh",
+            lastAttemptedRefresh: "2026-09-22T12:00:00.000Z",
+            lastSuccessfulRefresh: "2026-09-22T12:00:00.000Z",
+            transportRevision: "blob-sha",
+            registry,
+            avatars: {
+                "runtime-engineer": {
+                    status: "fresh",
+                    reference: registry.agents["runtime-engineer"].avatar,
+                    revision: "avatar-sha",
+                    fetchedAt: "2026-09-22T12:00:00.000Z",
+                    dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+                    error: "",
+                },
+            },
+            diagnostics: [],
+            error: "",
+        };
+        const identity = {
+            status: "resolved",
+            record: {
+                id: "runtime-engineer",
+                displayName: "Kepler",
+                role: "Runtime Engineer",
+                universe: "descriptive",
+                lifecycleStatus: "active",
+                createdAt: "2026-09-20T12:00:00.000Z",
+                updatedAt: "2026-09-22T12:00:00.000Z",
+                retiredAt: null,
+                avatar: {
+                    ref: ".squad/agents/runtime-engineer/avatar.png",
+                    dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+                },
+            },
+            binding: {
+                relation: "task",
+                task: "1",
+                epic: "1.1",
+                registryRevision: 4,
+            },
+            source: {
+                revision: 1,
+                status: "fresh",
+                lastAttemptedRefresh: "2026-09-22T12:00:00.000Z",
+                lastSuccessfulRefresh: "2026-09-22T12:00:00.000Z",
+                avatarStatus: "fresh",
+                error: "",
+            },
+        };
+        const restored = normalizePersistedState({
+            activity: {
+                ...emptyActivity(),
+                fetchedAt: "2026-09-22T12:00:00.000Z",
+                sourceState: { agentIdentity: source },
+                repository: { nameWithOwner: "octodemo/demo" },
+                goals: [{
+                    id: "octodemo/demo#45",
+                    issue: { number: 45 },
+                    artifacts: [{
+                        kind: "activated",
+                        originIssue: 45,
+                        validation: "supported",
+                        validationReason: "",
+                        activationCandidate: true,
+                        createdAt: "2026-09-22T12:00:00.000Z",
+                        bindings: [{
+                            binding_schema: "squad-work-agent-binding/v1",
+                            binding_version: 1,
+                            producer: "squad",
+                            repository: "octodemo/demo",
+                            origin_issue: 45,
+                            artifact: "activated",
+                            registry_schema: "squad-agent-provenance/v1",
+                            registry_revision: 4,
+                            task: "1",
+                            issue: "#47",
+                            epic: "1.1",
+                            epic_issue: "#46",
+                            agent_id: "runtime-engineer",
+                            epic_agent_ids: ["runtime-engineer"],
+                        }],
+                    }],
+                }, {
+                    id: "octodemo/demo#47",
+                    issue: { number: 47 },
+                    agentIdentity: identity,
+                }],
+            },
+        });
+        assert.equal(restored.version, 6);
+        assert.equal(restored.activity.sourceState.agentIdentity.registry.revision, 4);
+        const restoredTask = restored.activity.goals.find((goal) => goal.issue.number === 47);
+        assert.equal(restoredTask.agentIdentity.record.id, "runtime-engineer");
+        assert.match(
+            restoredTask.agentIdentity.record.avatar.dataUrl,
+            /^data:image\/png;base64,/,
+        );
+
+        const mismatched = normalizePersistedState({
+            activity: {
+                ...emptyActivity(),
+                fetchedAt: "2026-09-22T12:00:00.000Z",
+                sourceState: {
+                    agentIdentity: { ...source, revision: 2 },
+                },
+                goals: [{
+                    id: "octodemo/demo#47",
+                    issue: { number: 47 },
+                    agentIdentity: identity,
+                }],
+            },
+        });
+        assert.equal(mismatched.activity.sourceState.agentIdentity, null);
+
+        const mismatchedAvatar = normalizePersistedState({
+            activity: {
+                ...emptyActivity(),
+                fetchedAt: "2026-09-22T12:00:00.000Z",
+                sourceState: {
+                    agentIdentity: {
+                        ...source,
+                        avatars: {
+                            "runtime-engineer": {
+                                ...source.avatars["runtime-engineer"],
+                                reference: {
+                                    kind: "repository-path",
+                                    path: ".squad/agents/runtime-engineer/../other.png",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        assert.deepEqual(mismatchedAvatar.activity.sourceState.agentIdentity.avatars, {});
+
+        const invalidBytes = normalizePersistedState({
+            activity: {
+                ...emptyActivity(),
+                fetchedAt: "2026-09-22T12:00:00.000Z",
+                sourceState: {
+                    agentIdentity: {
+                        ...source,
+                        avatars: {
+                            "runtime-engineer": {
+                                ...source.avatars["runtime-engineer"],
+                                dataUrl: "data:image/png;base64,AAAA",
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        assert.equal(
+            invalidBytes.activity.sourceState.agentIdentity.avatars["runtime-engineer"].status,
+            "malformed",
+        );
+        assert.equal(
+            invalidBytes.activity.sourceState.agentIdentity.avatars["runtime-engineer"].dataUrl,
+            "",
+        );
+    });
+
     const source = normalized.activity.sourceState.implementationProvenance;
     const goal = normalized.activity.goals[0];
-    assert.equal(normalized.version, 5);
+    assert.equal(normalized.version, 6);
     assert.equal(source.data[0].record.implementationSessionId, record.implementationSessionId);
     assert.equal("arbitrary" in source, false);
     assert.equal("arbitrary" in source.data[0], false);

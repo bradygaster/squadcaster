@@ -237,7 +237,9 @@ test("does not infer stable agent identity from owners or GitHub participants", 
     });
     assert.equal(goal.pullRequests[0].reviews[0].actor.login, "octocat");
     assert.equal(goal.pullRequests[0].reviewRequests[0].actor.login, "octocat");
-    assert.equal("agentIdentity" in goal, false);
+    assert.equal(goal.agentIdentity.status, "unknown");
+    assert.equal(goal.agentIdentity.record, null);
+    assert.equal(goal.agentIdentity.source.status, "missing");
     assert.equal("avatar" in goal.owner, false);
 });
 

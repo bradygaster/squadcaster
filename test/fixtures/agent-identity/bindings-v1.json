@@ -1,0 +1,20 @@
+[
+  {
+    "binding_schema": "squad-work-agent-binding/v1",
+    "binding_version": 1,
+    "producer": "squad",
+    "repository": "octodemo/demo",
+    "origin_issue": 45,
+    "artifact": "activated",
+    "registry_schema": "squad-agent-provenance/v1",
+    "registry_revision": 4,
+    "task": "1",
+    "issue": "#47",
+    "epic": "1.1",
+    "epic_issue": "#46",
+    "agent_id": "runtime-engineer",
+    "epic_agent_ids": [
+      "runtime-engineer"
+    ]
+  }
+]

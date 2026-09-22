@@ -538,6 +538,23 @@ export function renderHtml() {
     }
     .agent-chip.tone-0 { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--bg)); }
     .agent-chip.tone-1 { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+    .agent-identity {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .agent-avatar {
+      width: 42px;
+      height: 42px;
+      object-fit: cover;
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+      background: var(--soft);
+    }
+    .agent-identity-copy { min-width: 0; }
+    .agent-identity-copy strong, .agent-identity-copy small { display: block; overflow-wrap: anywhere; }
     .agent-chip.tone-2 { border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--bg)); }
     .agent-chip.tone-3 { border-color: var(--focus); background: color-mix(in srgb, var(--focus) 10%, var(--bg)); }
     .agent-more { color: var(--muted); font-size: 11px; font-weight: 400; }
@@ -2109,6 +2126,50 @@ export function renderHtml() {
         </section>\`;
     }
 
+    function agentIdentityHtml(goal) {
+      const identity = goal.agentIdentity || {
+        status: "unknown",
+        record: null,
+        source: { status: "unavailable" },
+      };
+      const sourceStatus = identity.source?.status || "unavailable";
+      const copy = {
+        fresh: "Validated against the authoritative Squad registry and explicit work binding.",
+        stale: "Showing the last validated authoritative identity; the independent identity refresh is stale.",
+        missing: "No authoritative work-to-agent binding was observed.",
+        partial: "The producer registry is partial, so work identity is unresolved.",
+        forbidden: "The authoritative identity source could not be read with current permissions.",
+        malformed: "Authoritative-looking identity evidence was rejected.",
+        unavailable: "The authoritative identity source is unavailable.",
+      };
+      if (!identity.record || identity.status === "unknown") {
+        return \`
+          <section class="drawer-section" aria-labelledby="agent-identity-title">
+            <h3 id="agent-identity-title">Agent identity</h3>
+            <p class="help" role="status"><strong>Unknown agent.</strong> \${esc(copy[sourceStatus] || copy.unavailable)}</p>
+            \${identity.source?.error ? \`<p class="handoff-warning">\${esc(identity.source.error)}</p>\` : ""}
+          </section>\`;
+      }
+      const retired = identity.status === "retired";
+      const avatar = !retired && identity.record.avatar?.dataUrl
+        ? \`<img class="agent-avatar" src="\${esc(identity.record.avatar.dataUrl)}" alt="\${esc(identity.record.displayName)} avatar">\`
+        : "";
+      return \`
+        <section class="drawer-section" aria-labelledby="agent-identity-title">
+          <h3 id="agent-identity-title">Agent identity</h3>
+          <div class="agent-identity">
+            \${avatar}
+            <div class="agent-identity-copy">
+              <strong>\${esc(identity.record.displayName)}</strong>
+              <small>Immutable ID: \${esc(identity.record.id)} · \${esc(identity.record.role)} · \${esc(identity.record.lifecycleStatus)}</small>
+            </div>
+          </div>
+          <p class="help" role="status">\${retired ? "Retired producer tombstone; the immutable ID remains bound and is not reassigned." : esc(copy[sourceStatus] || copy.unavailable)}</p>
+          \${identity.record.avatar && identity.source?.avatarStatus !== "fresh" ? \`<p class="help">Authoritative avatar is \${esc(identity.source.avatarStatus || "unavailable")}; no fallback was generated.</p>\` : ""}
+          \${identity.source?.error ? \`<p class="handoff-warning">\${esc(identity.source.error)}</p>\` : ""}
+        </section>\`;
+    }
+
     function workflowJobItemsHtml(goal) {
       const selectedRuns = (goal.workflowRuns || [])
         .filter(run => run.jobsState?.status && run.jobsState.status !== "not_selected");
@@ -2450,6 +2511,7 @@ export function renderHtml() {
             \${bootstrapDrawerHtml(goal)}
             <section class="drawer-section"><h3>Dependencies</h3>\${dependencyItemsHtml(goal)}</section>
             \${handoffHtml(goal)}
+            \${agentIdentityHtml(goal)}
             \${implementationProvenanceHtml(goal)}
             <section class="drawer-section"><h3>Pull requests and checks</h3>\${pullRequestItemsHtml(goal)}</section>
             <section class="drawer-section"><h3>Workflow runs</h3>\${workflowItemsHtml(goal)}</section>
@@ -2473,6 +2535,7 @@ export function renderHtml() {
             </div>
             <div class="goal-meta">
               <span><strong>Owner:</strong> \${esc(goal.owner?.name || "Unknown")}</span>
+              \${goal.agentIdentity?.record ? \`<span><strong>Agent:</strong> \${esc(goal.agentIdentity.record.displayName)} <code>\${esc(goal.agentIdentity.record.id)}</code></span>\` : ""}
               <span><strong>Updated:</strong> \${esc(formatTime(goal.updatedAt))}</span>
               <span><strong>PRs:</strong> \${esc(goal.pullRequests.length)}</span>
               <span><strong>Runs:</strong> \${esc(goal.workflowRuns.length)}</span>

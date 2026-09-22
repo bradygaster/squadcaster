@@ -4,6 +4,7 @@ import {
     reconcileHandoffDependencies,
 } from "./handoff-readiness.mjs";
 import { BOOTSTRAP_IDENTIFIERS, BOOTSTRAP_STATUSES } from "./bootstrap-classifier.mjs";
+import { resolveAgentIdentities } from "./agent-identity.mjs";
 
 const ACTIVE_STATES = new Set(["queued", "researching", "implementing", "reviewing", "blocked", "failed"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure", "action_required"]);
@@ -1395,6 +1396,17 @@ export function buildActivitySnapshot({
             ),
             revision: Number(sourceState?.implementationProvenance?.revision) || 1,
         },
+        agentIdentity: sourceState?.agentIdentity || {
+            revision: 1,
+            status: "missing",
+            lastAttemptedRefresh: null,
+            lastSuccessfulRefresh: null,
+            transportRevision: "",
+            registry: null,
+            avatars: {},
+            diagnostics: [],
+            error: "",
+        },
     };
     issues = normalizedSources.issues.data;
     pullRequests = normalizedSources.pullRequests.data;
@@ -1727,6 +1739,31 @@ export function buildActivitySnapshot({
         goals.push(goal);
     }
 
+    const agentIdentities = resolveAgentIdentities({
+        repository: repositoryName,
+        issues: goals,
+        source: normalizedSources.agentIdentity,
+    });
+    for (const goal of goals) {
+        goal.agentIdentity = agentIdentities.get(Number(goal.issue.number)) || {
+            status: "unknown",
+            record: null,
+            binding: null,
+            source: {
+                revision: 1,
+                status: normalizedSources.agentIdentity.status === "fresh"
+                    ? "missing"
+                    : normalizedSources.agentIdentity.status,
+                lastAttemptedRefresh:
+                    normalizedSources.agentIdentity.lastAttemptedRefresh || null,
+                lastSuccessfulRefresh:
+                    normalizedSources.agentIdentity.lastSuccessfulRefresh || null,
+                error: normalizedSources.agentIdentity.error || "",
+            },
+        };
+        for (const workItem of goal.workItems) workItem.agentIdentity = goal.agentIdentity;
+    }
+
     goals.sort((left, right) => {
         const leftActive = ACTIVE_STATES.has(left.phase) ? 1 : 0;
         const rightActive = ACTIVE_STATES.has(right.phase) ? 1 : 0;
@@ -1742,6 +1779,7 @@ export function buildActivitySnapshot({
         "workflowRuns",
         "workflowJobs",
         "implementationProvenance",
+        "agentIdentity",
     ]
         .map((source) => [source, normalizedSources[source]])
         .filter(([, state]) => state.status === "stale")

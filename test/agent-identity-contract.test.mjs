@@ -7,18 +7,19 @@ const contract = await readFile(
     "utf8",
 );
 
-test("future identity source state separates attempts, successes, and errors", () => {
-    assert.match(contract, /lastAttemptedRefresh: string/);
+test("identity source state separates attempts, successes, and errors", () => {
+    assert.match(contract, /lastAttemptedRefresh: string \| null/);
     assert.match(contract, /lastSuccessfulRefresh: string \| null/);
-    assert.match(contract, /status: "fresh" \| "stale" \| "unavailable" \| "missing"/);
-    assert.match(contract, /"malformed" \| "forbidden" \| "partial"/);
-    assert.match(contract, /kind: "fetch_failed" \| "permission_denied" \| "malformed" \| "partial"/);
-    assert.doesNotMatch(contract, /\bfetchedAt:/);
+    assert.match(contract, /"fresh" \| "stale" \| "missing" \| "partial"/);
+    assert.match(contract, /"forbidden" \| "malformed" \| "unavailable"/);
+    assert.match(contract, /persisted-state version is\s+`6`/);
 });
 
-test("future identity contract remains producer-bound and fail closed", () => {
-    assert.match(contract, /explicit, versioned binding/);
-    assert.match(contract, /must not bind an identity by display\s+name/);
-    assert.match(contract, /No validated producer is configured \| Field absent in the current contract/);
-    assert.match(contract, /does not close #45|Stable identity remains blocked/i);
+test("identity contract is producer-bound, read-only, and fail closed", () => {
+    assert.match(contract, /squad-agent-provenance\/v1/);
+    assert.match(contract, /squad-work-agent-binding\/v1/);
+    assert.match(contract, /never derives identity from goal labels/);
+    assert.match(contract, /whole binding document is atomic/);
+    assert.match(contract, /remains read-only/);
+    assert.match(contract, /does\s+not generate initials/);
 });

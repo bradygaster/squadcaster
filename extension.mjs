@@ -150,7 +150,7 @@ async function loadState(workingDirectory) {
         return {
             statePath,
             state: {
-                version: 5,
+                version: 6,
                 mode: "unavailable",
                 workingDirectory: workingDirectory || "",
                 repoRoot: "",
@@ -173,7 +173,7 @@ async function loadState(workingDirectory) {
     return {
         statePath,
         state: {
-            version: 5,
+            version: 6,
             mode: initialized ? "active" : "setup",
             workingDirectory,
             repoRoot,

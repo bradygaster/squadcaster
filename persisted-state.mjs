@@ -5,6 +5,11 @@ import {
 import {
     validateNormalizedImplementationProvenanceRecord,
 } from "./implementation-provenance.mjs";
+import {
+    normalizePersistedAgentIdentitySource,
+    normalizePersistedGoalAgentIdentity,
+    resolveAgentIdentities,
+} from "./agent-identity.mjs";
 
 export function emptyActivity() {
     const fetchedAt = null;
@@ -72,6 +77,11 @@ function allowedImplementationProvenancePath(path) {
         normalized === "sourceState.implementationProvenance";
 }
 
+function allowedAgentIdentityPath(path) {
+    const normalized = path.map((part) => typeof part === "number" ? "*" : part).join(".");
+    return normalized === "sourceState.agentIdentity";
+}
+
 function withoutUnvalidatedProvenance(value, path = []) {
     if (Array.isArray(value)) {
         return value.map((item, index) =>
@@ -82,10 +92,12 @@ function withoutUnvalidatedProvenance(value, path = []) {
         Object.entries(value)
             .filter(([key]) =>
                 !isUnvalidatedProvenanceField(key) ||
-                allowedImplementationProvenancePath([...path, key]))
+                allowedImplementationProvenancePath([...path, key]) ||
+                allowedAgentIdentityPath([...path, key]))
             .map(([key, nestedValue]) => [
                 key,
-                allowedImplementationProvenancePath([...path, key])
+                allowedImplementationProvenancePath([...path, key]) ||
+                    allowedAgentIdentityPath([...path, key])
                     ? nestedValue
                     : withoutUnvalidatedProvenance(nestedValue, [...path, key]),
             ]),
@@ -480,6 +492,7 @@ function normalizeGoal(goal) {
         evidence: recordArray(goal.evidence),
         pullRequests: recordArray(goal.pullRequests),
         workflowRuns: recordArray(goal.workflowRuns),
+        agentIdentity: normalizePersistedGoalAgentIdentity(goal.agentIdentity),
         implementationProvenance: normalizeGoalProvenance(null),
         lifecycleHistory: isRecord(goal.lifecycleHistory)
             ? {
@@ -695,9 +708,17 @@ export function normalizeActivity(value) {
                     ),
                 }
                 : {}),
+            ...(contract.sourceState.agentIdentity
+                ? {
+                    agentIdentity: normalizePersistedAgentIdentitySource(
+                        contract.sourceState.agentIdentity,
+                    ),
+                }
+                : {}),
         };
     }
     const provenanceSource = normalized.sourceState?.implementationProvenance;
+    const identitySource = normalized.sourceState?.agentIdentity;
     for (const goal of normalized.goals) {
         goal.pullRequests = goal.pullRequests.map((pullRequest) => ({
             ...pullRequest,
@@ -731,13 +752,25 @@ export function normalizeActivity(value) {
             })
             : normalizeGoalProvenance(null);
     }
+    const identities = identitySource
+        ? resolveAgentIdentities({
+            repository: normalized.repository.nameWithOwner,
+            issues: normalized.goals,
+            source: identitySource,
+        })
+        : new Map();
+    for (const goal of normalized.goals) {
+        goal.agentIdentity = identities.get(Number(goal.issue?.number)) ||
+            normalizePersistedGoalAgentIdentity(null);
+        for (const workItem of goal.workItems || []) workItem.agentIdentity = goal.agentIdentity;
+    }
     return normalized;
 }
 
 export function normalizePersistedState(value) {
     const source = isRecord(value) ? value : {};
     return {
-        version: 5,
+        version: 6,
         activity: normalizeActivity(withoutUnvalidatedProvenance(source.activity)),
     };
 }

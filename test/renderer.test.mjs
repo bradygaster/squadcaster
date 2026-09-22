@@ -214,6 +214,10 @@ test("renders stable restoration keys and production-scale containment", () => {
     assert.match(html, /source observation/);
     assert.match(html, /Workflow jobs and steps/);
     assert.match(html, /Implementation provenance/);
+    assert.match(html, /Agent identity/);
+    assert.match(html, /Unknown agent/);
+    assert.match(html, /Immutable ID:/);
+    assert.match(html, /no fallback was generated/);
     assert.match(html, /Opaque session ID/);
     assert.match(html, /No session URL is invented/);
     assert.match(html, /Observed origin goal/);
